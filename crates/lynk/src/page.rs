@@ -289,8 +289,12 @@ fn chrome_command(
         BrowserCommand::FocusAddress => Box::new(OpenAddress),
         BrowserCommand::Fullscreen => Box::new(ToggleFullScreen),
         BrowserCommand::Print => Box::new(Print),
+        // The window is leased to this listener, where `request_close` would find no close
+        // handler and close it unasked; the handler's own check runs here instead.
         BrowserCommand::CloseWindow => {
-            cx.request_close(w.id);
+            if w.should_close(cx) {
+                cx.close_window(w.id);
+            }
             return;
         }
         BrowserCommand::Quit => {

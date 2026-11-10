@@ -1,5 +1,5 @@
 //! The sidebar: the controls row with the window's own buttons, the tab list that scrolls, and
-//! the foot. Plain rows only; pinned tiles, drag and row menus come later.
+//! the foot. Plain rows with their menus; pinned tiles and drag come later.
 
 use std::hash::{Hash, Hasher};
 
@@ -7,7 +7,7 @@ use nd::core::WindowId;
 use nd::prelude::*;
 use nd::virtual_list::{SelectEvent, Selection, list};
 
-use crate::actions::{self, MoveTabToWindow};
+use crate::actions::{self, ForTab, MoveTabToWindow, RowCommand};
 use crate::app;
 use crate::tab::TabId;
 use crate::window::BrowserWindow;
@@ -27,7 +27,8 @@ pub const WIDTH: f32 = 240.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SidebarRow {
     Tab(TabId),
-    /// The quiet "New tab" row after the tabs.
+    /// The quiet "New tab" row after the tabs. GNOME's idiom is the bare plus in the foot
+    /// instead, which is where Linux has it.
     NewTab,
 }
 
@@ -102,7 +103,7 @@ impl BrowserWindow {
                     .hash(&mut h);
                 (SidebarRow::Tab(t.id), h.finish())
             })
-            .chain(std::iter::once((SidebarRow::NewTab, 0)))
+            .chain((!linux()).then_some((SidebarRow::NewTab, 0)))
             .collect();
         self.rows.set_items_versioned(rows, cx);
         self.rows.set_selected(vec![SidebarRow::Tab(self.active)], cx);
@@ -138,7 +139,14 @@ impl BrowserWindow {
             }))
             .flex_1()
             .min_h_0();
-        v_flex().id("sidebar").size_full().child(controls).child(rows).gap(gap).into_any_element()
+        v_flex()
+            .id("sidebar")
+            .size_full()
+            .context_menu(|menu, _, _| column_menu(menu))
+            .child(controls)
+            .child(rows)
+            .gap(gap)
+            .into_any_element()
     }
 
     pub fn foot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -149,6 +157,13 @@ impl BrowserWindow {
             if let Some(el) = slot(self, window, cx) {
                 foot = foot.child(el);
             }
+        }
+        if linux() {
+            let plus =
+                icon_button("sidebar-new-tab", Icon::Plus).tooltip("New Tab").on_click(|_: &ClickEvent, window, cx| {
+                    cx.dispatch_action(window.id(), &actions::NewTab);
+                });
+            foot = foot.child(div().flex_1()).child(plus);
         }
         foot.into_any_element()
     }
@@ -189,6 +204,8 @@ impl BrowserWindow {
         } else {
             div().into_any_element()
         };
+        let facts =
+            RowFacts { sleeps: self.can_sleep(id), addressed: !tab.url.is_empty(), alone: self.tabs.len() == 1 };
         h_flex()
             .id(format!("tab-row-{id}"))
             .h(px(TAB_ROW_HEIGHT))
@@ -207,11 +224,46 @@ impl BrowserWindow {
                     cx.notify();
                 }
             }))
+            .context_menu(move |menu, _, _| row_menu(menu, id, facts))
             .child(favicon)
             .child(title.flex_1().min_w_0())
             .child(div().w(px(TRAIL_WIDTH)).flex_none().flex().justify_center().child(trail))
             .into_any_element()
     }
+}
+
+#[derive(Clone, Copy)]
+struct RowFacts {
+    sleeps: bool,
+    addressed: bool,
+    /// The window's only tab, which a new window would take as it is.
+    alone: bool,
+}
+
+/// A tab row's menu. Pin and mute arrive with their lanes, so they show disabled.
+fn row_menu(menu: ContextMenu, id: TabId, facts: RowFacts) -> ContextMenu {
+    let item = |label: &'static str, command| MenuItem::action(label, ForTab(id, command));
+    menu.entry(item("Reload", RowCommand::Reload))
+        .entry(item("Duplicate Tab", RowCommand::Duplicate).enabled(facts.addressed))
+        .entry(item("Copy Address", RowCommand::CopyAddress).enabled(facts.addressed))
+        .entry(MenuItem::action("Pin Tab", actions::TogglePin).enabled(false))
+        .entry(MenuItem::action("Mute Tab", actions::ToggleMute).enabled(false))
+        .entry(item("Move Tab to New Window", RowCommand::MoveToNewWindow).enabled(!facts.alone))
+        .entry(item("Put Tab to Sleep", RowCommand::Sleep).enabled(facts.sleeps))
+        .separator()
+        .entry(item("Close Tab", RowCommand::Close))
+        .entry(item("Close Other Tabs", RowCommand::CloseOthers))
+}
+
+/// The menu on the column off any tab. The compact layout arrives with its lane.
+fn column_menu(menu: ContextMenu) -> ContextMenu {
+    menu.item("New Tab", actions::NewTab)
+        .item("Hide Sidebar", actions::ToggleSidebar)
+        .entry(MenuItem::action("Use Compact Layout", actions::SwitchLayout).enabled(false))
+}
+
+fn linux() -> bool {
+    nd::platform::target() == nd::platform::Target::Linux
 }
 
 fn new_tab_row(cx: &mut Context<BrowserWindow>) -> AnyElement {

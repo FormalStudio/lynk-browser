@@ -2,14 +2,14 @@
 //! style. `docs/nd-parity.md` is the checklist this is built against.
 //!
 //! The places other modules plug into are plain ordered lists: commands and menu items in
-//! `actions`, the sidebar's foot slots in `sidebar::FOOT`, the padlock popover's rows in
-//! `site_info::ROWS`, page event observers in `page::OBSERVERS` and window overlays in
-//! `shell::OVERLAYS`. Tabs and windows open through `BrowserWindow::open_tab` and
+//! `actions` (with the keys bound to one part of the window in `actions::CONTEXT_KEYS`), tab
+//! events in `window::TAB_EVENTS`, the sidebar's foot slots in `sidebar::FOOT`, the padlock
+//! popover's rows in `site_info::ROWS`, page event observers in `page::OBSERVERS` and window
+//! overlays in `shell::OVERLAYS`. Tabs and windows open through `BrowserWindow::open_tab` and
 //! `app::open_window`.
 
 pub mod actions;
 pub mod app;
-pub mod dialogs;
 pub mod find;
 pub mod page;
 pub mod process;
@@ -21,6 +21,7 @@ pub mod window;
 pub mod zoom;
 
 use nd::prelude::*;
+use nd_ipc::instance::Launch;
 
 pub fn app() -> Application {
     Application::new(nd::manifest!())
@@ -29,17 +30,21 @@ pub fn app() -> Application {
 /// Runs the browser, unless another instance holds this profile, which then gets this launch.
 pub fn run() -> nd::Result<()> {
     app().run(|cx| {
-        if process::start(cx) {
-            init(cx);
+        let launch = Launch::from_env();
+        if process::start(cx, &launch) {
+            init(cx, launch.urls);
         }
     })
 }
 
-pub fn init(cx: &mut App) {
+/// Opens the first window on `urls`, one tab each; with none, on `LYNK_URL` or the new tab page.
+pub fn init(cx: &mut App, mut urls: Vec<String>) {
     app::install(cx);
     cx.bind_keys(actions::bindings());
-    let url = std::env::var("LYNK_URL").unwrap_or_default();
-    let tab = tab::Tab::new(app::next_tab_id(cx), url);
-    app::open_window(cx, vec![tab], None);
+    if urls.is_empty() {
+        urls.push(std::env::var("LYNK_URL").unwrap_or_default());
+    }
+    let tabs = urls.into_iter().map(|url| tab::Tab::new(app::next_tab_id(cx), url)).collect();
+    app::open_window(cx, tabs, None);
     app::refresh_menus(cx);
 }

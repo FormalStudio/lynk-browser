@@ -29,16 +29,16 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// Takes the profile's instance lock and serves later launches and SIGTERM, or hands this launch
-/// to the instance holding the lock and quits. `false` when this launch quits. The lock lives in
-/// the app data dir, which is the profile.
+/// Takes the profile's instance lock and serves later launches and SIGTERM, or hands `launch` to
+/// the instance holding the lock and quits. `false` when this launch quits. The lock lives in the
+/// app data dir, which is the profile.
 ///
 /// Runs inside `Application::run`: nd-cef claims fds 3 and 4 for Chromium's pipe as the run
 /// starts, which would take them from a runtime opened earlier. Chromium itself starts with the
 /// first page, after this.
-pub fn start(cx: &mut App) -> bool {
+pub fn start(cx: &mut App, launch: &Launch) -> bool {
     let endpoint = nd_ipc::Endpoint::for_app("lynk", "instance");
-    let primary = match runtime().block_on(nd_ipc::instance::acquire(&endpoint, &Launch::from_env())) {
+    let primary = match runtime().block_on(nd_ipc::instance::acquire(&endpoint, launch)) {
         Ok(Instance::Primary(primary)) => Some(primary),
         Ok(Instance::Forwarded) => {
             cx.quit();
@@ -66,16 +66,38 @@ fn serve(primary: Option<Primary>) {
             }
         });
     }
-    rt.spawn(async move {
-        use tokio::signal::unix::{SignalKind, signal};
-        let Ok(mut term) = signal(SignalKind::terminate()) else { return };
-        while term.recv().await.is_some() {
-            if tx.send(Event::Terminate).is_err() {
-                break;
-            }
+    // Made here rather than in the task: nd-cef puts back the signal handlers it found when
+    // Chromium starts, which would drop one a worker thread installed in the meantime.
+    let terminations = {
+        let _rt = rt.enter();
+        terminations()
+    };
+    match terminations {
+        Ok(mut term) => {
+            rt.spawn(async move {
+                while term.recv().await.is_some() {
+                    if tx.send(Event::Terminate).is_err() {
+                        break;
+                    }
+                }
+            });
         }
-    });
+        Err(error) => eprintln!("lynk: termination signal: {error}"),
+    }
     next(rx);
+}
+
+/// SIGTERM, which a service manager or `kill` sends.
+#[cfg(unix)]
+fn terminations() -> std::io::Result<tokio::signal::unix::Signal> {
+    use tokio::signal::unix::{SignalKind, signal};
+    signal(SignalKind::terminate())
+}
+
+/// The console closing, Windows's nearest to SIGTERM.
+#[cfg(windows)]
+fn terminations() -> std::io::Result<tokio::signal::windows::CtrlClose> {
+    tokio::signal::windows::ctrl_close()
 }
 
 fn next(mut rx: UnboundedReceiver<Event>) {

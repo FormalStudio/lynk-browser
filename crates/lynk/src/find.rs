@@ -15,6 +15,10 @@ const FIELD: &str = "find-field";
 
 actions!(lynk_find, [Close]);
 
+pub fn close_key() -> KeyBinding {
+    KeyBinding::new("escape", Close, Some(CONTEXT))
+}
+
 pub fn open(win: &mut BrowserWindow, window: &mut Window, cx: &mut Context<BrowserWindow>) {
     let Some(tab) = win.tab_mut(win.active) else { return };
     tab.find.open = true;

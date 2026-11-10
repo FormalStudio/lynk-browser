@@ -34,6 +34,14 @@ const LEAVE: &str = r#"<!doctype html><title>Leave</title>
 <body style="margin:0"><div style="height:400px;background:#fdd">Click me first</div>
 <script>addEventListener("beforeunload", e => { e.preventDefault(); e.returnValue = ""; });</script></body>"#;
 
+/// Scrolls on a click and puts where it is in its title, with a stamp of the load.
+const LONG: &str = r#"<!doctype html><title>Long</title>
+<body style="margin:0;height:5000px" onclick="window.scrollTo(0, 600)">
+<script>onscroll = () => document.title = "At " + Math.round(scrollY) + " " + Math.round(performance.timeOrigin);</script></body>"#;
+/// Hangs its renderer on a click.
+const BUSY: &str = r#"<!doctype html><title>Busy</title>
+<body style="margin:0;height:400px" onclick="setTimeout(() => { for (;;) {} }, 0)"></body>"#;
+
 const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
@@ -52,6 +60,8 @@ fn serve() -> String {
                 "/beta" => ("200 OK", BETA),
                 "/leave" => ("200 OK", LEAVE),
                 "/full" => ("200 OK", FULL),
+                "/long" => ("200 OK", LONG),
+                "/busy" => ("200 OK", BUSY),
                 _ => ("404 Not Found", "<!doctype html><title>Missing</title>"),
             };
             let _ = write!(
@@ -122,7 +132,7 @@ fn shot(app: &AppHandle, name: &str) -> PathBuf {
     path
 }
 
-/// Waits until `check` holds, failing with the app's stderr after `secs`.
+/// Waits until `check` holds, failing with the tab titles and the app's stderr after `secs`.
 fn until(app: &AppHandle, what: &str, secs: u64, check: impl Fn(&AppHandle) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < deadline {
@@ -131,7 +141,7 @@ fn until(app: &AppHandle, what: &str, secs: u64, check: impl Fn(&AppHandle) -> b
         }
         std::thread::sleep(Duration::from_millis(150));
     }
-    panic!("timed out waiting for {what}\n{}", app.stderr_tail(80).join("\n"));
+    panic!("timed out waiting for {what}, tabs {:?}\n{}", titles(app), app.stderr_tail(80).join("\n"));
 }
 
 fn text_of(app: &AppHandle, test_id: &str) -> Option<String> {
@@ -202,16 +212,20 @@ fn real_tabs_navigation_and_layout() {
     press(&app, "cmd-[");
     until(&app, "back to Alpha again", 15, |a| titles(a) == ["Alpha"]);
 
-    // A target=_blank link opens a tab right after its opener, in front.
-    click_page(&app, 300.);
-    until(&app, "the page-opened tab", 15, |a| titles(a) == ["Alpha", "Beta"]);
-
     // Cmd+T opens the new tab page; Cmd+1 and Cmd+9 select by place.
     press(&app, "cmd-t");
     until(&app, "the new tab page", 10, |a| has(a, "new-tab-page"));
-    assert_eq!(titles(&app), ["Alpha", "Beta", "New Tab"]);
+    assert_eq!(titles(&app), ["Alpha", "New Tab"]);
     press(&app, "cmd-1");
     until(&app, "Alpha shown", 10, |a| !has(a, "new-tab-page"));
+    press(&app, "cmd-9");
+    until(&app, "the last tab shown", 10, |a| has(a, "new-tab-page"));
+    press(&app, "cmd-1");
+    until(&app, "Alpha shown again", 10, |a| !has(a, "new-tab-page"));
+
+    // A target=_blank link opens a tab right after its opener, in front, not at the end.
+    click_page(&app, 300.);
+    until(&app, "the page-opened tab", 15, |a| titles(a) == ["Alpha", "Beta", "New Tab"]);
     press(&app, "cmd-9");
     until(&app, "the last tab shown", 10, |a| has(a, "new-tab-page"));
     press(&app, "cmd-shift-[");
@@ -318,9 +332,51 @@ fn real_beforeunload_holds_the_close() {
     std::thread::sleep(Duration::from_secs(1));
     shot(&app, "leave-site");
     assert_eq!(titles(&app), ["Leave", "New Tab"], "the tab waits on its page's answer");
+    // Esc takes Cancel, which keeps the tab.
+    press(&app, "escape");
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(titles(&app), ["Leave", "New Tab"], "Cancel keeps the tab");
     // Enter takes Chrome's dialog's default, Leave.
+    press(&app, "cmd-w");
+    std::thread::sleep(Duration::from_secs(1));
     press(&app, "enter");
     until(&app, "the tab gone once the page agreed", 10, |a| titles(a) == ["New Tab"]);
+
+    // The window's close button asks the page too, and Cancel keeps the window.
+    press(&app, "cmd-shift-t");
+    until(&app, "the page back", 15, |a| titles(a) == ["New Tab", "Leave"]);
+    click_page(&app, 100.);
+    let close = (19., 19.);
+    real_click(&app, close.0, close.1);
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(
+        ndshell::window_list::of_pid(app.pid()).len() > 2,
+        "the window waits on its page's answer, under its prompt"
+    );
+    press(&app, "escape");
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(titles(&app), ["New Tab", "Leave"], "Cancel keeps the window");
+    // The last window going quits the app.
+    real_click(&app, close.0, close.1);
+    std::thread::sleep(Duration::from_secs(1));
+    press(&app, "enter");
+    exited(&app, 15);
+}
+
+/// Waits for the app to exit.
+fn exited(app: &AppHandle, secs: u64) {
+    let pid = app.pid().to_string();
+    // The test holds the child unreaped, so an exited app lingers as a zombie.
+    let gone = || {
+        let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
+        let stat = String::from_utf8_lossy(&out.stdout);
+        stat.trim().is_empty() || stat.starts_with('Z')
+    };
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while !gone() {
+        assert!(Instant::now() < deadline, "the app is still running: {:?}", app.stderr_tail(30));
+        std::thread::sleep(Duration::from_millis(150));
+    }
 }
 
 /// Sends SIGTERM and waits for the app to exit, then reads the profile's Preferences, which
@@ -328,17 +384,7 @@ fn real_beforeunload_holds_the_close() {
 fn terminate(app: &AppHandle) -> serde_json::Value {
     let pid = app.pid().to_string();
     assert!(std::process::Command::new("kill").args(["-TERM", &pid]).status().unwrap().success());
-    // The test holds the child unreaped, so an exited app lingers as a zombie.
-    let gone = || {
-        let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
-        let stat = String::from_utf8_lossy(&out.stdout);
-        stat.trim().is_empty() || stat.starts_with('Z')
-    };
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !gone() {
-        assert!(Instant::now() < deadline, "the app outlived SIGTERM: {:?}", app.stderr_tail(30));
-        std::thread::sleep(Duration::from_millis(150));
-    }
+    exited(app, 15);
     let path = app.dir().join("data/cef/Default/Preferences");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{} is cut off: {e}", path.display()))
@@ -443,12 +489,28 @@ fn real_fullscreen_page_and_browser() {
     // The window server cannot capture a window while it moves into its fullscreen space.
     std::thread::sleep(Duration::from_millis(1500));
     shot(&app, "page-fullscreen");
+    // The page fills the window, edge to edge. A capture of a fullscreen window also takes the
+    // title bar strip parked above the screen, which is no part of the page.
+    let (_, _, w, h) = front_window(&app).bounds;
+    let page = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+    assert_eq!(
+        (page.x, page.y, f64::from(page.width), f64::from(page.height)),
+        (0., 0., w, h),
+        "the page fills the fullscreen window"
+    );
     hid(key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| front_window(a).bounds.2 == width && has(a, "controls-row"));
     // The browser's: macOS's own Enter Full Screen, the sidebar kept.
     hid(key::F, &[Modifier::Control, Modifier::Command]);
     until(&app, "browser fullscreen", 10, |a| front_window(a).bounds.2 > width);
     assert!(has(&app, "controls-row"));
+    // The page's fullscreen inside it, left with Esc, leaves the window as the user had it.
+    click_page(&app, 100.);
+    until(&app, "page fullscreen in browser fullscreen", 10, |a| !has(a, "controls-row"));
+    hid(key::ESCAPE, &[]);
+    until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(front_window(&app).bounds.2 > width, "the window stays in the user's fullscreen");
     hid(key::F, &[Modifier::Control, Modifier::Command]);
     until(&app, "out of browser fullscreen", 10, |a| front_window(a).bounds.2 == width);
 }
@@ -682,6 +744,72 @@ fn menu(app: &AppHandle, menu: &str, item: &str) {
 }
 
 #[test]
+fn real_sleep_keeps_the_scroll() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/long"));
+    until(&app, "the page", 30, |a| titles(a) == ["Long"]);
+    // The first click after launch does not always reach the page, so it is repeated until the
+    // page says it scrolled.
+    until(&app, "the page scrolled", 15, |a| {
+        titles(a).first().is_some_and(|t| t.starts_with("At 600 ")) || {
+            click_page(a, 100.);
+            false
+        }
+    });
+    let before = titles(&app)[0].clone();
+    press(&app, "cmd-t");
+    until(&app, "a second tab", 10, |a| titles(a).len() == 2);
+    press(&app, "cmd-1");
+    menu(&app, "Tabs", "Put Tab to Sleep");
+    until(&app, "the tab asleep", 15, |a| live_pages(a) == 0);
+    // Woken, it loads again and goes back to where it was scrolled.
+    press(&app, "cmd-1");
+    until(&app, "the scroll back in a new load", 15, |a| {
+        titles(a).first().is_some_and(|t| t.starts_with("At 600 ") && *t != before)
+    });
+}
+
+#[test]
+fn real_busy_page_still_sleeps() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/busy"));
+    until(&app, "the page", 30, |a| titles(a) == ["Busy"]);
+    click_page(&app, 100.);
+    press(&app, "cmd-t");
+    until(&app, "a second tab", 10, |a| titles(a).len() == 2);
+    // A renderer that never answers where it is scrolled does not keep its tab awake.
+    std::thread::sleep(Duration::from_secs(1));
+    let at = row_at(&app, 0);
+    pick_menu(&app, at, "Put Tab");
+    until(&app, "the busy tab asleep", 5, |a| live_pages(a) == 0);
+}
+
+#[test]
+fn real_launch_urls_open_as_tabs() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+        .arg(format!("{base}/alpha"))
+        .arg(format!("{base}/beta"))
+        .env("ND_CEF_STYLE", "chrome");
+    let app = launch_app(options).unwrap();
+    activate(app.pid());
+    // The second loads once it is first shown; until then its row shows its address.
+    until(&app, "a tab per URL", 30, |a| {
+        let t = titles(a);
+        t.len() == 2 && t[0] == "Alpha" && t[1].ends_with("/beta")
+    });
+}
+
+#[test]
 fn real_put_tab_to_sleep_and_wake() {
     if !real_allowed() {
         return;
@@ -699,4 +827,61 @@ fn real_put_tab_to_sleep_and_wake() {
     shot(&app, "tab-asleep");
     press(&app, "cmd-1");
     until(&app, "the tab awake", 15, |a| live_pages(a) == 2);
+}
+
+/// The macOS key code of a lowercase letter or a space, for typing into an open menu.
+fn key_of(c: char) -> u16 {
+    const LETTERS: &str = "asdfhgzxcv_bqweryt123465=97-80]ou[ip_lj'k;\\,/nm.";
+    if c == ' ' {
+        return 49;
+    }
+    LETTERS.find(c).map(|i| i as u16).expect("a key for the letter")
+}
+
+/// Right-clicks `at` (window points) and picks the item whose title starts with `item`, typed
+/// into the menu as a user selects by typing.
+fn pick_menu(app: &AppHandle, at: (f32, f32), item: &str) {
+    let (wx, wy, _, _) = front_window(app).bounds;
+    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
+    std::thread::sleep(Duration::from_millis(600));
+    for c in item.to_ascii_lowercase().chars() {
+        ndshell::input::key(key_of(c), &[]);
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    hid(36, &[]);
+}
+
+/// The centre of the sidebar's `index`th tab row, in window points.
+fn row_at(app: &AppHandle, index: usize) -> (f32, f32) {
+    let tree = app.tree(None).unwrap();
+    let mut rows: Vec<_> = tree.windows[0]
+        .root
+        .iter()
+        .filter(|n| n.test_id.as_deref().is_some_and(|t| t.starts_with("tab-row-")) && n.visible)
+        .filter_map(|n| n.bounds)
+        .collect();
+    rows.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
+    let r = rows[index];
+    (r.origin.x + r.size.width / 2., r.origin.y + r.size.height / 2.)
+}
+
+#[test]
+fn real_tab_row_menu() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    pick_menu(&app, row_at(&app, 0), "Duplicate");
+    until(&app, "the duplicate", 15, |a| titles(a) == ["Alpha", "Alpha"]);
+    press(&app, "cmd-t");
+    until(&app, "a third tab", 10, |a| titles(a).len() == 3);
+    // The row's menu acts on its own tab, not the one on show.
+    pick_menu(&app, row_at(&app, 1), "Close Other");
+    until(&app, "only the second tab", 15, |a| titles(a) == ["Alpha"]);
+    // Off any tab: the column's menu.
+    let n = app.get_by_test_id("new-tab-row").bounding_box().unwrap().unwrap();
+    pick_menu(&app, (n.x + n.width / 2., n.y + n.height + 120.), "New Tab");
+    until(&app, "a tab from the column menu", 10, |a| titles(a).len() == 2);
 }

@@ -55,6 +55,7 @@ actions!(
         NextTab,
         PreviousTab,
         TogglePin,
+        ToggleMute,
         SleepTab,
         CloseOtherTabs,
         DuplicateTab,
@@ -81,6 +82,23 @@ pub struct SelectTabAt(pub usize);
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = lynk, no_json)]
 pub struct SelectTab(pub TabId);
+
+/// What a tab row's menu does to its tab, which need not be the one shown.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RowCommand {
+    Reload,
+    Duplicate,
+    CopyAddress,
+    MoveToNewWindow,
+    Sleep,
+    Close,
+    CloseOthers,
+}
+
+/// A tab row's menu item, for the row's tab.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = lynk, no_json)]
+pub struct ForTab(pub TabId, pub RowCommand);
 
 /// Moves the shown tab, its live page included, to another window.
 #[derive(Clone, PartialEq, Debug, Action)]
@@ -218,6 +236,9 @@ fn has_address(w: &BrowserWindow, _: &App) -> bool {
     w.menu_facts().has_address
 }
 
+/// Keys bound inside one part of the window, under that part's key context, off the menus.
+pub const CONTEXT_KEYS: &[fn() -> KeyBinding] = &[crate::find::close_key];
+
 pub const COMMANDS: &[Command] = &[
     Command::new::<NewTab>("New Tab").key("new-tab").menu(MenuId::File).handler(shell::new_tab),
     Command::new::<NewWindow>("New Window").key("new-window").menu(MenuId::File).handler(shell::new_window),
@@ -284,6 +305,7 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<NextTab>("Next Tab").key("next-tab").menu(MenuId::Tabs).handler(shell::next_tab),
     Command::new::<PreviousTab>("Previous Tab").key("prev-tab").menu(MenuId::Tabs).handler(shell::previous_tab),
     Command::new::<TogglePin>("Pin Tab").menu(MenuId::Tabs).flips("Unpin Tab", |w, _| w.menu_facts().pinned),
+    Command::new::<ToggleMute>("Mute Tab"),
     Command::new::<SleepTab>("Put Tab to Sleep")
         .menu(MenuId::Tabs)
         .enabled(|w, _| w.can_sleep(w.active))
@@ -365,7 +387,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         bindings.push(KeyBinding::new(keys, SelectTabAt(n), Some(CONTEXT)));
     }
     bindings.push(KeyBinding::new("secondary-9", SelectLastTab, Some(CONTEXT)));
-    bindings.push(KeyBinding::new("escape", crate::find::Close, Some(crate::find::CONTEXT)));
+    bindings.extend(CONTEXT_KEYS.iter().map(|key| key()));
     bindings
 }
 

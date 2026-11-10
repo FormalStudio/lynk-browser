@@ -77,7 +77,6 @@ pub fn forget_window(cx: &mut App, id: WindowId) {
     cx.global_mut::<Browser>().windows.retain(|(w, _)| *w != id);
 }
 
-/// The window the menu bar acts on: the key window, else the newest.
 /// The key browser window, else the newest: the one the menu bar and a forwarded launch act on.
 pub fn key_window(cx: &App) -> Option<WindowId> {
     let browser = cx.global::<Browser>();

@@ -5,10 +5,11 @@
 use nd::core::WindowId;
 use nd::prelude::*;
 
-use crate::actions::{self, CONTEXT, MoveTabToWindow, SelectTab, SelectTabAt};
+use crate::actions::{self, CONTEXT, ForTab, MoveTabToWindow, RowCommand, SelectTab, SelectTabAt};
 use crate::app;
 use crate::page;
 use crate::sidebar;
+use crate::tab::TabId;
 use crate::window::{BrowserWindow, Open};
 
 /// Something drawn over the whole window, above the page: the command bar, a panel.
@@ -65,7 +66,8 @@ impl Render for BrowserWindow {
             .overlay(overlay)
             .on_action(cx.listener(|win, a: &SelectTabAt, _, cx| win.select_at(a.0, cx)))
             .on_action(cx.listener(|win, a: &SelectTab, _, cx| win.select(a.0, cx)))
-            .on_action(cx.listener(|win, a: &MoveTabToWindow, _, cx| move_to_window(win, Some(a.0), cx)));
+            .on_action(cx.listener(|win, a: &MoveTabToWindow, _, cx| move_to_window(win, Some(a.0), cx)))
+            .on_action(cx.listener(|win, a: &ForTab, _, cx| for_tab(win, a.0, a.1, cx)));
         actions::listen_all(root, cx)
     }
 }
@@ -143,14 +145,22 @@ pub fn reopen(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserW
 }
 
 pub fn copy_address(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    let Some(url) = win.active_tab().map(|t| t.url.clone()).filter(|u| !u.is_empty()) else { return };
+    copy_address_of(win, win.active, cx);
+}
+
+fn copy_address_of(win: &mut BrowserWindow, id: TabId, cx: &mut Context<BrowserWindow>) {
+    let Some(url) = win.tab(id).map(|t| t.url.clone()).filter(|u| !u.is_empty()) else { return };
     nd::clipboard::write_text(cx, url);
     win.toast("Link copied");
     cx.notify();
 }
 
 pub fn reload(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    let Some(tab) = win.tab_mut(win.active) else { return };
+    reload_tab(win, win.active, cx);
+}
+
+fn reload_tab(win: &mut BrowserWindow, id: TabId, cx: &mut Context<BrowserWindow>) {
+    let Some(tab) = win.tab_mut(id) else { return };
     tab.rt.error = None;
     tab.rt.crashed = None;
     match &tab.page {
@@ -230,8 +240,25 @@ pub fn move_to_new_window(win: &mut BrowserWindow, _: &mut Window, cx: &mut Cont
     move_to_window(win, None, cx);
 }
 
+/// A tab row's menu, acting on the row's tab.
+fn for_tab(win: &mut BrowserWindow, id: TabId, command: RowCommand, cx: &mut Context<BrowserWindow>) {
+    match command {
+        RowCommand::Reload => reload_tab(win, id, cx),
+        RowCommand::Duplicate => win.duplicate(id, cx),
+        RowCommand::CopyAddress => copy_address_of(win, id, cx),
+        RowCommand::MoveToNewWindow => move_tab(win, id, None, cx),
+        RowCommand::Sleep => win.sleep(id, cx),
+        RowCommand::Close => win.close_tab(id, cx),
+        RowCommand::CloseOthers => win.close_others(id, cx),
+    }
+}
+
 /// Moves the shown tab, its page live, to `target`, or to a new window.
 fn move_to_window(win: &mut BrowserWindow, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
+    move_tab(win, win.active, target, cx);
+}
+
+fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
     let target = match target {
         Some(id) => match app::window(cx, id) {
             Some(entity) => Some(entity),
@@ -239,7 +266,7 @@ fn move_to_window(win: &mut BrowserWindow, target: Option<WindowId>, cx: &mut Co
         },
         None => None,
     };
-    let Some(tab) = win.take(win.active, cx) else { return };
+    let Some(tab) = win.take(id, cx) else { return };
     match target {
         Some(entity) => entity.update(cx, |w, cx| w.adopt(tab, cx)),
         None => {

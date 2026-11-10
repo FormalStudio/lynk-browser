@@ -2,6 +2,10 @@
 //! shows around them. Tabs are addressed by id. Every change to the tabs goes through the
 //! methods here; `page.rs` feeds them what the pages report and `shell.rs` draws the result.
 
+use std::cell::Cell;
+use std::rc::Rc;
+use std::time::Duration;
+
 use lynk_core::session::{OpenDisposition, Placement, blank_tab, place_opened_tab};
 use nd::core::WindowId;
 use nd::prelude::*;
@@ -24,6 +28,25 @@ pub enum Open {
     FromPage { opener: TabId, foreground: bool },
 }
 
+/// How long a tab going to sleep waits for its page to say where it is scrolled.
+const SCROLL_READ_LIMIT: Duration = Duration::from_millis(500);
+
+/// What happened to one of a window's tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabEvent {
+    Opened,
+    Closed,
+    /// Taken out to another window.
+    Moved,
+    Shown,
+}
+
+/// Hears every tab event of every window. A lane keeps what it needs in its own global.
+pub type TabListener = fn(&mut BrowserWindow, TabId, TabEvent, &mut Context<BrowserWindow>);
+
+/// The tab event listeners, called in order after the window's own change.
+pub const TAB_EVENTS: &[TabListener] = &[];
+
 /// What the menu bar reads of the tab on show.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MenuFacts {
@@ -45,6 +68,9 @@ pub struct BrowserWindow {
     pub page_fullscreen: Option<TabId>,
     /// F11 on Linux: the window fullscreen with the sidebar put away.
     pub browser_fullscreen: bool,
+    /// Whether the window was already in fullscreen when the page or F11 took it there, which
+    /// leaving keeps.
+    fullscreen_before: Option<bool>,
     /// The window's close is waiting on its pages' `beforeunload`.
     pub closing: bool,
     pub zoom: ZoomPopover,
@@ -67,6 +93,7 @@ impl BrowserWindow {
             sidebar_hidden: false,
             page_fullscreen: None,
             browser_fullscreen: false,
+            fullscreen_before: None,
             closing: false,
             zoom: ZoomPopover::default(),
             site_info_open: false,
@@ -98,6 +125,12 @@ impl BrowserWindow {
 
     fn index_of(&self, id: TabId) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
+    }
+
+    fn tab_event(&mut self, id: TabId, event: TabEvent, cx: &mut Context<Self>) {
+        for listener in TAB_EVENTS {
+            listener(self, id, event, cx);
+        }
     }
 
     /// Re-renders the window and brings the menu bar up to date.
@@ -148,6 +181,7 @@ impl BrowserWindow {
             }
         };
         self.tabs.insert(index, tab);
+        self.tab_event(id, TabEvent::Opened, cx);
         if foreground {
             self.show(id, cx);
         }
@@ -198,6 +232,7 @@ impl BrowserWindow {
         if let Some(title) = self.active_tab().map(|t| t.label()) {
             cx.set_window_title(self.id, title);
         }
+        self.tab_event(id, TabEvent::Shown, cx);
     }
 
     /// Steps through the tabs in sidebar order, wrapping around.
@@ -258,6 +293,7 @@ impl BrowserWindow {
         let Some(at) = self.index_of(id) else { return };
         let tab = self.tabs.remove(at);
         app::remember_closed(cx, &tab);
+        self.tab_event(id, TabEvent::Closed, cx);
         if self.tabs.is_empty() {
             self.close_window(cx);
             return;
@@ -288,10 +324,7 @@ impl BrowserWindow {
             }
         }
         if !asked {
-            for tab in std::mem::take(&mut self.tabs) {
-                app::remember_closed(cx, &tab);
-            }
-            app::forget_window(cx, self.id);
+            self.let_go(cx);
             return true;
         }
         self.closing = true;
@@ -299,11 +332,20 @@ impl BrowserWindow {
     }
 
     fn close_window(&mut self, cx: &mut Context<Self>) {
+        self.let_go(cx);
+        cx.close_window(self.id);
+    }
+
+    /// A window that goes puts its tabs on the closed stack and leaves the registry. The last
+    /// one is left as it stands: the app is quitting, and it is what a relaunch restores.
+    fn let_go(&mut self, cx: &mut Context<Self>) {
+        if app::windows(cx).len() < 2 {
+            return;
+        }
         for tab in std::mem::take(&mut self.tabs) {
             app::remember_closed(cx, &tab);
         }
         app::forget_window(cx, self.id);
-        cx.close_window(self.id);
     }
 
     /// Shift+Cmd+T: the last tab closed in any window, here.
@@ -354,6 +396,7 @@ impl BrowserWindow {
         }
         let mut tab = self.tabs.remove(at);
         tab.opener = None;
+        self.tab_event(id, TabEvent::Moved, cx);
         if self.active == id {
             let next = self.tabs[at.min(self.tabs.len() - 1)].id;
             self.show(next, cx);
@@ -377,13 +420,24 @@ impl BrowserWindow {
     /// title, icon and address. Its scroll position is read first and put back when it wakes.
     pub fn sleep(&mut self, id: TabId, cx: &mut Context<Self>) {
         let Some(page) = self.tab(id).filter(|_| self.can_sleep(id)).and_then(|t| t.page.clone()) else { return };
-        let this = cx.weak_entity();
+        // A page that does not answer in time (a busy renderer) sleeps all the same, at the top.
+        let answered = Rc::new(Cell::new(false));
+        let (this, once) = (cx.weak_entity(), answered.clone());
         page.execute_javascript("[scrollX, scrollY]", move |result, cx| {
+            if once.replace(true) {
+                return;
+            }
             let scroll = result.ok().and_then(|v| {
                 let pair = v.as_array()?;
                 Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?))
             });
             let _ = this.update(cx, |this, cx| this.fall_asleep(id, scroll.filter(|s| *s != (0., 0.)), cx));
+        });
+        let this = cx.weak_entity();
+        nd::system::after(SCROLL_READ_LIMIT, move |cx| {
+            if !answered.replace(true) {
+                let _ = this.update(cx, |this, cx| this.fall_asleep(id, None, cx));
+            }
         });
     }
 
@@ -445,8 +499,14 @@ impl BrowserWindow {
 
     /// Asks the window to enter or leave fullscreen to match what the page and the user asked.
     pub fn sync_window_fullscreen(&mut self, cx: &mut Context<Self>) {
-        let on = self.immersive();
-        cx.set_window_fullscreen(self.id, on);
+        if self.immersive() {
+            if self.fullscreen_before.is_none() {
+                self.fullscreen_before = Some(cx.window_fullscreen(self.id));
+            }
+            cx.set_window_fullscreen(self.id, true);
+        } else if self.fullscreen_before.take() == Some(false) {
+            cx.set_window_fullscreen(self.id, false);
+        }
     }
 
     pub fn toast(&mut self, title: impl Into<SharedString>) {

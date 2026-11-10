@@ -12,6 +12,7 @@ use adblock::resources::Resource;
 use nd_settings::Store;
 use serde::{Deserialize, Serialize};
 
+use crate::null_default;
 use crate::ublock::{self, FilterList, Release, write_replacing};
 
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -37,7 +38,9 @@ pub struct BlockingState {
     pub fetched: BTreeMap<String, i64>,
     pub last_release_check: i64,
     /// Sites (hostnames without `www.`) blocking is off for.
+    #[serde(deserialize_with = "null_default")]
     pub off_sites: Vec<String>,
+    #[serde(deserialize_with = "null_default")]
     pub hidden: BTreeMap<String, Vec<Veil>>,
 }
 
@@ -486,6 +489,20 @@ mod tests {
 
         std::fs::write(dir.join("lists/ublock-filters.txt"), list_text("changed")).unwrap();
         assert_ne!(engine_key(&dir, &release.version, &lists), key);
+    }
+
+    #[test]
+    fn nulls_in_blocking_json_take_their_defaults() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("blocking.json"),
+            r#"{"version":1,"data":{"offSites":null,"hidden":null,"fetched":{"easylist":5}}}"#,
+        )
+        .unwrap();
+        let store = open(root.path());
+        assert!(store.load_error().is_none(), "{:?}", store.load_error());
+        assert!(store.get().off_sites.is_empty() && store.get().hidden.is_empty());
+        assert_eq!(store.get().fetched["easylist"], 5);
     }
 
     #[test]

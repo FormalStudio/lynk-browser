@@ -46,6 +46,12 @@ pub(crate) fn radix36(mut n: u64) -> String {
     String::from_utf8(out).expect("ascii digits")
 }
 
+/// A `null` the old app wrote (`JSON.stringify(NaN)` is `null`, and it read every field
+/// through `??`) takes the field's default instead of failing the whole file.
+pub(crate) fn null_default<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(d: D) -> Result<T, D::Error> {
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
+}
+
 /// A list where an entry of the wrong shape is dropped rather than failing the whole file: a
 /// hand-edited or half-migrated file keeps what it can.
 pub(crate) fn lenient_items<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {

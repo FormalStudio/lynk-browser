@@ -8,6 +8,8 @@ use nd_settings::Store;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
+use crate::{lenient_items, null_default};
+
 pub const SESSION_VERSION: u32 = 2;
 pub const WINDOW_WIDTH: f64 = 1280.0;
 pub const WINDOW_HEIGHT: f64 = 800.0;
@@ -15,8 +17,11 @@ pub const WINDOW_HEIGHT: f64 = 800.0;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SessionTab {
+    #[serde(deserialize_with = "null_default")]
     pub id: String,
+    #[serde(deserialize_with = "null_default")]
     pub url: String,
+    #[serde(deserialize_with = "null_default")]
     pub title: String,
     /// Pinned tabs sort ahead of the rest, and the list order mirrors that grouping, so cycling
     /// and the Tabs menu read in the order the sidebar draws.
@@ -32,20 +37,29 @@ pub struct SessionTab {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SessionWindow {
+    #[serde(deserialize_with = "null_default")]
     pub id: String,
+    #[serde(deserialize_with = "lenient_items")]
     pub tabs: Vec<SessionTab>,
+    #[serde(deserialize_with = "null_default")]
     pub active_id: String,
+    #[serde(deserialize_with = "null_default")]
     pub width: f64,
+    #[serde(deserialize_with = "null_default")]
     pub height: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SessionState {
+    #[serde(deserialize_with = "lenient_items")]
     pub windows: Vec<SessionWindow>,
+    #[serde(deserialize_with = "counter")]
     pub next_tab_id: u64,
+    #[serde(deserialize_with = "counter")]
     pub next_window_id: u64,
     /// Page zoom keyed by host, the way every desktop browser scopes it.
+    #[serde(deserialize_with = "null_default")]
     pub zoom_by_host: BTreeMap<String, f64>,
 }
 
@@ -53,6 +67,10 @@ impl Default for SessionState {
     fn default() -> Self {
         Self { windows: Vec::new(), next_tab_id: 1, next_window_id: 1, zoom_by_host: BTreeMap::new() }
     }
+}
+
+fn counter<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    Ok(Option::<u64>::deserialize(d)?.unwrap_or(1))
 }
 
 fn bool_or_false<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
@@ -383,6 +401,31 @@ mod tests {
         move_tab_in(&mut state, "p", "w2", 9);
         assert_eq!(ids(&state.windows[1]), ["q", "p", "a", "c"]);
         assert!(state.windows[0].tabs.iter().all(|t| t.id == "b"));
+    }
+
+    #[test]
+    fn nulls_in_session_json_take_their_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("session.json"),
+            r#"{"version":2,"data":{"windows":[{"id":"w1","tabs":[{"id":"t1","url":"https://a.test/","title":null,"pinned":null}],"activeId":null,"width":null,"height":null},{"id":"w2","tabs":null}],"nextTabId":null,"nextWindowId":3,"zoomByHost":null}}"#,
+        )
+        .unwrap();
+        let store = open(dir.path());
+        assert!(store.load_error().is_none(), "{:?}", store.load_error());
+        let s = normalize(&store.get());
+        assert_eq!(ids(&s.windows[0]), ["t1"]);
+        assert_eq!(s.windows[0].tabs[0].title, "");
+        assert_eq!((s.windows[0].width, s.windows[0].height), (WINDOW_WIDTH, WINDOW_HEIGHT));
+        assert_eq!(s.windows.len(), 1);
+        assert_eq!((s.next_tab_id, s.next_window_id), (1, 3));
+        drop(store);
+
+        let gone = tempfile::tempdir().unwrap();
+        std::fs::write(gone.path().join("session.json"), r#"{"version":2,"data":{"windows":null}}"#).unwrap();
+        let store = open(gone.path());
+        assert!(store.load_error().is_none());
+        assert_eq!(normalize(&store.get()).windows.len(), 1);
     }
 
     #[test]

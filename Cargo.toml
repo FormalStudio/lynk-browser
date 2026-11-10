@@ -20,7 +20,4 @@ gpui-fast-linux = { git = "https://github.com/FormalStudio/NativeDesktop", branc
 gpui-pre-wgpu = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 gpui-fast-wgpu = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 gpui-pre-windows = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
-gpui-fast-windows = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
-gpui-pre-apple = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
-gpui-fast-apple = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 

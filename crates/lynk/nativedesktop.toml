@@ -1,4 +1,4 @@
-#:schema ../../../nativedesktop-wt-browser/target/nd/nativedesktop.schema.json
+#:schema ../../../nativedesktop/target/nd/nativedesktop.schema.json
 [app]
 id = "dev.formalsnake.Lynk"
 display_name = "Lynk Browser"

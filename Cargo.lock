@@ -2491,7 +2491,8 @@ dependencies = [
 [[package]]
 name = "gpui-pre-apple"
 version = "0.3.9"
-source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b52f58893fe1a0836464428dfad2b5eaf42c9c303a9638f4c2aced5a69072a15"
 dependencies = [
  "anyhow",
  "async-task",
@@ -3056,9 +3057,9 @@ dependencies = [
 
 [[package]]
 name = "icu_collections"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa68d21081c4a05d5a901a1c62add574c77048b6a1c67be3b50ce0b60d4ca513"
+checksum = "fe090a42a0d3140fed8c63263ed1fecc02422cb2f4bfe55cd8de2de1b8e105dd"
 dependencies = [
  "displaydoc",
  "potential_utf",
@@ -3083,9 +3084,9 @@ dependencies = [
 
 [[package]]
 name = "icu_normalizer"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12f9cf5f235641ed274641dd81c3f28d870e276763d0797aeeab72317b1c646f"
+checksum = "404a3b8c486f205c87fe7f23ab6894d84a4ad76d6e4671ae1981ba7def87c599"
 dependencies = [
  "icu_collections",
  "icu_normalizer_data",
@@ -3097,15 +3098,15 @@ dependencies = [
 
 [[package]]
 name = "icu_normalizer_data"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1563da1ed3e0b3bf3d74c9b85917ac9c56464d2f57242270c09c9e752f8021a0"
+checksum = "20f0088bfb7441f7a37fa0c9e20cb1e9cba1cac6b9ce8cd2a6dc44294f8e8cbc"
 
 [[package]]
 name = "icu_properties"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e7ca276ad3145661a65914e6daf131ca5120cd3dcee8f8f3214b8875184a148"
+checksum = "2ea83d991c56158f7cf898bf86436c1dfe7c07ee82fe88951f2695c9f37a379f"
 dependencies = [
  "displaydoc",
  "icu_collections",
@@ -3118,15 +3119,15 @@ dependencies = [
 
 [[package]]
 name = "icu_properties_data"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e590f038c1464a96894fd6d10127e90a8be4509f56ff7ecef851b15cee0b7caa"
+checksum = "b98f29af82d02b163fe50161388350e743bb3107cc8e8c2f7314cb505faddfcf"
 
 [[package]]
 name = "icu_provider"
-version = "2.3.1"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d27bbb9d3abbefac45d55f647c9de1d44aafcd1186eb91879afef17c396c3e73"
+checksum = "413099315636c588ee8f011190b329b971a09a8fae9d157e01dcae8379468514"
 dependencies = [
  "displaydoc",
  "icu_locale_core",
@@ -3286,8 +3287,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7529951166d4dd4d2a6b9f0bb97919b810623f75eeb76e81ee9e6644886cae37"
 dependencies = [
  "doctest-file",
+ "futures-core",
  "libc",
  "recvmsg",
+ "tokio",
  "widestring",
  "windows-sys 0.61.2",
 ]
@@ -3637,7 +3640,13 @@ dependencies = [
 name = "lynk"
 version = "0.1.0"
 dependencies = [
+ "lynk-core",
  "nd",
+ "nd-ipc",
+ "nd-test",
+ "ndshell",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4175,6 +4184,20 @@ version = "0.6.1"
 source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
 
 [[package]]
+name = "nd-ipc"
+version = "0.6.1"
+source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
+dependencies = [
+ "interprocess",
+ "nd-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "nd-macros"
 version = "0.6.1"
 source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
@@ -4291,6 +4314,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nd-test"
+version = "0.6.1"
+source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
+dependencies = [
+ "interprocess",
+ "nd-automation",
+ "nd-core",
+ "nd-ui",
+ "ndshell",
+ "regex",
+ "serde",
+ "serde_json",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "nd-theme"
 version = "0.6.1"
 source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
@@ -4374,6 +4413,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "ndshell"
+version = "0.6.1"
+source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
+dependencies = [
+ "getrandom 0.3.4",
+ "nd-os-windows",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "png 0.18.1",
+ "rustix",
+ "serde_json",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-misc",
+ "wayland-protocols-wlr",
+ "windows 0.62.2",
+ "xkbcommon",
 ]
 
 [[package]]
@@ -6564,6 +6623,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "socks"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6988,7 +7057,25 @@ version = "1.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
 dependencies = [
+ "bytes",
+ "libc",
+ "mio",
  "pin-project-lite",
+ "signal-hook-registry",
+ "socket2",
+ "tokio-macros",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -7645,6 +7732,19 @@ dependencies = [
  "bitflags 2.13.2",
  "wayland-backend",
  "wayland-client",
+ "wayland-scanner",
+]
+
+[[package]]
+name = "wayland-protocols-misc"
+version = "0.3.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e9567599ef23e09b8dad6e429e5738d4509dfc46b3b21f32841a304d16b29c8"
+dependencies = [
+ "bitflags 2.13.2",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "wayland-scanner",
 ]
 
@@ -9098,21 +9198,11 @@ version = "0.1.7"
 source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
 
 [[patch.unused]]
-name = "gpui-fast-apple"
-version = "0.1.7"
-source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
-
-[[patch.unused]]
 name = "gpui-fast-linux"
 version = "0.1.7"
 source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
 
 [[patch.unused]]
 name = "gpui-fast-wgpu"
-version = "0.1.7"
-source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"
-
-[[patch.unused]]
-name = "gpui-fast-windows"
 version = "0.1.7"
 source = "git+https://github.com/FormalStudio/NativeDesktop?branch=main#94289c2836b40b15071e88fcb17a52abee6adc2f"

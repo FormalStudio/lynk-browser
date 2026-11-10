@@ -1,3 +1,3 @@
 fn main() -> nd::Result<()> {
-    lynk::app().run(lynk::init)
+    lynk::run()
 }

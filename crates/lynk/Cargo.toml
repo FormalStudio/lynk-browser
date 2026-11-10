@@ -3,10 +3,18 @@ name = "lynk"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-rust-version = "1.95"
+rust-version = "1.98"
 
 [dependencies]
 nd = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main", features = ["cef"] }
+lynk-core = { path = "../core" }
+nd-ipc = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
+tokio = { version = "1", features = ["rt-multi-thread", "signal", "sync"] }
 
 [build-dependencies]
 nd = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main", default-features = false, features = ["build"] }
+
+[dev-dependencies]
+nd-test = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
+ndshell = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
+serde_json = "1"

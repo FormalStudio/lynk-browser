@@ -3561,6 +3561,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lynk-core"
+version = "0.1.0"
+dependencies = [
+ "nd-settings",
+ "percent-encoding",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "url",
+]
+
+[[package]]
 name = "lyon"
 version = "1.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -77,12 +77,14 @@ pub fn forget_window(cx: &mut App, id: WindowId) {
     cx.global_mut::<Browser>().windows.retain(|(w, _)| *w != id);
 }
 
-/// The key browser window, else the newest: the one the menu bar and a forwarded launch act on.
+/// The key browser window, else the newest open one: the one the menu bar and a forwarded
+/// launch act on. The last window to close stays registered until the app terminates.
 pub fn key_window(cx: &App) -> Option<WindowId> {
     let browser = cx.global::<Browser>();
+    let open = |id: &WindowId| cx.window_ids().any(|w| w == *id);
     cx.active_window()
         .filter(|id| browser.windows.iter().any(|(w, _)| w == id))
-        .or_else(|| browser.windows.last().map(|(w, _)| *w))
+        .or_else(|| browser.windows.iter().rev().map(|(w, _)| *w).find(open))
 }
 
 /// Rebuilds the menu bar from the window it acts on. Called where no window is being updated
@@ -110,11 +112,21 @@ fn set_menus_if_changed(menus: Vec<Menu>, cx: &mut App) {
     set_menus(cx, menus);
 }
 
-/// Opens a window on `tabs` showing `active`; no tabs means one new tab page.
+/// Opens a window on new `tabs` showing `active`; no tabs means one new tab page.
 pub fn open_window(cx: &mut App, mut tabs: Vec<Tab>, active: Option<TabId>) -> WindowId {
     if tabs.is_empty() {
         tabs.push(Tab::new(next_tab_id(cx), ""));
     }
+    open(cx, tabs, active, false)
+}
+
+/// Opens a window around `tab`, moved out of another window.
+pub fn open_window_around(cx: &mut App, tab: Tab) -> WindowId {
+    let active = Some(tab.id);
+    open(cx, vec![tab], active, true)
+}
+
+fn open(cx: &mut App, tabs: Vec<Tab>, active: Option<TabId>, moved: bool) -> WindowId {
     let browser = cx.global_mut::<Browser>();
     browser.next_window += 1;
     let options = WindowOptions::main(format!("browser-{}", browser.next_window))
@@ -128,7 +140,7 @@ pub fn open_window(cx: &mut App, mut tabs: Vec<Tab>, active: Option<TabId>) -> W
             self::window(cx, id).is_none_or(|w| w.update(cx, |w, cx| w.should_close(cx)))
         });
         window.on_activate(|_, cx| refresh_menus(cx));
-        cx.new(|cx| BrowserWindow::new(id, tabs, active, cx))
+        cx.new(|cx| BrowserWindow::new(id, tabs, active, moved, cx))
     });
     let id = handle.id();
     let entity = handle.root().clone();

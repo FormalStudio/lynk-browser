@@ -45,7 +45,10 @@ pub enum TabEvent {
 pub type TabListener = fn(&mut BrowserWindow, TabId, TabEvent, &mut Context<BrowserWindow>);
 
 /// The tab event listeners, called in order after the window's own change.
+#[cfg(not(test))]
 pub const TAB_EVENTS: &[TabListener] = &[];
+#[cfg(test)]
+pub const TAB_EVENTS: &[TabListener] = &[tests::record];
 
 /// What the menu bar reads of the tab on show.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -84,7 +87,8 @@ pub struct BrowserWindow {
 }
 
 impl BrowserWindow {
-    pub fn new(id: WindowId, tabs: Vec<Tab>, active: Option<TabId>, cx: &mut Context<Self>) -> Self {
+    /// A window on `tabs`, which are new unless `moved` (one tab moved out of another window).
+    pub fn new(id: WindowId, tabs: Vec<Tab>, active: Option<TabId>, moved: bool, cx: &mut Context<Self>) -> Self {
         let active = active.or_else(|| tabs.first().map(|t| t.id)).unwrap_or_default();
         let mut this = Self {
             id,
@@ -102,6 +106,12 @@ impl BrowserWindow {
             hovered: None,
             next_toast: 0,
         };
+        if !moved {
+            let ids: Vec<TabId> = this.tabs.iter().map(|t| t.id).collect();
+            for id in ids {
+                this.tab_event(id, TabEvent::Opened, cx);
+            }
+        }
         this.show(active, cx);
         this.sync_rows(cx);
         this
@@ -170,7 +180,11 @@ impl BrowserWindow {
     }
 
     /// Adds `tab` where `open` says, and shows it when it is in front.
-    pub fn insert(&mut self, mut tab: Tab, open: Open, cx: &mut Context<Self>) -> TabId {
+    pub fn insert(&mut self, tab: Tab, open: Open, cx: &mut Context<Self>) -> TabId {
+        self.place(tab, open, true, cx)
+    }
+
+    fn place(&mut self, mut tab: Tab, open: Open, opened: bool, cx: &mut Context<Self>) -> TabId {
         let id = tab.id;
         let Placement { index, foreground } = match open {
             Open::End => Placement { index: self.tabs.len(), foreground: true },
@@ -181,7 +195,9 @@ impl BrowserWindow {
             }
         };
         self.tabs.insert(index, tab);
-        self.tab_event(id, TabEvent::Opened, cx);
+        if opened {
+            self.tab_event(id, TabEvent::Opened, cx);
+        }
         if foreground {
             self.show(id, cx);
         }
@@ -336,9 +352,14 @@ impl BrowserWindow {
         cx.close_window(self.id);
     }
 
-    /// A window that goes puts its tabs on the closed stack and leaves the registry. The last
-    /// one is left as it stands: the app is quitting, and it is what a relaunch restores.
+    /// A window that goes closes its tabs, puts them on the closed stack and leaves the
+    /// registry. The last one keeps its tabs and its entry: the app is quitting, and it is what a
+    /// relaunch restores.
     fn let_go(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<TabId> = self.tabs.iter().map(|t| t.id).collect();
+        for id in ids {
+            self.tab_event(id, TabEvent::Closed, cx);
+        }
         if app::windows(cx).len() < 2 {
             return;
         }
@@ -405,9 +426,9 @@ impl BrowserWindow {
         Some(tab)
     }
 
-    /// A tab handed over from another window, shown at the end.
+    /// A tab handed over from another window, shown at the end. Its `Moved` fired as it left.
     pub fn adopt(&mut self, tab: Tab, cx: &mut Context<Self>) {
-        self.insert(tab, Open::End, cx);
+        self.place(tab, Open::End, false, cx);
     }
 
     /// A tab with a page to let go of. The one on show can sleep only when there is another to
@@ -512,5 +533,91 @@ impl BrowserWindow {
     pub fn toast(&mut self, title: impl Into<SharedString>) {
         self.next_toast += 1;
         self.toasts.push(toast(format!("toast-{}", self.next_toast), title));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use nd::test::TestApp;
+
+    use super::*;
+    use crate::shell::move_tab;
+    use TabEvent::{Closed, Moved, Opened, Shown};
+
+    thread_local! {
+        static HEARD: RefCell<Vec<(TabId, TabEvent)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn record(_: &mut BrowserWindow, id: TabId, event: TabEvent, _: &mut Context<BrowserWindow>) {
+        HEARD.with(|h| h.borrow_mut().push((id, event)));
+    }
+
+    fn heard() -> Vec<(TabId, TabEvent)> {
+        HEARD.with(|h| std::mem::take(&mut *h.borrow_mut()))
+    }
+
+    fn with(cx: &mut TestApp, id: WindowId, f: impl FnOnce(&mut BrowserWindow, &mut Context<BrowserWindow>)) {
+        app::window(cx, id).unwrap().update(cx, f);
+        cx.run_until_idle();
+    }
+
+    fn tabs(cx: &TestApp, id: WindowId) -> Vec<TabId> {
+        app::window(cx, id).unwrap().read(cx).tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn each_tab_event_fires_once_on_every_path() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let blank = |cx: &mut TestApp| Tab::new(app::next_tab_id(cx), "");
+        let first = vec![blank(&mut cx), blank(&mut cx)];
+        let a = app::open_window(&mut cx, first, None);
+        cx.run_until_idle();
+        assert_eq!(heard(), [(1, Opened), (2, Opened), (1, Shown)], "a window's first tabs");
+
+        let b = app::open_window(&mut cx, Vec::new(), None);
+        cx.run_until_idle();
+        assert_eq!(heard(), [(3, Opened), (3, Shown)], "New Window");
+
+        with(&mut cx, a, |w, cx| {
+            w.open_tab("", Open::End, cx);
+        });
+        assert_eq!(heard(), [(4, Opened), (4, Shown)], "a new tab");
+
+        with(&mut cx, a, |w, cx| move_tab(w, 4, Some(b), cx));
+        assert_eq!(heard(), [(4, Moved), (2, Shown), (4, Shown)], "to an existing window");
+        assert_eq!(tabs(&cx, b), [3, 4]);
+
+        with(&mut cx, b, |w, cx| move_tab(w, 4, None, cx));
+        assert_eq!(heard(), [(4, Moved), (3, Shown), (4, Shown)], "to a new window");
+        let c = app::windows(&cx).last().unwrap().0;
+        assert_eq!(tabs(&cx, c), [4]);
+
+        with(&mut cx, a, |w, cx| w.close_tab(2, cx));
+        assert_eq!(heard(), [(2, Closed), (1, Shown)], "a tab");
+
+        assert!(cx.request_close(a));
+        cx.run_until_idle();
+        assert_eq!(heard(), [(1, Closed)], "a window");
+        assert!(cx.request_close(b));
+        cx.run_until_idle();
+        assert_eq!(heard(), [(3, Closed)], "another window");
+        assert!(cx.request_close(c));
+        cx.run_until_idle();
+        assert_eq!(heard(), [(4, Closed)], "the last window");
+    }
+
+    #[test]
+    fn a_launch_after_the_last_window_closed_finds_no_window() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = app::open_window(&mut cx, Vec::new(), None);
+        cx.run_until_idle();
+        assert_eq!(app::key_window(&cx), Some(a));
+        assert!(cx.request_close(a));
+        cx.run_until_idle();
+        assert_eq!(app::key_window(&cx), None);
     }
 }

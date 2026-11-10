@@ -42,6 +42,10 @@ const LONG: &str = r#"<!doctype html><title>Long</title>
 const BUSY: &str = r#"<!doctype html><title>Busy</title>
 <body style="margin:0;height:400px" onclick="setTimeout(() => { for (;;) {} }, 0)"></body>"#;
 
+/// Says it was pressed, for a click as soon as the page has a title.
+const PRESS: &str = r#"<!doctype html><title>Press</title>
+<body style="margin:0;height:400px;background:#dfd" onpointerdown="document.title = 'Pressed'"></body>"#;
+
 const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
@@ -62,6 +66,7 @@ fn serve() -> String {
                 "/full" => ("200 OK", FULL),
                 "/long" => ("200 OK", LONG),
                 "/busy" => ("200 OK", BUSY),
+                "/press" => ("200 OK", PRESS),
                 _ => ("404 Not Found", "<!doctype html><title>Missing</title>"),
             };
             let _ = write!(
@@ -94,10 +99,16 @@ fn activate(pid: u32) {
 
 /// `pid`'s frontmost browser window, skipping popovers and other small windows.
 fn front_window(app: &AppHandle) -> ndshell::window_list::WindowInfo {
-    ndshell::window_list::of_pid(app.pid())
-        .into_iter()
-        .find(|w| w.bounds.2 >= 400. && w.bounds.3 >= 300.)
-        .expect("the app has a window on screen")
+    on_screen_window(app).expect("the app has a window on screen")
+}
+
+fn on_screen_window(app: &AppHandle) -> Option<ndshell::window_list::WindowInfo> {
+    ndshell::window_list::of_pid(app.pid()).into_iter().find(|w| w.bounds.2 >= 400. && w.bounds.3 >= 300.)
+}
+
+/// The front window's width, for a wait: none while the window is off the screen's list.
+fn width_of(app: &AppHandle) -> Option<f64> {
+    on_screen_window(app).map(|w| w.bounds.2)
 }
 
 /// Resizes the front window to `width` points, keeping its height, as a drag of its edge would.
@@ -485,7 +496,7 @@ fn real_fullscreen_page_and_browser() {
     let width = front_window(&app).bounds.2;
     // The page's own fullscreen takes the window with it and hides the sidebar; Esc leaves.
     click_page(&app, 100.);
-    until(&app, "page fullscreen", 10, |a| front_window(a).bounds.2 > width && !has(a, "controls-row"));
+    until(&app, "page fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width) && !has(a, "controls-row"));
     // The window server cannot capture a window while it moves into its fullscreen space.
     std::thread::sleep(Duration::from_millis(1500));
     shot(&app, "page-fullscreen");
@@ -499,10 +510,10 @@ fn real_fullscreen_page_and_browser() {
         "the page fills the fullscreen window"
     );
     hid(key::ESCAPE, &[]);
-    until(&app, "out of page fullscreen", 10, |a| front_window(a).bounds.2 == width && has(a, "controls-row"));
+    until(&app, "out of page fullscreen", 10, |a| width_of(a) == Some(width) && has(a, "controls-row"));
     // The browser's: macOS's own Enter Full Screen, the sidebar kept.
     hid(key::F, &[Modifier::Control, Modifier::Command]);
-    until(&app, "browser fullscreen", 10, |a| front_window(a).bounds.2 > width);
+    until(&app, "browser fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width));
     assert!(has(&app, "controls-row"));
     // The page's fullscreen inside it, left with Esc, leaves the window as the user had it.
     click_page(&app, 100.);
@@ -512,7 +523,7 @@ fn real_fullscreen_page_and_browser() {
     std::thread::sleep(Duration::from_millis(1500));
     assert!(front_window(&app).bounds.2 > width, "the window stays in the user's fullscreen");
     hid(key::F, &[Modifier::Control, Modifier::Command]);
-    until(&app, "out of browser fullscreen", 10, |a| front_window(a).bounds.2 == width);
+    until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
 }
 
 #[test]
@@ -744,6 +755,36 @@ fn menu(app: &AppHandle, menu: &str, item: &str) {
 }
 
 #[test]
+fn real_first_click_reaches_a_new_page() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    // nd-cef lifts Chromium's view into the page as the page loads, and the move sizes it to
+    // nothing; left so, it takes no clicks until nd-cef's relift timer puts the size back,
+    // which nd-cef logs at debug. Each launch is a fresh page.
+    for _ in 0..3 {
+        let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+            .env("LYNK_URL", format!("{base}/press"))
+            .env("ND_CEF_STYLE", "chrome")
+            .env("ND_LOG", "info,nd_cef=debug");
+        let app = launch_app(options).unwrap();
+        activate(app.pid());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while titles(&app) != ["Press"] {
+            assert!(Instant::now() < deadline, "the page never loaded");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+        real_click(&app, b.x + b.width / 2., b.y + 100.);
+        until(&app, "the first click on the page", 5, |a| titles(a) == ["Pressed"]);
+        let resized: Vec<String> =
+            app.stderr_tail(400).into_iter().filter(|l| l.contains("lifted page view was resized")).collect();
+        assert!(resized.is_empty(), "the page's view was left at the wrong size: {resized:?}");
+    }
+}
+
+#[test]
 fn real_sleep_keeps_the_scroll() {
     if !real_allowed() {
         return;
@@ -751,14 +792,8 @@ fn real_sleep_keeps_the_scroll() {
     let base = serve();
     let app = launch(&format!("{base}/long"));
     until(&app, "the page", 30, |a| titles(a) == ["Long"]);
-    // The first click after launch does not always reach the page, so it is repeated until the
-    // page says it scrolled.
-    until(&app, "the page scrolled", 15, |a| {
-        titles(a).first().is_some_and(|t| t.starts_with("At 600 ")) || {
-            click_page(a, 100.);
-            false
-        }
-    });
+    click_page(&app, 100.);
+    until(&app, "the page scrolled", 15, |a| titles(a).first().is_some_and(|t| t.starts_with("At 600 ")));
     let before = titles(&app)[0].clone();
     press(&app, "cmd-t");
     until(&app, "a second tab", 10, |a| titles(a).len() == 2);
@@ -851,6 +886,12 @@ fn pick_menu(app: &AppHandle, at: (f32, f32), item: &str) {
     hid(36, &[]);
 }
 
+/// The title of the app's first window, which is the shown tab's.
+fn shown_title(app: &AppHandle) -> String {
+    let windows = app.windows().unwrap();
+    windows[0]["title"].as_str().unwrap_or_default().to_owned()
+}
+
 /// The centre of the sidebar's `index`th tab row, in window points.
 fn row_at(app: &AppHandle, index: usize) -> (f32, f32) {
     let tree = app.tree(None).unwrap();
@@ -877,6 +918,13 @@ fn real_tab_row_menu() {
     until(&app, "the duplicate", 15, |a| titles(a) == ["Alpha", "Alpha"]);
     press(&app, "cmd-t");
     until(&app, "a third tab", 10, |a| titles(a).len() == 3);
+    // A right click on another tab's row opens its menu and leaves the shown tab alone.
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let at = row_at(&app, 0);
+    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
+    std::thread::sleep(Duration::from_millis(600));
+    hid(key::ESCAPE, &[]);
+    assert_eq!(shown_title(&app), "New Tab", "the shown tab after a menu on another row");
     // The row's menu acts on its own tab, not the one on show.
     pick_menu(&app, row_at(&app, 1), "Close Other");
     until(&app, "only the second tab", 15, |a| titles(a) == ["Alpha"]);

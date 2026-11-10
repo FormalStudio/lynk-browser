@@ -258,7 +258,7 @@ fn move_to_window(win: &mut BrowserWindow, target: Option<WindowId>, cx: &mut Co
     move_tab(win, win.active, target, cx);
 }
 
-fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
+pub(crate) fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
     let target = match target {
         Some(id) => match app::window(cx, id) {
             Some(entity) => Some(entity),
@@ -270,8 +270,7 @@ fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<WindowId>, cx: &m
     match target {
         Some(entity) => entity.update(cx, |w, cx| w.adopt(tab, cx)),
         None => {
-            let id = tab.id;
-            app::open_window(cx, vec![tab], Some(id));
+            app::open_window_around(cx, tab);
         }
     }
 }

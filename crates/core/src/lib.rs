@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 
+pub mod adblock;
 pub mod bookmarks;
 pub mod downloads;
 pub mod extensions;
@@ -19,6 +20,7 @@ pub mod permissions;
 pub mod session;
 pub mod settings;
 pub mod tabstate;
+pub mod ublock;
 pub mod url;
 pub mod webstore;
 pub mod zoom;

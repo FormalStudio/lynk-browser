@@ -2,9 +2,12 @@
 //! omnibox's ranking, history, bookmarks, favicons, downloads, permissions, zoom, extensions and
 //! the ad blocker's lists. No nd dependency beyond `nd-data` and `nd-settings`.
 
+pub mod keys;
+pub mod omnibox;
 pub mod pages;
 pub mod permissions;
 pub mod session;
 pub mod settings;
 pub mod tabstate;
 pub mod url;
+pub mod zoom;

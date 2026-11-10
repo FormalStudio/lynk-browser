@@ -9,6 +9,8 @@ use serde::{Deserialize, Deserializer};
 
 pub mod bookmarks;
 pub mod downloads;
+pub mod extensions;
+pub mod favicons;
 pub mod history;
 pub mod keys;
 pub mod omnibox;
@@ -18,6 +20,7 @@ pub mod session;
 pub mod settings;
 pub mod tabstate;
 pub mod url;
+pub mod webstore;
 pub mod zoom;
 
 /// Milliseconds since the Unix epoch, JavaScript's `Date.now()`, which every file the 0.5.11 app

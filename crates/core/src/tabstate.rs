@@ -111,6 +111,7 @@ pub fn find_summary(find: &FindState) -> String {
         return String::new();
     }
     match (find.count, find.found) {
+        (Some(0), _) => "No matches".into(),
         (Some(1), _) => "1 match".into(),
         (Some(n), _) => format!("{n} matches"),
         (None, None) => String::new(),
@@ -182,7 +183,7 @@ mod tests {
         assert_eq!(find_summary(&f("", Some(3), None)), "");
         assert_eq!(find_summary(&f("a", None, None)), "");
         assert_eq!(find_summary(&f("a", Some(1), None)), "1 match");
-        assert_eq!(find_summary(&f("a", Some(0), None)), "0 matches");
+        assert_eq!(find_summary(&f("a", Some(0), None)), "No matches");
         assert_eq!(find_summary(&f("a", None, Some(true))), "Found");
         assert_eq!(find_summary(&f("a", None, Some(false))), "No matches");
         assert!(find_failed(&f("a", Some(0), None)));

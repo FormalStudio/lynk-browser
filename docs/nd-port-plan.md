@@ -2,19 +2,17 @@
 
 Milestone M15 of the NativeDesktop Rust rewrite: Lynk moves from the Zig NativeDesktop 0.5.11
 (a Zig host with a Bun child running Solid, CEF 151 in Chrome style) to the Rust `nd` crate.
-The port lives on branch `nd-port`. It becomes `main` only when every box in
-[nd-parity.md](nd-parity.md) is ticked: then `nd-port` merges into `main`, and the nix config
-switches to the nd build, rebuilt and checked on every host (NativeDesktop `docs/plan/PROMPT.md`,
-decision of 2026-10-14). Until then the 0.5.11 build stays the one people run.
+The port lives on `main` (decision of 2026-10-20 in NativeDesktop `docs/plan/PROMPT.md`): the
+0.5.11 build is a prototype nobody runs, so the checklist in [nd-parity.md](nd-parity.md) is the
+work list and not a merge gate. The waves and who owns what are in
+[delivery-plan.md](delivery-plan.md).
 
 ## Where things are
 
-- nd: path dependencies on `../nativedesktop-wt-browser` (nd's `browser` branch, which is nd
-  `main` plus whatever this port needs). nd's patched GPUI reaches this workspace only through
-  the `[patch.crates-io]` table in the root `Cargo.toml`. When `browser` merges, the paths move to
-  a git dependency on one nd revision.
-- Rust code: `crates/`. The TypeScript app in `src/` stays untouched until the switch, so the
-  shipping build keeps working from the same tree.
+- nd: a git dependency on NativeDesktop `main`, pinned by `Cargo.lock`. nd's patched GPUI
+  reaches this workspace only through the `[patch.crates-io]` table in the root `Cargo.toml`.
+- Rust code: `crates/`. The TypeScript app in `src/` is the spec and stays untouched until it
+  is deleted.
 - Build on the macbook: `CEF_PATH="/Volumes/Kyan Drive/dev-cache.noindex/cef" cargo build -p lynk`
   outside a Nix shell's SDK (`env -u SDKROOT -u DEVELOPER_DIR` when one is set). Intermediates go
   to the external drive through `.cargo/config.toml`. A dev run is its own Chromium helper, and
@@ -74,11 +72,10 @@ The old app runs CEF in Chrome style (`webview.cef.style = "chrome"` in
 Web Store install flow, extension action popups, `chrome://settings` and `chrome://extensions`,
 Chromium's picture-in-picture window, and 1Password's browser integration.
 
-nd's CEF engine is off-screen only: every browser is created windowless in Alloy style
-(`nd-cef/src/mac/view.rs`, `linux/view.rs`), and `[webview.cef] style = "chrome"` is accepted by
-the config but read by nothing. Alloy style has no extension UI, and Chrome style cannot render
-off-screen. So the browser needs nd to grow a windowed Chrome-style page, and the parity gate
-(extensions and 1Password on Hyprland) depends on it.
+nd's CEF engine draws off-screen in Alloy style by default. Alloy style has no extension UI and
+Chrome style cannot render off-screen, so `[webview.cef] style = "chrome"` creates windowed
+Chrome-style pages instead (lane `cef-chrome-style`, merged), and Lynk runs on those from the
+start.
 
 Per the 2026-10-13 decision, on Hyprland CEF stays Wayland-native off-screen by default and
 falls back to XWayland only where Wayland would lose functionality. Lynk is that case: its pages
@@ -87,9 +84,9 @@ sharp. On macOS Chrome style is a child `NSView` in the window's AppKit tree, th
 a WKWebView has, so nd's overlay rules (panels and menus above the page, input never leaking
 through) already apply.
 
-## nd lanes this port needs first
+## nd lanes this port needed
 
-Each lane is a branch in the nd repo, merged by the orchestrator. In order of what blocks most.
+All eight are merged in nd `main`. Their "done when" lines stay as the description of what each gives.
 
 1. **`cef-chrome-style`**: `[webview.cef] style = "chrome"` creates windowed Chrome-style
    browsers. macOS: the browser's `NSView` in the AppKit tree, resized with the window, focus and
@@ -132,23 +129,9 @@ Each lane is a branch in the nd repo, merged by the orchestrator. In order of wh
    print dialog for the page on macOS and the portal dialog on Linux.
 
 Not needed for parity, so not a lane yet: Lynk as the default browser (the 0.5.11 app registers
-no URL schemes either). Windows is out of scope for M15: nd's CEF engine does not run there yet, and the old app never
-shipped on Windows.
+no URL schemes either). Windows is in scope: nd's CEF engine does
+not run there yet, which is lane `cef-windows` in [delivery-plan.md](delivery-plan.md).
 
 ## Order of work
 
-1. Skeleton (done on this branch): a workspace on nd's `browser` branch, a window with a sidebar
-   and one CEF page.
-2. `crates/core`: port `src/lib/` with its tests. No nd lanes needed, so it runs beside lanes
-   1 to 3.
-3. Shell on off-screen CEF: sidebar layout, tabs, omnibox, find, zoom, downloads, history and
-   bookmarks panels, session restore, settings window, menus and shortcuts. Everything here is
-   in today's `nd::webview`.
-4. Switch the engine to Chrome style once `cef-chrome-style` lands, then extensions, 1Password
-   and the Web Store on `cef-extensions`.
-5. Adblock on `cef-request-filter`, reader mode, floating video, private windows, compact
-   layout, tab drag, sidebar reveal.
-6. Linux on g815 (headless Hyprland through `scripts/linux-gate`, then e1504g for the real
-   session), packaging (`nd package mac` signed, AppImage, Nix package), data migration from the
-   0.5.11 profile.
-7. Tick every box in `nd-parity.md`, merge into `main`, switch the nix config.
+See [delivery-plan.md](delivery-plan.md).

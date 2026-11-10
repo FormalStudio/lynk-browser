@@ -1,7 +1,7 @@
 # NativeDesktop port: parity checklist
 
 Every user-visible feature of Lynk on `main` (`a2d6bbf`, NativeDesktop 0.5.11, CEF 151 in Chrome
-style) against the NativeDesktop build on `nd-port`. A box is ticked only when the feature was
+style) against the NativeDesktop build on `main`. A box is ticked only when the feature was
 seen working in the nd build, and the line then says how:
 
 - **drive**: an automated drive of the real app over nd's automation socket (the test is named in
@@ -237,4 +237,14 @@ macOS. Nothing below is ticked yet. The 0.5.11 build stays the default until eve
 - [ ] [mac] `nd package mac`: the app with the CEF framework and its five helpers, signed with the Developer ID
 - [ ] [linux] `nd package linux` AppImage with the CEF runtime beside the binary
 - [ ] Nix package: the nd build from the flake, root-owned in the store, replacing the `requireFile` AppImage derivation in `~/.config/nix`, rebuilt on every host
-- [ ] Windows: out of scope for M15 (nd's CEF engine does not run there; the 0.5.11 app never shipped there)
+
+## Windows
+Every unmarked line above holds on Windows too, checked in the Windows VM on g815. These are the Windows-only ones (the old `nb/windows` branch and `scripts/site-shots-windows.ts` are the spec).
+- [ ] [windows] nd's Chromium engine runs in Chrome style (nd lane `cef-windows`)
+- [ ] [windows] Caption buttons in a trailing strip exactly their height, with Snap Layouts; the strip drags the window
+- [ ] [windows] Sidebar and compact layouts, the compact row's furniture clear of the caption buttons
+- [ ] [windows] Chords on Ctrl as on Linux; a main-menu button instead of a menu bar, the menu row on Alt
+- [ ] [windows] Dialogs end in Done
+- [ ] [windows] Data in the directory nd's settings paths give on Windows, the Chromium profile in `cef` inside
+- [ ] [windows] Extensions install from the Web Store; 1Password connects through its native messaging host in the registry
+- [ ] [windows] `nd package windows`: an installer with the CEF runtime beside the exe, signed with the identity the owner picks

@@ -236,7 +236,7 @@ pub fn unconfirmed_name() -> String {
 /// path: a server can suggest `../x`.
 pub fn download_name(url: &str, suggested: Option<&str>) -> String {
     let raw = suggested.filter(|s| !s.is_empty()).map_or_else(|| file_name_from_url(url), str::to_owned);
-    let base = raw.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    let base = raw.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or("");
     let name = base.trim_start_matches('.');
     if name.is_empty() { "download".into() } else { name.to_owned() }
 }
@@ -438,6 +438,7 @@ mod tests {
         assert_eq!(download_name("https://x/y", Some("../../etc/passwd")), "passwd");
         assert_eq!(download_name("https://x/y", Some(".hidden")), "hidden");
         assert_eq!(download_name("https://x/files/r.pdf", None), "r.pdf");
+        assert_eq!(download_name("https://x/y", Some("..\\..\\x.exe")), "x.exe");
     }
 
     #[test]

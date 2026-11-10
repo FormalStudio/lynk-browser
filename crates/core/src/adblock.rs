@@ -166,9 +166,10 @@ pub fn list_path(adblock_dir: &Path, list: &FilterList) -> PathBuf {
 /// Daily refresh from the addresses uBO itself uses, mirrors in order. `fetch` returns the body
 /// of a successful answer. A list is replaced only by a whole list: a page that does not look
 /// like one moves on to the next mirror, and the new file is written beside the old and renamed
-/// over it. Returns how many lists changed.
+/// over it. The store is never held across a fetch, so the UI keeps reading it and a site
+/// switch made meanwhile survives. Returns how many lists changed.
 pub fn refresh_lists(
-    state: &mut BlockingState,
+    store: &Store<BlockingState>,
     adblock_dir: &Path,
     lists: &[FilterList],
     now: i64,
@@ -177,13 +178,13 @@ pub fn refresh_lists(
 ) -> usize {
     let mut changed = 0;
     for list in lists {
-        if !state.list_due(&list.key, now, force) {
+        if !store.get().list_due(&list.key, now, force) {
             continue;
         }
         for url in &list.remote {
             let Some(text) = fetch(url).filter(|t| looks_like_a_list(t)) else { continue };
             let out = adblock_dir.join("lists").join(format!("{}.txt", list.key));
-            state.fetched.insert(list.key.clone(), now);
+            store.update(|s| s.fetched.insert(list.key.clone(), now));
             if std::fs::read_to_string(&out).is_ok_and(|old| old == text) {
                 break;
             }
@@ -206,41 +207,42 @@ pub fn fetch_list(url: &str) -> Option<String> {
 
 /// The weekly release check. With `latest` newer than the release in use, it is fetched,
 /// verified and extracted, then becomes the release, and the older ones go. Returns the new
-/// release's folder when it moved.
+/// release's folder when it moved. The store is only touched between network calls.
 pub fn update_release(
-    state: &mut BlockingState,
+    store: &Store<BlockingState>,
     adblock_dir: &Path,
     now: i64,
     force: bool,
     latest: impl FnOnce() -> Option<Release>,
     fetch_zip: impl FnOnce(&str) -> Result<Vec<u8>, String>,
 ) -> Result<Option<PathBuf>, String> {
-    if !state.release_check_due(now, force) {
+    if !store.get().release_check_due(now, force) {
         return Ok(None);
     }
-    state.last_release_check = now;
+    store.update(|s| s.last_release_check = now);
     let Some(latest) = latest() else { return Ok(None) };
-    if ublock::compare_versions(&latest.version, &state.release.version).is_le() {
+    if ublock::compare_versions(&latest.version, &store.get().release.version).is_le() {
         return Ok(None);
     }
     let dir = ublock::ensure_release(adblock_dir, &latest, fetch_zip)?;
     ublock::drop_other_releases(adblock_dir, &latest.version);
-    state.release = latest;
+    store.update(|s| s.release = latest);
     Ok(Some(dir))
 }
 
 /// The release folder to run on: the one in use, else the pinned one when the newer release
-/// can no longer be fetched (the state moves back to it).
+/// can no longer be fetched (the store moves back to it).
 pub fn prepare_release(
-    state: &mut BlockingState,
+    store: &Store<BlockingState>,
     adblock_dir: &Path,
     mut fetch_zip: impl FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<PathBuf, String> {
-    match ublock::ensure_release(adblock_dir, &state.release, &mut fetch_zip) {
+    let release = store.get().release.clone();
+    match ublock::ensure_release(adblock_dir, &release, &mut fetch_zip) {
         Ok(dir) => Ok(dir),
-        Err(_) if state.release != ublock::pinned() => {
-            state.release = ublock::pinned();
-            ublock::ensure_release(adblock_dir, &state.release, fetch_zip)
+        Err(_) if release != ublock::pinned() => {
+            store.update(|s| s.release = ublock::pinned());
+            ublock::ensure_release(adblock_dir, &ublock::pinned(), fetch_zip)
         }
         Err(e) => Err(e),
     }
@@ -354,22 +356,22 @@ mod tests {
         let (_, release) = fixture_release(&dir);
         let lists: Vec<FilterList> =
             default_lists(&release).unwrap().into_iter().filter(|l| l.key == "ublock-filters").collect();
-        let mut s = BlockingState::default();
+        let s = open(root.path());
 
         let portal = format!("<!DOCTYPE html><html><body>Sign in to the Wi-Fi{}</body></html>", " ".repeat(300));
-        let n = refresh_lists(&mut s, &dir, &lists, DAY_MS, false, |url| match url {
+        let n = refresh_lists(&s, &dir, &lists, DAY_MS, false, |url| match url {
             "https://cdn.test/filters.txt" => Some(portal.clone()),
             _ => Some("||cut.test^".into()),
         });
         assert_eq!(n, 0);
-        assert!(!s.fetched.contains_key("ublock-filters"));
+        assert!(!s.get().fetched.contains_key("ublock-filters"));
         assert_eq!(list_path(&dir, &lists[0]), lists[0].bundled);
 
-        let n = refresh_lists(&mut s, &dir, &lists, DAY_MS, false, |url| {
+        let n = refresh_lists(&s, &dir, &lists, DAY_MS, false, |url| {
             (url == "https://raw.test/filters.txt").then(|| list_text("fresh"))
         });
         assert_eq!(n, 1);
-        assert_eq!(s.fetched["ublock-filters"], DAY_MS);
+        assert_eq!(s.get().fetched["ublock-filters"], DAY_MS);
         let fresh = dir.join("lists/ublock-filters.txt");
         assert_eq!(list_path(&dir, &lists[0]), fresh);
         assert!(!dir.join("lists/ublock-filters.txt.partial").exists());
@@ -377,15 +379,15 @@ mod tests {
         // Fetched less than a day ago: left alone unless forced. The same text changes nothing.
         let mut asked = 0;
         assert_eq!(
-            refresh_lists(&mut s, &dir, &lists, DAY_MS + 1000, false, |_| {
+            refresh_lists(&s, &dir, &lists, DAY_MS + 1000, false, |_| {
                 asked += 1;
                 None
             }),
             0
         );
         assert_eq!(asked, 0);
-        assert_eq!(refresh_lists(&mut s, &dir, &lists, DAY_MS + 1000, true, |_| Some(list_text("fresh"))), 0);
-        assert_eq!(s.fetched["ublock-filters"], DAY_MS + 1000);
+        assert_eq!(refresh_lists(&s, &dir, &lists, DAY_MS + 1000, true, |_| Some(list_text("fresh"))), 0);
+        assert_eq!(s.get().fetched["ublock-filters"], DAY_MS + 1000);
         assert_eq!(std::fs::read_to_string(&fresh).unwrap(), list_text("fresh"));
     }
 
@@ -396,37 +398,66 @@ mod tests {
         let zip = release_zip();
         let latest = Release { version: "9.0.0".into(), sha256: sha256_hex(&zip) };
         std::fs::create_dir_all(dir.join("ubo/1.75.0")).unwrap();
-        let mut s = BlockingState { last_release_check: 1, ..BlockingState::default() };
+        let s = open(root.path());
+        s.update(|b| b.last_release_check = 1);
 
-        let not_due = update_release(&mut s, &dir, 2, false, || panic!("not due"), |_| panic!("not due"));
+        let not_due = update_release(&s, &dir, 2, false, || panic!("not due"), |_| panic!("not due"));
         assert_eq!(not_due, Ok(None));
 
         let bad = Release { sha256: "f".repeat(64), ..latest.clone() };
         let z = zip.clone();
-        assert!(update_release(&mut s, &dir, WEEK_MS + 2, false, || Some(bad), move |_| Ok(z)).is_err());
-        assert_eq!(s.release, ublock::pinned());
-        assert_eq!(s.last_release_check, WEEK_MS + 2);
+        assert!(update_release(&s, &dir, WEEK_MS + 2, false, || Some(bad), move |_| Ok(z)).is_err());
+        assert_eq!(s.get().release, ublock::pinned());
+        assert_eq!(s.get().last_release_check, WEEK_MS + 2);
 
         let z = zip.clone();
-        let moved = update_release(&mut s, &dir, WEEK_MS + 3, true, || Some(latest.clone()), move |_| Ok(z)).unwrap();
+        let moved = update_release(&s, &dir, WEEK_MS + 3, true, || Some(latest.clone()), move |_| Ok(z)).unwrap();
         assert_eq!(moved, Some(dir.join("ubo/9.0.0")));
-        assert_eq!(s.release, latest);
+        assert_eq!(s.get().release, latest);
         assert!(!dir.join("ubo/1.75.0").exists());
         let older = Release { version: "1.0.0".into(), ..latest.clone() };
-        assert_eq!(update_release(&mut s, &dir, WEEK_MS * 3, false, || Some(older), |_| panic!("older")), Ok(None));
+        assert_eq!(update_release(&s, &dir, WEEK_MS * 3, false, || Some(older), |_| panic!("older")), Ok(None));
     }
 
     #[test]
     fn a_release_that_cannot_be_fetched_falls_back_to_the_pinned_one() {
         let root = tempfile::tempdir().unwrap();
         let dir = adblock_dir(root.path()).unwrap();
-        let mut s = BlockingState {
-            release: Release { version: "9.9.9".into(), sha256: "0".repeat(64) },
-            ..BlockingState::default()
-        };
-        let err = prepare_release(&mut s, &dir, |_| Err("offline".into())).unwrap_err();
+        let s = open(root.path());
+        s.update(|b| b.release = Release { version: "9.9.9".into(), sha256: "0".repeat(64) });
+        let err = prepare_release(&s, &dir, |_| Err("offline".into())).unwrap_err();
         assert_eq!(err, "offline");
-        assert_eq!(s.release, ublock::pinned());
+        assert_eq!(s.get().release, ublock::pinned());
+    }
+
+    #[test]
+    fn a_site_switch_made_during_a_refresh_survives_it() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = adblock_dir(root.path()).unwrap();
+        let (_, release) = fixture_release(&dir);
+        let lists = default_lists(&release).unwrap();
+        let s = open(root.path());
+        let n = refresh_lists(&s, &dir, &lists, DAY_MS, false, |url| {
+            s.update(|b| b.set_blocking_on("news.test", false));
+            (url == "https://raw.test/filters.txt").then(|| list_text("fresh"))
+        });
+        assert_eq!(n, 1);
+        assert_eq!(s.get().fetched["ublock-filters"], DAY_MS);
+        assert!(!s.get().blocking_on("news.test"));
+        let checked = update_release(
+            &s,
+            &dir,
+            WEEK_MS + 1,
+            false,
+            || {
+                s.update(|b| b.hide("a.test", ".ad", "Ad", "", 1));
+                None
+            },
+            |_| unreachable!(),
+        );
+        assert_eq!(checked, Ok(None));
+        assert_eq!(s.get().last_release_check, WEEK_MS + 1);
+        assert_eq!(s.get().user_rules(), "a.test##.ad");
     }
 
     #[test]

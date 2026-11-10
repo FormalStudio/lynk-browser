@@ -9,6 +9,7 @@ rust-version = "1.95"
 name = "lynk_core"
 
 [dependencies]
+nd-data = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 nd-settings = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -16,6 +17,15 @@ schemars = "1.2.3"
 url = "2"
 percent-encoding = "2"
 regex = "1"
+dirs = "5"
+base64 = "0.22.1"
+flate2 = "1.1"
+sha2 = "0.10.9"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+ureq = "3.4"
+# Without `single-thread` an engine is Sync, as the filter Chromium calls on its IO thread must be.
+adblock = { version = "=0.13.3", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "resource-assembler"] }
 
 [dev-dependencies]
 tempfile = "3"
+futures-executor = "0.3"

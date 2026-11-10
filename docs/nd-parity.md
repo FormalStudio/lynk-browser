@@ -239,7 +239,7 @@ macOS. Nothing below is ticked yet. The 0.5.11 build stays the default until eve
 - [ ] Nix package: the nd build from the flake, root-owned in the store, replacing the `requireFile` AppImage derivation in `~/.config/nix`, rebuilt on every host
 
 ## Windows
-Every unmarked line above holds on Windows too, checked in the Windows VM on g815. These are the Windows-only ones (the old `nb/windows` branch and `scripts/site-shots-windows.ts` are the spec).
+Every unmarked line above holds on Windows too, checked on real Windows (g815 booted into Windows). These are the Windows-only ones (the old `nb/windows` branch and `scripts/site-shots-windows.ts` are the spec).
 - [ ] [windows] nd's Chromium engine runs in Chrome style (nd lane `cef-windows`)
 - [ ] [windows] Caption buttons in a trailing strip exactly their height, with Snap Layouts; the strip drags the window
 - [ ] [windows] Sidebar and compact layouts, the compact row's furniture clear of the caption buttons

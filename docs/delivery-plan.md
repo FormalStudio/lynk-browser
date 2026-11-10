@@ -23,7 +23,9 @@ Written 2026-11-10. Where the port stands, what is left, and the waves that clos
   stray-window guard); `win-osr` has the off-screen path.
 - No box in `nd-parity.md` is ticked. Since the 2026-10-20 decision in nd's
   `docs/plan/PROMPT.md` the port is `main` and the checklist is the work list, not a merge gate.
-- g815 on 2026-11-10: 40 GB free on root, 44 GB on `/mnt/steamlib`. The Windows VM needs 45 GB.
+- Windows runs happen on real Windows (g815 booted into Windows, `ssh windows`), at a later
+  date. Until then Windows code is checked by `cargo clippy --target x86_64-pc-windows-msvc`
+  only, and nothing on Windows counts as done.
 
 ## Rules for every wave
 
@@ -46,11 +48,11 @@ Written 2026-11-10. Where the port stands, what is left, and the waves that clos
 | --- | --- | --- |
 | `core` | `crates/core` | Every non-drawing module of `src/lib/` is Rust. Each module has tests: the ported `*.test.ts` where one exists (url, omnibox, session, pages, permissions, downloads, favicons, webstore, reader), new ones for the modules that had none (settings keys, defaults and fallbacks; history and bookmarks against a temp SQLite file; zoom steps; tabstate verdicts; adblock list pinning and refresh rules). `cargo test -p lynk-core` passes |
 | `shell` | `crates/lynk` | Window registry, tab model with lazy pages, sidebar layout, the registries later lanes append to (commands, menu items, foot slots, padlock rows, per-tab page observers), back, forward, reload, close and reopen, load bar, find, zoom, developer tools, fullscreen, new tab page, error and crashed pages, multi-window, one instance per profile, SIGTERM, Chromium bubbles off, the identity probe. `crates/lynk/tests/shell_drive.rs` drives the real app in Chrome style on macOS with one named case per box claimed |
-| `cef-windows` (nd repo) | `crates/nd-cef/src/windows`, Windows wiring, `nd package windows`, native messaging through the registry, the install prompt | On Windows with `--features cef` and `ND_CEF_STYLE=chrome`, the `examples/browser` scenes `parity`, `chrome-pages`, `extensions`, `webstore`, `adblock`, `private`, `pip` and `print` pass |
+| `cef-windows` (nd repo) | `crates/nd-cef/src/windows`, Windows wiring, `nd package windows`, native messaging through the registry, the install prompt | On real Windows with `--features cef` and `ND_CEF_STYLE=chrome`, the `examples/browser` scenes `parity`, `chrome-pages`, `extensions`, `webstore`, `adblock`, `private`, `pip` and `print` pass |
 
 `core` lands url, settings, session, tabstate and pages first so `shell` can depend on them.
-The orchestrator frees g815 to 45 GB for the VM, or the Windows gate runs on the Windows PC
-(`ssh windows`) the next time g815 is booted into Windows.
+`cef-windows` ends wave 1 written and cross-checked; its gate runs with the first real Windows
+session.
 
 ## Wave 2: features (five agents, each appending to the shell's registries)
 
@@ -75,7 +77,7 @@ The orchestrator frees g815 to 45 GB for the VM, or the Windows gate runs on the
 | Lane | Done when |
 | --- | --- |
 | `migrate` | A copy of a real 0.5.11 profile, captured once into a fixture, opens unchanged: settings, session v1 and v2, `history.sqlite`, `blocking.json`, the Chromium profile |
-| `windows-app` | Every line of the Windows section of `nd-parity.md` is ticked in the Windows VM: caption strip, both layouts, extensions, a packaged installer. The signing identity is the owner's choice (nd `STATUS.md`) |
+| `windows-app` | Every line of the Windows section of `nd-parity.md` is ticked on real Windows: caption strip, both layouts, extensions, a packaged installer. The signing identity is the owner's choice (nd `STATUS.md`) |
 
 Then every box is ticked, `src/` and the Bun toolchain are deleted, the README is rewritten for
 the Rust build, and the nix config switches on every host.

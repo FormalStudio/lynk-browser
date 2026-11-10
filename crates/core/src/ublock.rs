@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use adblock::lists::FilterFormat;
-use adblock::resources::Resource;
+use adblock::resources::{MimeType, PermissionMask, Resource, ResourceType};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -213,6 +214,38 @@ pub fn load_resources(adblock_dir: &Path, release_dir: &Path, version: &str) -> 
     out
 }
 
+/// One entry of uBO's `builtinScriptlets` as a page evaluating the release's
+/// `js/resources/scriptlets.js` reports it, `source` being `fn.toString()`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Scriptlet {
+    pub name: String,
+    pub aliases: Vec<String>,
+    pub source: String,
+    pub dependencies: Vec<String>,
+}
+
+/// The scriptlets as adblock-rust resources, the shape Brave builds its own in. uBO's `*.fn`
+/// entries are helpers other scriptlets depend on, never injected by name; a scriptlet whose
+/// source starts with `function name(` is called with the filter's arguments.
+pub fn scriptlet_resources(scriptlets: &[Scriptlet]) -> Vec<Resource> {
+    scriptlets
+        .iter()
+        .map(|s| Resource {
+            name: s.name.clone(),
+            aliases: s.aliases.clone(),
+            kind: ResourceType::Mime(if s.name.ends_with(".fn") {
+                MimeType::FnJavascript
+            } else {
+                MimeType::ApplicationJavascript
+            }),
+            content: base64::engine::general_purpose::STANDARD.encode(&s.source),
+            dependencies: s.dependencies.clone(),
+            permission: PermissionMask::default(),
+        })
+        .collect()
+}
+
 pub fn resources_path(adblock_dir: &Path, version: &str) -> PathBuf {
     adblock_dir.join(format!("resources-{version}.json"))
 }
@@ -336,6 +369,31 @@ pub(crate) mod tests {
         assert_eq!(lists[1].bundled, dir.join("assets/ublock/filters.txt"));
         let resources = load_resources(root.path(), &dir, "1.80.0");
         assert!(resources.iter().any(|r| r.name == "noop.js" && r.aliases == ["noopjs"]));
+    }
+
+    #[test]
+    fn evaluated_scriptlets_inject_with_their_helpers() {
+        let scriptlets = [
+            Scriptlet {
+                name: "mark-helper.fn".into(),
+                source: "function markHelper(v) { window.marked = v; }".into(),
+                ..Scriptlet::default()
+            },
+            Scriptlet {
+                name: "mark-page.js".into(),
+                aliases: vec!["mark.js".into()],
+                source: "function markPage(v) { markHelper(v); }".into(),
+                dependencies: vec!["mark-helper.fn".into()],
+            },
+        ];
+        let resources = scriptlet_resources(&scriptlets);
+        assert_eq!(resources[0].kind, ResourceType::Mime(MimeType::FnJavascript));
+        assert_eq!(resources[1].kind, ResourceType::Mime(MimeType::ApplicationJavascript));
+        let mut engine = adblock::Engine::new_with_list_text("example.org##+js(mark, 7)");
+        engine.use_resources(resources);
+        let script = engine.url_cosmetic_resources("https://example.org/").injected_script;
+        assert!(script.contains("function markHelper(v)"), "{script}");
+        assert!(script.contains("markPage"), "{script}");
     }
 
     #[test]

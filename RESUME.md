@@ -108,6 +108,14 @@ fresh profile. Declined nits: the filter-list date fallback, lazy favicon ink.
   `cargo update -p nd` in a `chore(deps): nd <sha>` commit.
 - The macbook is where drives run; they need the screen, so one drive at a time.
 
+## Inspiration backlog
+
+[docs/inspiration.md](docs/inspiration.md) (written 2026-11-23, extended 2026-11-24) records seven X posts the owner
+bookmarked: a settings design, sidebar separators (manual and generated) and drop to pin, projects, split tabs, a top-tabs layout and themes,
+a visual tab switcher, and peek by force click, each with what Lynk and nd would need on all
+three platforms. It is notes only. Nothing in it is scheduled; do not start on it without the
+owner's go-ahead.
+
 ## Owner decisions pending
 
 - Wave 5 (spaces, folders, split view, auto-archive, peek, a small window for links from other

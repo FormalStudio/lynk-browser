@@ -55,9 +55,16 @@ const FULL: &str = r#"<!doctype html><title>Full</title>
 /// No colours of its own: Chromium's default white is what it sits on.
 const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own.";
 
+/// A title no sidebar row has room for.
+const LONG_TITLE: &str = "<!doctype html><title>A page whose title runs on well past the width of any sidebar row</title>";
+
 /// Opens pop-ups as fast as it can, never from a click.
 const POPUPS: &str = r#"<!doctype html><title>Popups</title>
 <body><script>setInterval(() => window.open("/beta?" + Math.random()), 20);</script></body>"#;
+
+/// The close light's centre, in window points: its edges sit 19 in from the window's left and top
+/// (docs/sidebar.md), and it is 14 across.
+const CLOSE_LIGHT: (f32, f32) = (26., 26.);
 
 /// Serves the fixture pages on a free local port for the rest of the test process, each request
 /// on its own thread, since `/slow` never answers.
@@ -88,6 +95,7 @@ fn respond(mut stream: std::net::TcpStream) {
         "/press" => page(PRESS),
         "/popups" => page(POPUPS),
         "/plain" => page(PLAIN),
+        "/long-title" => page(LONG_TITLE),
         "/many" => page(&format!("<!doctype html><title>Many</title><p>{}", "needle ".repeat(10_000))),
         // 50 MB of text under a title.
         "/big" => page(&format!("<!doctype html><title>Big</title><pre>{}", "x".repeat(50 << 20))),
@@ -415,7 +423,7 @@ fn real_beforeunload_holds_the_close() {
     press(&app, "cmd-shift-t");
     until(&app, "the page back", 15, |a| titles(a) == ["New Tab", "Leave"]);
     click_page(&app, 100.);
-    let close = (19., 19.);
+    let close = CLOSE_LIGHT;
     real_click(&app, close.0, close.1);
     std::thread::sleep(Duration::from_secs(1));
     assert!(
@@ -1069,7 +1077,7 @@ fn real_window_of_thirty_live_tabs_closes() {
     }
     until(&app, "thirty live pages", 60, |a| live_pages(a) == 30);
     // The last window closing quits.
-    real_click(&app, 19., 19.);
+    real_click(&app, CLOSE_LIGHT.0, CLOSE_LIGHT.1);
     exited(&app, 30);
 }
 
@@ -1299,4 +1307,64 @@ fn real_a_page_without_colours_sits_on_white() {
     std::thread::sleep(Duration::from_secs(1));
     let plain = page_backdrop(&app, "page-plain");
     assert!(plain.iter().all(|c| *c >= 250), "a page with no colours of its own is white, got {plain:?}");
+}
+
+/// The sidebar's rows in every state at once, in each appearance and at the minimum width:
+/// shown, under the pointer, loading, asleep, a long title, no favicon, the New Tab row and the
+/// foot. Captures land as `shell-sidebar-states-<appearance>[-720].png`.
+#[test]
+fn real_sidebar_draws_every_row_state() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for appearance in ["dark", "light"] {
+        let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-theme-{appearance}.toml"));
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let options = ["/alpha", "/long-title", "/slow", "/beta"]
+            .iter()
+            .fold(LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("ND_CEF_STYLE", "chrome"), |o, path| {
+                o.arg(format!("{base}{path}"))
+            })
+            .env("ND_THEME_TOML", theme.display().to_string());
+        let app = launch_app(options).unwrap();
+        activate(app.pid());
+        until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
+        // The slow tab keeps loading behind the shown one; Beta loads, then sleeps.
+        press(&app, "cmd-3");
+        until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
+        press(&app, "cmd-4");
+        until(&app, "Beta", 15, |a| titles(a).get(3).is_some_and(|t| t == "Beta"));
+        press(&app, "cmd-2");
+        until(&app, "the long title", 15, |a| titles(a).get(1).is_some_and(|t| t.starts_with("A page")));
+        press(&app, "cmd-1");
+        pick_menu(&app, row_at(&app, 3), "Put Tab");
+        until(&app, "Beta asleep", 15, |a| live_pages(a) == 3);
+        for suffix in ["", "-720"] {
+            if suffix == "-720" {
+                resize(&app, 720);
+            }
+            in_front(&app);
+            let (wx, wy, _, _) = front_window(&app).bounds;
+            let at = row_at(&app, 1);
+            ndshell::input::move_to((wx + f64::from(at.0), wy + f64::from(at.1)));
+            std::thread::sleep(Duration::from_millis(600));
+            shot(&app, &format!("sidebar-states-{appearance}{suffix}"));
+            sidebar_geometry_holds(&app);
+        }
+    }
+}
+
+/// The column's numbers, read off the shown row: 28 tall, 19 in from the window's left edge and
+/// the sidebar's trailing edge, the close button inside its trailing slot with air on every side,
+/// and the title ending before it.
+fn sidebar_geometry_holds(app: &AppHandle) {
+    let bounds = |id: &str| app.get_by_test_id(id).bounding_box().unwrap().unwrap_or_else(|| panic!("{id} is laid out"));
+    let row_id = rows(app)[0].0.clone();
+    let id = row_id.strip_prefix("tab-row-").unwrap();
+    let (row, close, title) = (bounds(&row_id), bounds(&format!("tab-close-{id}")), bounds(&format!("tab-title-{id}")));
+    assert_eq!((row.x, row.width, row.height), (19., 240. - 2. * 19., 28.), "the shown row");
+    let (gap_right, gap_top) = (row.x + row.width - (close.x + close.width), close.y - row.y);
+    assert!(gap_right >= 4. && gap_top >= 4., "the close button keeps clear of the row's edges: {close:?} in {row:?}");
+    assert!(title.x + title.width <= close.x, "the title stops before the close button: {title:?}, {close:?}");
 }

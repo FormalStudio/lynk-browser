@@ -7,24 +7,49 @@ use std::hash::{Hash, Hasher};
 use nd::core::WindowId;
 use nd::platform::{Target, target};
 use nd::prelude::*;
-use nd::virtual_list::{SelectEvent, Selection, list};
+use nd::virtual_list::list;
 
 use crate::actions;
 use crate::app;
 use crate::tab::TabId;
 use crate::window::{BrowserWindow, Open};
 
+// The column's numbers (docs/sidebar.md, and the 0.5.11 app's `Sidebar.tsx` where it is
+// silent). Every backend draws these; nothing below takes a size from the theme.
+pub const WIDTH: f32 = 240.;
 pub const TAB_ROW_HEIGHT: f32 = 28.;
 pub const ROW_GAP: f32 = 2.;
 /// A row and the gap under it.
 pub const ROW_HEIGHT: f32 = TAB_ROW_HEIGHT + ROW_GAP;
 const CONTROLS_HEIGHT: f32 = 32.;
+/// macOS: the column's leading and trailing margin, and the close light's distance from the
+/// window's left and top edges, as a window with a toolbar places it.
 const MAC_MARGIN: f32 = 19.;
-/// Half a traffic light's width.
-const LIGHT_RADIUS: f32 = 7.;
-const TRAIL_WIDTH: f32 = 24.;
+const LIGHT: f32 = 14.;
+/// Elsewhere: the column's padding.
+const INSET: f32 = 8.;
+const ROW_RADIUS: f32 = 8.;
+/// Inside a row: before the favicon, between favicon and title, after the trailing slot.
+const ROW_LEAD: f32 = 6.;
+const ICON_GAP: f32 = 8.;
+const ROW_TAIL: f32 = 2.;
 const FAVICON: f32 = 16.;
-pub const WIDTH: f32 = 240.;
+/// Kept on every row, so a title never reflows as the pointer crosses the list.
+const TRAIL_WIDTH: f32 = 24.;
+/// The close button's hit area and glyph, and the load spinner, inside the trailing slot.
+const CLOSE_BOX: f32 = 20.;
+const CLOSE_RADIUS: f32 = 6.;
+const CLOSE_GLYPH: f32 = 12.;
+const SPINNER: f32 = 14.;
+/// Fills, as a share of the primary ink so one number holds in light and dark.
+const SHOWN_FILL: f32 = 0.12;
+const HOVER_FILL: f32 = 0.06;
+const CLOSE_HOVER_FILL: f32 = 0.10;
+/// A pressed row or button gives a little.
+const PRESSED_SCALE: f32 = 0.98;
+/// A sleeping tab's row, the resting New tab row and a resting close glyph.
+const ASLEEP: f32 = 0.5;
+const QUIET: f32 = 0.6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SidebarRow {
@@ -133,14 +158,12 @@ impl BrowserWindow {
             .chain((target() != Target::Linux).then_some((SidebarRow::NewTab, 0)))
             .collect();
         self.rows.set_items_versioned(rows, cx);
-        self.rows.set_selected(vec![SidebarRow::Tab(self.active)], cx);
     }
 
     pub fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let mac = target() == Target::MacOs;
-        let gap = cx.theme().spacing.xs;
-        // On macOS the close button's centre sits MAC_MARGIN from the window's left and top
-        // edges, as the system places it in a window with a title bar.
+        let margin = if mac { MAC_MARGIN } else { INSET };
+        // The close light's top edge sits MAC_MARGIN down, centred in the controls row.
         let controls = drag_region()
             .id("controls-row")
             .flex()
@@ -148,38 +171,30 @@ impl BrowserWindow {
             .h(px(CONTROLS_HEIGHT))
             .flex_none()
             .items_center()
-            .when(mac, |row| row.mt(px(MAC_MARGIN - CONTROLS_HEIGHT / 2.)).pl(px(MAC_MARGIN - LIGHT_RADIUS)))
+            .when(mac, |row| row.mt(px(MAC_MARGIN - (CONTROLS_HEIGHT - LIGHT) / 2.)))
             .child(window_controls().embedded());
         let rows = list("tabs", &self.rows, cx.processor(Self::row))
-            .inset()
             .estimated_row_height(px(ROW_HEIGHT))
-            .selection(Selection::single())
-            .selectable(|row, _| matches!(row, SidebarRow::Tab(_)))
-            .on_select(cx.listener(|win, e: &SelectEvent<SidebarRow>, window, cx| match e.key {
-                // A click on the row on show opens the command bar on its address.
-                SidebarRow::Tab(id) if id == win.active => {
-                    cx.dispatch_action(window.id(), &actions::OpenAddress);
-                    win.sync_rows(cx);
-                }
-                SidebarRow::Tab(id) => win.select(id, cx),
-                SidebarRow::NewTab => {}
-            }))
             .flex_1()
             .min_h_0();
         v_flex()
             .id("sidebar")
             .size_full()
+            .px(px(margin))
+            .when(!mac, |col| col.pt(px(INSET)))
             .context_menu(|menu, _, _| column_menu(menu))
             .child(controls)
             .child(rows)
-            .gap(gap)
             .into_any_element()
     }
 
     pub fn foot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let t = cx.theme();
-        let (gap, pad) = (t.spacing.xs, t.spacing.sm);
-        let mut foot = h_flex().id("sidebar-foot").flex_none().items_center().gap(gap).px(pad).pb(pad);
+        // The glyphs stand on the favicons' column.
+        let mac = target() == Target::MacOs;
+        let margin = if mac { MAC_MARGIN } else { INSET } + ROW_LEAD;
+        // On macOS the foot sits as far up from the bottom edge as the rows sit in from the left.
+        let bottom = if mac { MAC_MARGIN - ROW_LEAD } else { INSET };
+        let mut foot = h_flex().id("sidebar-foot").flex_none().items_center().gap(px(ROW_GAP)).px(px(margin)).pb(px(bottom));
         for slot in FOOT {
             if let Some(el) = slot(self, window, cx) {
                 foot = foot.child(el);
@@ -204,8 +219,7 @@ impl BrowserWindow {
         let me = self.id;
         let active = self.active == id;
         let hovered = hovered_row(cx, me) == Some(id);
-        let t = cx.theme();
-        let (gap, pad, hover_fill) = (t.spacing.sm, t.spacing.sm, t.surface.raised_hover);
+        let ink = cx.theme().text.primary;
         let favicon = match &tab.favicon {
             // A page names its icon before anyone knows it loads; one that fails gives way to
             // the globe.
@@ -222,13 +236,12 @@ impl BrowserWindow {
         };
         let title = label(tab.label()).id(format!("tab-title-{id}")).truncate();
         let title = if active { title } else { title.secondary() };
-        let trail: AnyElement = if hovered || active {
-            icon_button(format!("tab-close-{id}"), Icon::X)
-                .tooltip(format!("Close {}", tab.label()))
-                .on_click(cx.listener(move |win, _: &ClickEvent, _, cx| win.close_tab(id, cx)))
-                .into_any_element()
-        } else if tab.rt.loading {
-            spinner().id(format!("tab-spinner-{id}")).into_any_element()
+        // The spinner gives way to the close button under the pointer, so a loading tab can
+        // still be closed from its row.
+        let trail: AnyElement = if tab.rt.loading && !hovered {
+            spinner().id(format!("tab-spinner-{id}")).size(px(SPINNER)).into_any_element()
+        } else if hovered || active {
+            close_button(id, tab.label(), ink, cx)
         } else {
             div().into_any_element()
         };
@@ -236,12 +249,14 @@ impl BrowserWindow {
             .id(format!("tab-row-{id}"))
             .h(px(TAB_ROW_HEIGHT))
             .mb(px(ROW_GAP))
-            .px(pad)
-            .gap(gap)
+            .pl(px(ROW_LEAD))
+            .pr(px(ROW_TAIL))
+            .gap(px(ICON_GAP))
             .items_center()
-            .rounded(t.radius.md)
-            .when(!active, |row| row.hover(|s| s.bg(hover_fill)))
-            .when(tab.is_asleep(), |row| row.opacity(0.6))
+            .rounded(px(ROW_RADIUS))
+            .when(active, |row| row.bg(ink.opacity(SHOWN_FILL)))
+            .when(!active, |row| row.hover(|s| s.bg(ink.opacity(HOVER_FILL))))
+            .active(|pose| pose.scale(PRESSED_SCALE))
             .on_hover(cx.listener(move |win, over: &bool, _, cx| {
                 let was = hovered_row(cx, win.id);
                 let now = if *over { Some(id) } else { was.filter(|h| *h != id) };
@@ -251,12 +266,47 @@ impl BrowserWindow {
                     cx.notify();
                 }
             }))
+            // A click on the row on show opens the command bar on its address.
+            .on_tap(cx.listener(move |win, _: &TapEvent, window, cx| {
+                if win.active == id {
+                    cx.dispatch_action(window.id(), &actions::OpenAddress);
+                } else {
+                    win.select(id, cx);
+                }
+            }))
             .context_menu(move |menu, _, cx| row_menu(menu, me, id, cx))
-            .child(favicon)
-            .child(title.flex_1().min_w_0())
-            .child(div().w(px(TRAIL_WIDTH)).flex_none().flex().justify_center().child(trail))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(ICON_GAP))
+                    .items_center()
+                    .when(tab.is_asleep(), |content| content.opacity(ASLEEP))
+                    .child(favicon)
+                    .child(title.flex_1().min_w_0()),
+            )
+            .child(div().w(px(TRAIL_WIDTH)).flex_none().flex().items_center().justify_center().child(trail))
             .into_any_element()
     }
+}
+
+/// The row's close button: a quiet glyph that comes up to full ink with its own fill under the
+/// pointer, on a hit area larger than the glyph.
+fn close_button(id: TabId, label: String, ink: Hsla, cx: &mut Context<BrowserWindow>) -> AnyElement {
+    div()
+        .id(format!("tab-close-{id}"))
+        .role(nd::core::semantic::Role::Button, format!("Close {label}"))
+        .size(px(CLOSE_BOX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(CLOSE_RADIUS))
+        .opacity(QUIET)
+        .hover(|s| s.bg(ink.opacity(CLOSE_HOVER_FILL)).opacity(1.))
+        .active(|pose| pose.scale(PRESSED_SCALE))
+        .on_tap(cx.listener(move |win, _: &TapEvent, _, cx| win.close_tab(id, cx)))
+        .child(icon(Icon::X, CLOSE_GLYPH))
+        .into_any_element()
 }
 
 /// A tab row's menu, acting on the row's tab. Pin and mute arrive with their lanes, so they show
@@ -286,17 +336,18 @@ fn column_menu(menu: ContextMenu) -> ContextMenu {
 }
 
 fn new_tab_row(cx: &mut Context<BrowserWindow>) -> AnyElement {
-    let t = cx.theme();
-    let (gap, pad, hover_fill) = (t.spacing.sm, t.spacing.sm, t.surface.raised_hover);
+    let ink = cx.theme().text.primary;
     h_flex()
         .id("new-tab-row")
         .h(px(TAB_ROW_HEIGHT))
-        .px(pad)
-        .gap(gap)
+        .pl(px(ROW_LEAD))
+        .pr(px(ROW_TAIL))
+        .gap(px(ICON_GAP))
         .items_center()
-        .rounded(t.radius.md)
-        .opacity(0.6)
-        .hover(|s| s.bg(hover_fill).opacity(1.))
+        .rounded(px(ROW_RADIUS))
+        .opacity(QUIET)
+        .hover(|s| s.bg(ink.opacity(HOVER_FILL)).opacity(1.))
+        .active(|pose| pose.scale(PRESSED_SCALE))
         .on_tap(cx.listener(|win, _: &TapEvent, _, cx| {
             win.open_tab("", Open::End, cx);
         }))

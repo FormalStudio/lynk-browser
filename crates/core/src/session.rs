@@ -12,6 +12,7 @@ use nd_settings::Store;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
+use crate::archive::ArchivedTab;
 use crate::sidebar_tree::{Item, SidebarTree};
 use crate::spaces::{DEFAULT_SPACE_NAME, SiteRule, Space, WindowSpaces, neighbour};
 use crate::{lenient_items, null_default};
@@ -98,6 +99,9 @@ pub struct SessionState {
     /// Numbers the ids of spaces, separators, folders and splits.
     #[serde(deserialize_with = "counter")]
     pub next_item_id: u64,
+    /// Newest first.
+    #[serde(deserialize_with = "lenient_items")]
+    pub archive: Vec<ArchivedTab>,
 }
 
 impl Default for SessionState {
@@ -110,6 +114,7 @@ impl Default for SessionState {
             spaces: Vec::new(),
             space_rules: Vec::new(),
             next_item_id: 1,
+            archive: Vec::new(),
         }
     }
 }
@@ -230,6 +235,7 @@ pub fn normalize(state: &SessionState) -> SessionState {
         spaces: Vec::new(),
         space_rules: Vec::new(),
         next_item_id: state.next_item_id,
+        archive: state.archive.clone(),
     };
     let mut space_ids = HashSet::new();
     for space in &state.spaces {

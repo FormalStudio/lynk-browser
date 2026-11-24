@@ -8,6 +8,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 
 pub mod adblock;
+pub mod archive;
 pub mod bookmarks;
 pub mod downloads;
 pub mod extensions;

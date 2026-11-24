@@ -16,17 +16,6 @@ pub enum Security {
 }
 
 impl Security {
-    /// `None` is the plain site-information mark rather than the globe, which is also the
-    /// favicon of a site without one: compact draws the two side by side.
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::None => "help-about-symbolic",
-            Self::Secure => "channel-secure-symbolic",
-            Self::Mixed | Self::Invalid => "dialog-warning-symbolic",
-            Self::Insecure => "channel-insecure-symbolic",
-        }
-    }
-
     pub fn tooltip(self) -> &'static str {
         match self {
             Self::None => "No page loaded",

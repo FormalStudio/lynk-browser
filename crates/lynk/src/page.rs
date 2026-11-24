@@ -124,15 +124,9 @@ pub fn mount(tab: &Tab, page: &WebView, cx: &mut Context<BrowserWindow>) -> AnyE
         }))
         .on_find_result(cx.listener(move |w, e: &FindResult, _, cx| crate::find::result(w, id, e, cx)))
         .on_zoom_changed(cx.listener(move |w, e: &ZoomChanged, _, cx| crate::zoom::page_zoomed(w, id, e, cx)))
-        .on_fullscreen_changed(cx.listener(move |w, e: &FullscreenChanged, _, cx| {
-            w.page_fullscreen =
-                if e.fullscreen && w.active == id { Some(id) } else { w.page_fullscreen.filter(|f| *f != id) };
-            if let Some(tab) = w.tab_mut(id) {
-                tab.rt.fullscreen = e.fullscreen;
-            }
-            w.sync_window_fullscreen(cx);
-            w.changed(cx);
-        }))
+        .on_fullscreen_changed(
+            cx.listener(move |w, e: &FullscreenChanged, _, cx| w.page_fullscreen_changed(id, e.fullscreen, cx)),
+        )
         .on_close_approved(cx.listener(move |w, e: &CloseApproved, _, cx| w.close_answered(id, e.approved, cx)))
         .on_chrome_command(
             cx.listener(move |w, e: &ChromeCommand, window, cx| chrome_command(w, e.command, window, cx)),

@@ -1,12 +1,45 @@
 //! The padlock in the sidebar's foot and its site information popover: the host and what the
-//! connection is, then the rows other modules add.
+//! connection is, then the rows other modules add. It keeps which windows have the popover up and
+//! changes nothing of the window's tabs.
 
 use lynk_core::tabstate::{Security, security_of};
 use lynk_core::url::host_of;
 use nd::prelude::*;
 
-use crate::tab::Tab;
-use crate::window::BrowserWindow;
+use std::collections::HashSet;
+
+use nd::core::WindowId;
+
+use crate::tab::{Tab, TabId};
+use crate::window::{BrowserWindow, TabEvent};
+
+/// The windows with the popover up. shortcut: a closed window's entry stays until the popover is
+/// dismissed, which it cannot be; drop it once windows report their close to the modules.
+#[derive(Default)]
+struct Open(HashSet<WindowId>);
+
+fn is_open(cx: &App, win: WindowId) -> bool {
+    cx.try_global::<Open>().is_some_and(|o| o.0.contains(&win))
+}
+
+fn set_open(cx: &mut App, win: WindowId, open: bool) {
+    if !cx.has_global::<Open>() {
+        cx.set_global(Open::default());
+    }
+    let windows = &mut cx.global_mut::<Open>().0;
+    if open {
+        windows.insert(win);
+    } else {
+        windows.remove(&win);
+    }
+}
+
+/// A tab listener: the popover closes when another tab is shown.
+pub fn tab_event(win: &mut BrowserWindow, _: TabId, event: TabEvent, cx: &mut Context<BrowserWindow>) {
+    if event == TabEvent::Shown && is_open(cx, win.id) {
+        set_open(cx, win.id, false);
+    }
+}
 
 /// A row of the popover for the tab on show, or nothing when it has none to show.
 pub type Row = fn(&BrowserWindow, &Tab, &mut Window, &mut Context<BrowserWindow>) -> Option<AnyElement>;
@@ -34,12 +67,13 @@ pub fn padlock(win: &BrowserWindow, window: &mut Window, cx: &mut Context<Browse
     let mut anchor = div().id("site-info-anchor").child(
         icon_button("site-info", icon_of(security)).tooltip(security.tooltip()).on_click(cx.listener(
             |win, _: &ClickEvent, _, cx| {
-                win.site_info_open = !win.site_info_open;
+                let open = !is_open(cx, win.id);
+                set_open(cx, win.id, open);
                 cx.notify();
             },
         )),
     );
-    if win.site_info_open {
+    if is_open(cx, win.id) {
         anchor = anchor.child(body(win, tab, security, window, cx));
     }
     Some(anchor.into_any_element())
@@ -68,9 +102,30 @@ fn body(
     popover("site-info-popover")
         .placement(Placement::Trailing)
         .on_dismiss(cx.listener(|win, _: &Dismissed, _, cx| {
-            win.site_info_open = false;
+            set_open(cx, win.id, false);
             cx.notify();
         }))
         .child(column)
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use nd::test::TestApp;
+
+    use super::*;
+    use crate::app;
+
+    #[test]
+    fn showing_another_tab_closes_the_popover() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let tabs = vec![Tab::new(app::next_tab_id(&mut cx), ""), Tab::new(app::next_tab_id(&mut cx), "")];
+        let w = app::open_window(&mut cx, tabs, None);
+        cx.run_until_idle();
+        set_open(&mut cx, w, true);
+        app::window(&cx, w).unwrap().update(&mut cx, |win, cx| win.select(2, cx));
+        cx.run_until_idle();
+        assert!(!is_open(&cx, w));
+    }
 }

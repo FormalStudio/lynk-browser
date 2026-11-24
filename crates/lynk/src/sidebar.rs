@@ -1,6 +1,7 @@
 //! The sidebar: the controls row with the window's own buttons, the tab list that scrolls, and
 //! the foot. Plain rows with their menus; pinned tiles and drag come later.
 
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use nd::core::WindowId;
@@ -31,6 +32,26 @@ pub enum SidebarRow {
     /// The quiet "New tab" row after the tabs. GNOME's idiom is the bare plus in the foot
     /// instead, which is where Linux has it.
     NewTab,
+}
+
+/// The row under the pointer in each window, whose close button shows. shortcut: a closed
+/// window's entry stays, a few bytes each; drop it once windows report their close to the modules.
+#[derive(Default)]
+struct Hovered(HashMap<WindowId, TabId>);
+
+fn hovered_row(cx: &App, win: WindowId) -> Option<TabId> {
+    cx.try_global::<Hovered>()?.0.get(&win).copied()
+}
+
+fn set_hovered(cx: &mut App, win: WindowId, id: Option<TabId>) {
+    if !cx.has_global::<Hovered>() {
+        cx.set_global(Hovered::default());
+    }
+    let rows = &mut cx.global_mut::<Hovered>().0;
+    match id {
+        Some(id) => rows.insert(win, id),
+        None => rows.remove(&win),
+    };
 }
 
 /// One slot of the foot for the window, or nothing while it has nothing to show.
@@ -95,12 +116,13 @@ fn window_menu(win: &BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWind
 impl BrowserWindow {
     /// Hands the list its rows, each versioned by what it draws so a change re-renders it.
     pub fn sync_rows(&mut self, cx: &mut Context<Self>) {
+        let hovered = hovered_row(cx, self.id);
         let rows: Vec<(SidebarRow, u64)> = self
             .tabs
             .iter()
             .map(|t| {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                (t.label(), &t.favicon, t.rt.loading, t.is_asleep(), self.active == t.id, self.hovered == Some(t.id))
+                (t.label(), &t.favicon, t.rt.loading, t.is_asleep(), self.active == t.id, hovered == Some(t.id))
                     .hash(&mut h);
                 (SidebarRow::Tab(t.id), h.finish())
             })
@@ -177,7 +199,7 @@ impl BrowserWindow {
         let Some(tab) = self.tab(id) else { return div().into_any_element() };
         let me = self.id;
         let active = self.active == id;
-        let hovered = self.hovered == Some(id);
+        let hovered = hovered_row(cx, me) == Some(id);
         let t = cx.theme();
         let (gap, pad, hover_fill) = (t.spacing.sm, t.spacing.sm, t.surface.raised_hover);
         let favicon = match &tab.favicon {
@@ -217,9 +239,10 @@ impl BrowserWindow {
             .when(!active, |row| row.hover(|s| s.bg(hover_fill)))
             .when(tab.is_asleep(), |row| row.opacity(0.6))
             .on_hover(cx.listener(move |win, over: &bool, _, cx| {
-                let now = if *over { Some(id) } else { win.hovered.filter(|h| *h != id) };
-                if win.hovered != now {
-                    win.hovered = now;
+                let was = hovered_row(cx, win.id);
+                let now = if *over { Some(id) } else { was.filter(|h| *h != id) };
+                if was != now {
+                    set_hovered(cx, win.id, now);
                     win.sync_rows(cx);
                     cx.notify();
                 }

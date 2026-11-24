@@ -1,30 +1,57 @@
 //! Page zoom: the chords and menu steps, the foot's zoom glyph while a page is not at 100%, and
-//! its popover. A level is kept per host and applies to every tab on that host.
+//! its popover, whose state this module keeps per window. A level is kept per host and applies
+//! to every tab on that host. The window's tab state is changed through its methods only.
 
 use lynk_core::url::host_of;
 use lynk_core::zoom::{ZOOM_NOTICE, is_default_zoom, step_zoom, zoom_percent};
 use nd::prelude::*;
 use nd::webview::{ZoomChanged, ZoomSource};
 
+use std::collections::HashMap;
+
+use nd::core::WindowId;
+
 use crate::app;
 use crate::tab::TabId;
-use crate::window::BrowserWindow;
+use crate::window::{BrowserWindow, TabEvent};
 
 /// The popover off the zoom glyph. A chord or a menu step opens it for [`ZOOM_NOTICE`]; a click
 /// on the glyph opens it until it is dismissed.
 #[derive(Default)]
-pub struct ZoomPopover {
-    pub open: bool,
+struct Popover {
+    open: bool,
     /// Bumped by every step, so a notice timer from an earlier step leaves it alone.
     notice: u64,
     /// Opened by a click, which no timer closes.
     pinned: bool,
 }
 
-impl ZoomPopover {
-    pub fn close(&mut self) {
-        self.open = false;
-        self.pinned = false;
+/// Each window's popover. shortcut: a closed window's entry stays, a few bytes each; drop it once
+/// windows report their close to the modules.
+#[derive(Default)]
+struct Popovers(HashMap<WindowId, Popover>);
+
+fn is_open(cx: &App, win: WindowId) -> bool {
+    cx.try_global::<Popovers>().and_then(|p| p.0.get(&win)).is_some_and(|p| p.open)
+}
+
+fn state(cx: &mut App, win: WindowId) -> &mut Popover {
+    if !cx.has_global::<Popovers>() {
+        cx.set_global(Popovers::default());
+    }
+    cx.global_mut::<Popovers>().0.entry(win).or_default()
+}
+
+fn close(cx: &mut App, win: WindowId) {
+    let p = state(cx, win);
+    p.open = false;
+    p.pinned = false;
+}
+
+/// A tab listener: the popover closes when another tab is shown.
+pub fn tab_event(win: &mut BrowserWindow, _: TabId, event: TabEvent, cx: &mut Context<BrowserWindow>) {
+    if event == TabEvent::Shown && is_open(cx, win.id) {
+        close(cx, win.id);
     }
 }
 
@@ -33,17 +60,18 @@ fn step(win: &mut BrowserWindow, id: TabId, factor: impl FnOnce(f64) -> f64, cx:
     let Some(tab) = win.tab(id) else { return };
     let (url, current) = (tab.url.clone(), tab.rt.zoom);
     set(win, id, &url, factor(current), cx);
-    win.zoom.open = true;
-    win.zoom.notice += 1;
-    let notice = win.zoom.notice;
+    let me = win.id;
+    let p = state(cx, me);
+    p.open = true;
+    p.notice += 1;
+    let notice = p.notice;
     let this = cx.weak_entity();
     nd::system::after(ZOOM_NOTICE, move |cx| {
-        let _ = this.update(cx, |win, cx| {
-            if win.zoom.notice == notice && !win.zoom.pinned {
-                win.zoom.open = false;
-                cx.notify();
-            }
-        });
+        let p = state(cx, me);
+        if p.notice == notice && !p.pinned {
+            p.open = false;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }
     });
     cx.notify();
 }
@@ -51,12 +79,7 @@ fn step(win: &mut BrowserWindow, id: TabId, factor: impl FnOnce(f64) -> f64, cx:
 /// Keeps `factor` for `url`'s host and applies it to every tab on that host, in every window.
 fn set(win: &mut BrowserWindow, id: TabId, url: &str, factor: f64, cx: &mut Context<BrowserWindow>) {
     if host_of(url).is_empty() {
-        if let Some(tab) = win.tab_mut(id) {
-            tab.rt.zoom = factor;
-            if let Some(page) = tab.view() {
-                page.set_zoom(factor);
-            }
-        }
+        win.set_zoom(id, factor);
         return;
     }
     app::remember_zoom(cx, url, factor);
@@ -105,13 +128,13 @@ pub fn glyph(win: &BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow
     let mut anchor =
         div().id("zoom-anchor").child(icon_button("zoom", Icon::Search).tooltip(format!("Zoom: {percent}")).on_click(
             cx.listener(|win, _: &ClickEvent, _, cx| {
-                let open = !win.zoom.open;
-                win.zoom.open = open;
-                win.zoom.pinned = open;
+                let p = state(cx, win.id);
+                p.open = !p.open;
+                p.pinned = p.open;
                 cx.notify();
             }),
         ));
-    if win.zoom.open {
+    if is_open(cx, win.id) {
         anchor = anchor.child(popover_body(&percent, cx));
     }
     Some(anchor.into_any_element())
@@ -125,7 +148,7 @@ fn popover_body(percent: &str, cx: &mut Context<BrowserWindow>) -> AnyElement {
     popover("zoom-popover")
         .placement(Placement::Trailing)
         .on_dismiss(cx.listener(|win, _: &Dismissed, _, cx| {
-            win.zoom.close();
+            close(cx, win.id);
             cx.notify();
         }))
         .child(

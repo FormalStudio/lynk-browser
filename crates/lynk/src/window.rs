@@ -15,7 +15,6 @@ use nd::webview::WebView;
 use crate::app;
 use crate::sidebar::SidebarRow;
 use crate::tab::{Page, Tab, TabId};
-use crate::zoom::ZoomPopover;
 
 /// Where a new tab goes and whether it is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +44,7 @@ pub enum TabEvent {
 pub type TabListener = fn(&mut BrowserWindow, TabId, TabEvent, &mut Context<BrowserWindow>);
 
 /// The tab event listeners, called in order after the window's own change.
-pub const TAB_EVENTS: &[TabListener] = &[];
+pub const TAB_EVENTS: &[TabListener] = &[crate::zoom::tab_event, crate::site_info::tab_event];
 
 pub struct BrowserWindow {
     pub id: WindowId,
@@ -61,13 +60,8 @@ pub struct BrowserWindow {
     fullscreen_before: Option<bool>,
     /// The window's close is waiting on its pages' `beforeunload`.
     pub closing: bool,
-    pub zoom: ZoomPopover,
-    /// The padlock's site information popover is up.
-    pub site_info_open: bool,
     pub toasts: Vec<Toast>,
     pub(crate) rows: ListState<SidebarRow>,
-    /// The row under the pointer, whose close button shows.
-    pub(crate) hovered: Option<TabId>,
     next_toast: u64,
 }
 
@@ -84,11 +78,8 @@ impl BrowserWindow {
             browser_fullscreen: false,
             fullscreen_before: None,
             closing: false,
-            zoom: ZoomPopover::default(),
-            site_info_open: false,
             toasts: Vec::new(),
             rows: ListState::new(cx).estimated_row_height(px(crate::sidebar::ROW_HEIGHT)),
-            hovered: None,
             next_toast: 0,
         };
         if !moved {
@@ -214,8 +205,6 @@ impl BrowserWindow {
             self.sync_window_fullscreen(cx);
         }
         self.active = id;
-        self.zoom.close();
-        self.site_info_open = false;
         if let Some(tab) = self.tab_mut(id) {
             tab.wake();
         }
@@ -477,11 +466,28 @@ impl BrowserWindow {
     pub fn apply_zoom(&mut self, id: TabId, cx: &mut Context<Self>) {
         let Some(url) = self.tab(id).map(|t| t.url.clone()) else { return };
         let factor = app::zoom_for(cx, &url);
+        self.set_zoom(id, factor);
+    }
+
+    /// Sets `id`'s page to `factor`, whatever its host keeps.
+    pub fn set_zoom(&mut self, id: TabId, factor: f64) {
         let Some(tab) = self.tab_mut(id) else { return };
         if let Some(page) = tab.view().filter(|_| tab.rt.zoom != factor).cloned() {
             tab.rt.zoom = factor;
             page.set_zoom(factor);
         }
+    }
+
+    /// The page holding element fullscreen entered or left it; only the shown tab's takes the
+    /// window.
+    pub fn page_fullscreen_changed(&mut self, id: TabId, fullscreen: bool, cx: &mut Context<Self>) {
+        self.page_fullscreen =
+            if fullscreen && self.active == id { Some(id) } else { self.page_fullscreen.filter(|f| *f != id) };
+        if let Some(tab) = self.tab_mut(id) {
+            tab.rt.fullscreen = fullscreen;
+        }
+        self.sync_window_fullscreen(cx);
+        self.changed(cx);
     }
 
     /// Every tab's page at its host's level, after a level changed.

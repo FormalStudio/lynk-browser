@@ -625,9 +625,18 @@ fn real_chrome_only_keys_open_nothing() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     click_page(&app, 500.);
-    // Every window of the app, however small: F7's caret browsing prompt is a small dialog.
-    let windows = |app: &AppHandle| ndshell::window_list::of_pid(app.pid()).len();
+    // Every window of the app on every layer, however small: F7's caret browsing prompt is a
+    // small dialog, and a panel or popover sits above the normal layer.
+    let windows = |app: &AppHandle| ndshell::window_list::every_layer_of_pid(app.pid()).len();
     let before = windows(&app);
+    // The count sees a window off the normal layer: a row's menu.
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let at = row_at(&app, 0);
+    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
+    until(&app, "the row menu counted", 5, |a| windows(a) > before);
+    hid(key::ESCAPE, &[]);
+    until(&app, "the row menu gone", 5, |a| windows(a) == before);
+    click_page(&app, 500.);
     // Caret browsing, the task manager and help: Chrome UI with no place in Lynk.
     for (name, code, modifiers) in
         [("F7", key::F7, &[][..]), ("Shift+Esc", key::ESCAPE, &[Modifier::Shift][..]), ("F1", key::F1, &[][..])]

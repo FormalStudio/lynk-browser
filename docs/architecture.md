@@ -82,8 +82,10 @@ window is what a relaunch will restore.
 
 ## Tab and page lifecycle
 
-A `Tab` (`tab.rs`) is an address, a title, an optional live `WebView` and `rt`, the last facts its
-page reported. The page is Chromium's. `rt` is only a cache of what it said.
+A `Tab` (`tab.rs`) is an address, a title, a `Page` and `rt`, the last facts its page reported.
+`Page` is `Waiting` (no page yet), `Live` (the `WebView`, and `asked` while a close waits on its
+`beforeunload`) or `Asleep { scroll }`, so a sleeping tab with a page or a scroll to restore on a
+live one cannot be written. The page is Chromium's. `rt` is only a cache of what it said.
 
 ```mermaid
 stateDiagram-v2
@@ -111,11 +113,15 @@ stateDiagram-v2
 - **Sleep.** `BrowserWindow::sleep` reads the scroll position with a 500 ms limit, drops the page,
   and keeps the row, title, icon and address. If the sleeping tab was shown, the nearest awake tab
   takes over.
-- **Close.** `close_tab` asks a live page that has not crashed through `request_close`. The answer
-  arrives as `on_close_approved` and goes to `close_answered`. `remove` puts the address on the
-  closed stack and fires `TabEvent::Closed`. The last tab takes its window with it.
-- **Window close.** `on_should_close` calls `should_close`, which asks every live page. The window
-  closes once all agree. One refusal cancels the whole window close.
+- **Close.** `close_tab` asks a live page that has not crashed through `request_close`, once:
+  `Live::asked` holds until the answer, and the tab sits in `closing_tabs`. The answer arrives as
+  `on_close_approved` and goes to `close_answered`. `remove` puts the address on the closed stack
+  and fires `TabEvent::Closed`. The last tab takes its window with it. Close Tab on a shown tab
+  already waiting moves on to the next tab, so presses at speed are not lost.
+- **Window close.** `on_should_close` calls `should_close`, which asks every live page not already
+  asked. The window closes once all agree, or once the last awaited tab is removed or moved out
+  (`settle_close`). One refusal cancels the whole window close, not the tab closes beside it. A
+  window that is closing, or whose every tab is, takes no launch (`pending_close`).
 - **Errors.** A failed load sets `rt.error` and a dead renderer sets `rt.crashed`; `page::cover`
   draws "Unable to load this page" or "Aw, Snap!" over the page with a retry button.
 
@@ -186,8 +192,13 @@ If you need an nd webview event that `PageEvent` lacks, add the variant and its 
 
 Hear `Opened`, `Closed`, `Moved` (taken out to another window) and `Shown` for every tab of every
 window, after the window's own change, as `fn(&mut BrowserWindow, TabId, TabEvent, &mut
-Context<BrowserWindow>)`. To add: append to the `#[cfg(not(test))]` list. The test build swaps in
-a recording listener (A12).
+Context<BrowserWindow>)`. To add: append to the list. Unit tests run the same listeners and also
+record each event.
+
+### `window::WINDOW_CLOSED`
+
+Called as a window goes, as `fn(&mut App, WindowId)`, so a feature drops what its global keeps for
+that window. A feature with per-window state appends its `forget` here.
 
 ### `shell::OVERLAYS`
 
@@ -213,17 +224,23 @@ tab page. A tab moved out of another window goes through `app::open_window_aroun
 | State | Owner | Who may mutate | How it reaches the UI |
 | --- | --- | --- | --- |
 | Windows, tab ids, closed stack, zoom per host, menu signature | `app::Browser` global | functions in `app.rs` | menus through `refresh_menus*`; zoom through `apply_zoom_everywhere` |
-| Tabs of a window, their order, the shown tab, fullscreen, closing | `BrowserWindow` (`window.rs`) | methods on `BrowserWindow` | `changed()`: sidebar rows, `cx.notify()`, menu bar |
+| Tabs of a window, their order, the shown tab, fullscreen, closing | `BrowserWindow` (`window.rs`): `tabs` unordered, order and pins in core's `SidebarTree` | methods on `BrowserWindow` | `changed()`: sidebar rows, `cx.notify()`, menu bar |
 | A tab's address, title, page, last reported facts, find query | `Tab` (`tab.rs`) | `BrowserWindow` methods and the page listeners in `page.rs` | through the window's `changed()` or `cx.notify()` |
 | Page content, history, scroll | Chromium | Chromium | page events into `Tab::rt` |
-| A feature's own per-tab or per-window data | the feature's global | the feature module | `cx.notify()` on the window entity |
+| A feature's own per-tab or per-window data (zoom and site info popovers, the hovered row) | the feature's global, keyed by `WindowId` or `TabId` | the feature module | `cx.notify()` on the window entity |
 
 Use `changed()` when a change can move a menu item or a sidebar row. Use `cx.notify()` alone when
 it cannot (load progress, find counts).
 
 Shortfall: `window.rs` says every tab change goes through its methods, but `page.rs`, `find.rs`,
 `zoom.rs`, `site_info.rs` and `sidebar.rs` write `BrowserWindow` and `Tab` fields directly, and
-per-feature view state (`zoom`, `site_info_open`, `hovered`) sits on `BrowserWindow` (A2).
+per-feature view state now lives in each feature's global (A2, partly resolved).
+
+The shell holds a window's tab order in core's `SidebarTree` and keeps its own `u64` `TabId`s,
+converting at the boundary with `session::tab_id` and `tab_number`. Placement of opened tabs is
+core's `place_opened_tab` on that tree, and the next tab after a close is core's
+`spaces::neighbour`. Spaces, folders and persistence are not wired, so the tree has only pins and
+root tabs.
 
 ## Persistence
 
@@ -247,7 +264,8 @@ file. Every stored struct reads `null` and wrongly shaped entries as defaults (`
 `lenient_items` in `core/src/lib.rs`), so a hand-edited file keeps what it can.
 
 Zoom levels live in memory in `app::Browser` until session restore lands; `SessionState` has the
-field for them. Session tab ids are strings (`t1`), shell tab ids are `u64` (A3).
+field for them. Session tab ids are strings (`t1`), shell tab ids are `u64`; `tab_id` and
+`tab_number` convert.
 
 Blocking: the pinned uBO release (`ublock::PINNED_VERSION`, checked by SHA-256) is the source of
 lists, scriptlets and redirect resources; a newer release is picked up weekly. Nothing calls
@@ -351,12 +369,12 @@ Core, `crates/core/src`:
 
 Ranked findings from 2026-11-24 against `main` at `839861b`. Line numbers are the committed state.
 
-- **A1** `crates/lynk/src/tab.rs:62`: `page: Option<WebView>`, `asleep`, `scroll` and `rt.closing`
+- **A1** Resolved. `crates/lynk/src/tab.rs:62`: `page: Option<WebView>`, `asleep`, `scroll` and `rt.closing`
   allow states that cannot happen (asleep with a page, a scroll to restore on a live page). One
   `enum Page { Waiting, Live(WebView), Asleep { scroll } }` rules them out.
 - **A2** `crates/lynk/src/page.rs:128`, `zoom.rs:36`, `site_info.rs:37`: modules write
   `BrowserWindow` and `Tab` fields directly, and feature view state lives on `BrowserWindow`.
-- **A3** `crates/lynk/src/window.rs:208`: `placement` builds fake `SessionTab`s with stringified
+- **A3** Resolved. `crates/lynk/src/window.rs:208`: `placement` builds fake `SessionTab`s with stringified
   ids to call `place_opened_tab`; `window.rs:161` checks URL schemes in the shell.
 - **A4** `crates/lynk/src/page.rs:207`: undoing a native page resets the tab field by field,
   beside `Tab::sleep` and `Tab::navigate`, which reset the same fields their own way.
@@ -370,8 +388,8 @@ Ranked findings from 2026-11-24 against `main` at `839861b`. Line numbers are th
   and `origin_of` twice.
 - **A9** `crates/core/src/tidy.rs:28`: `TabGrouper` has no implementor outside a test.
 - **A10** `crates/core/src/session.rs:197`: callers must remember to `normalize` after `open`.
-- **A11** `crates/core/src/tabstate.rs:21`: `Security::icon` returns GTK icon names nothing
+- **A11** Resolved. `crates/core/src/tabstate.rs:21`: `Security::icon` returns GTK icon names nothing
   reads; `site_info::icon_of` is the live mapping.
-- **A12** `crates/lynk/src/window.rs:48`: `TAB_EVENTS` has a test twin, so listeners lanes add
+- **A12** Resolved. `crates/lynk/src/window.rs:48`: `TAB_EVENTS` has a test twin, so listeners lanes add
   never run in unit tests.
 - **A13** `crates/lynk/src/sidebar.rs:265`, `actions.rs:341`: local platform helpers repeated.

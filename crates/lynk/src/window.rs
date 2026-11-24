@@ -45,10 +45,7 @@ pub enum TabEvent {
 pub type TabListener = fn(&mut BrowserWindow, TabId, TabEvent, &mut Context<BrowserWindow>);
 
 /// The tab event listeners, called in order after the window's own change.
-#[cfg(not(test))]
 pub const TAB_EVENTS: &[TabListener] = &[];
-#[cfg(test)]
-pub const TAB_EVENTS: &[TabListener] = &[tests::record];
 
 /// What the menu bar reads of the tab on show.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -141,6 +138,8 @@ impl BrowserWindow {
         for listener in TAB_EVENTS {
             listener(self, id, event, cx);
         }
+        #[cfg(test)]
+        tests::record(id, event);
     }
 
     /// Re-renders the window and brings the menu bar up to date.
@@ -550,7 +549,7 @@ mod tests {
         static HEARD: RefCell<Vec<(TabId, TabEvent)>> = const { RefCell::new(Vec::new()) };
     }
 
-    pub(super) fn record(_: &mut BrowserWindow, id: TabId, event: TabEvent, _: &mut Context<BrowserWindow>) {
+    pub(super) fn record(id: TabId, event: TabEvent) {
         HEARD.with(|h| h.borrow_mut().push((id, event)));
     }
 

@@ -52,6 +52,9 @@ pub struct SessionTab {
     /// Where the tab was when it was pinned, which Reset to Pinned Page goes back to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned_url: Option<String>,
+    /// Where the page was scrolled, `[x, y]` in CSS pixels, put back when the tab first loads.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "null_default")]
+    pub scroll: Option<[f64; 2]>,
     #[serde(flatten)]
     pub unknown: Unknown,
 }
@@ -71,6 +74,12 @@ pub struct SessionWindow {
     pub width: f64,
     #[serde(deserialize_with = "null_default")]
     pub height: f64,
+    /// The window's top-left corner in global points from the top-left of the primary
+    /// display; absent for a window the OS places.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "null_default")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "null_default")]
+    pub y: Option<f64>,
     #[serde(deserialize_with = "null_default")]
     pub spaces: WindowSpaces,
     #[serde(deserialize_with = "null_default")]
@@ -321,11 +330,15 @@ pub fn normalize(state: &SessionState) -> SessionState {
             }
         }
         let had_tabs = !known.is_empty();
+        // Both or neither: one coordinate alone places the window nowhere sensible.
+        let at = w.x.zip(w.y).filter(|(x, y)| x.is_finite() && y.is_finite());
         let window = SessionWindow {
             id: w.id.clone(),
             active_id: w.active_id.clone(),
             width: or_default(w.width, WINDOW_WIDTH),
             height: or_default(w.height, WINDOW_HEIGHT),
+            x: at.map(|(x, _)| x),
+            y: at.map(|(_, y)| y),
             spaces,
             mru: w.mru.clone(),
             unknown: w.unknown.clone(),
@@ -480,6 +493,94 @@ mod tests {
             assert!(w.spaces.tree().unwrap().contains_tab(&w.active_id));
             assert_eq!(w.mru.0.first(), Some(&w.active_id), "window {} recency leads with the tab on show", w.id);
         }
+    }
+
+    /// A session of `n` tabs, each with a long address, so its file runs to `n` kilobytes.
+    fn big(n: usize) -> SessionState {
+        let tabs: Vec<SessionTab> =
+            (1..=n).map(|i| tab(&format!("t{i}"), &format!("https://a.test/{}", "x".repeat(1000)))).collect();
+        normalize(&SessionState { windows: vec![window("w1", tabs, "t1", 900., 700.)], ..SessionState::default() })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_only_profile_keeps_its_session_and_the_browser_going() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = write(
+            r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[{"id":"t1","url":"https://a.test/"}],"activeId":"t1"}]}}"#,
+        );
+        let before = std::fs::read_to_string(dir.path().join("session.json")).unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let store = open(dir.path());
+        assert_eq!(store.load_error(), None);
+        store.update(|s| *s = big(3));
+        assert!(store.flush().is_err(), "nothing can be written");
+        assert!(store.flush().is_err(), "and the change stays pending, to go out once it can");
+        assert_eq!(std::fs::read_to_string(dir.path().join("session.json")).unwrap(), before);
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        store.flush().unwrap();
+        assert_eq!(open(dir.path()).get().windows[0].tabs.len(), 3);
+    }
+
+    /// A full disk mid-write: a 1 MB disk image filled to the last byte.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_full_disk_keeps_the_last_whole_session() {
+        let scratch = tempfile::tempdir().unwrap();
+        let image = scratch.path().join("full.dmg");
+        let mount = scratch.path().join("mnt");
+        std::fs::create_dir(&mount).unwrap();
+        let run = |args: &[&std::ffi::OsStr]| {
+            let out = std::process::Command::new("hdiutil").args(args).output().unwrap();
+            assert!(out.status.success(), "hdiutil {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        run(&["create".as_ref(), "-size".as_ref(), "1m".as_ref(), "-fs".as_ref(), "HFS+".as_ref(), image.as_os_str()]);
+        run(&["attach".as_ref(), "-nobrowse".as_ref(), "-mountpoint".as_ref(), mount.as_os_str(), image.as_os_str()]);
+        struct Detach(PathBuf);
+        impl Drop for Detach {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("hdiutil")
+                    .args(["detach".as_ref(), "-force".as_ref(), self.0.as_os_str()])
+                    .output();
+            }
+        }
+        let _detach = Detach(mount.clone());
+        let store = open(&mount);
+        store.update(|s| *s = big(2));
+        store.flush().unwrap();
+        let before = std::fs::read_to_string(mount.join("session.json")).unwrap();
+        let mut filler = std::fs::File::create(mount.join("filler")).unwrap();
+        let block = vec![0u8; 4096];
+        while std::io::Write::write_all(&mut filler, &block).is_ok() {}
+        drop(filler);
+        store.update(|s| *s = big(200));
+        assert!(store.flush().is_err(), "the disk is full");
+        assert_eq!(std::fs::read_to_string(mount.join("session.json")).unwrap(), before, "the last session is whole");
+        let leftovers: Vec<_> = std::fs::read_dir(&mount)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "no half-written file is left: {leftovers:?}");
+        assert_eq!(open(&mount).get().windows[0].tabs.len(), 2);
+    }
+
+    #[test]
+    fn a_window_keeps_its_place_and_a_tab_its_scroll() {
+        let (s, error) = load(
+            r#"{"version":3,"data":{"windows":[
+                {"id":"w1","tabs":[{"id":"t1","url":"https://a.test/","title":"A","scroll":[0,640]}],
+                 "activeId":"t1","width":900,"height":700,"x":-1400,"y":120},
+                {"id":"w2","tabs":[{"id":"t2","url":"https://b.test/","title":"B","scroll":null}],
+                 "activeId":"t2","width":900,"height":700,"x":40}]}}"#,
+        );
+        assert_eq!(error, None);
+        check_all(&s);
+        assert_eq!((s.windows[0].x, s.windows[0].y), (Some(-1400.), Some(120.)));
+        assert_eq!(s.windows[0].tabs[0].scroll, Some([0., 640.]));
+        assert_eq!((s.windows[1].x, s.windows[1].y), (None, None), "one coordinate places nothing");
+        assert_eq!(s.windows[1].tabs[0].scroll, None);
     }
 
     #[test]

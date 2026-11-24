@@ -17,6 +17,7 @@ use nd::virtual_list::ListState;
 use nd::webview::WebView;
 
 use crate::app;
+use crate::session::Frame;
 use crate::sidebar::SidebarRow;
 use crate::tab::{Page, Tab, TabId};
 
@@ -89,16 +90,32 @@ pub struct BrowserWindow {
     pub toasts: Vec<Toast>,
     pub(crate) rows: ListState<SidebarRow>,
     next_toast: u64,
+    /// Where the window is and how big, for the session.
+    pub frame: Frame,
 }
 
 impl BrowserWindow {
-    /// A window on `tabs`, which are new unless `moved` (one tab moved out of another window).
-    pub fn new(id: WindowId, tabs: Vec<Tab>, active: Option<TabId>, moved: bool, cx: &mut Context<Self>) -> Self {
-        let active = active.or_else(|| tabs.first().map(|t| t.id)).unwrap_or_default();
-        let mut tree = SidebarTree::default();
+    /// A window on `tabs`, which are new unless `moved` (one tab moved out of another window),
+    /// in `tree`'s order when the session kept one.
+    pub fn new(
+        id: WindowId,
+        tabs: Vec<Tab>,
+        active: Option<TabId>,
+        moved: bool,
+        tree: Option<SidebarTree>,
+        frame: Frame,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut tree = tree.unwrap_or_default();
         for tab in &tabs {
-            tree.add_tab(&tab_id(tab.id), None, usize::MAX).expect("tab ids are unique");
+            if !tree.contains_tab(&tab_id(tab.id)) {
+                tree.add_tab(&tab_id(tab.id), None, usize::MAX).expect("tab ids are unique");
+            }
         }
+        let active = active
+            .filter(|a| tabs.iter().any(|t| t.id == *a))
+            .or_else(|| tree.tab_ids().first().and_then(|t| tab_number(t)))
+            .unwrap_or_default();
         let mut this = Self {
             id,
             tabs,
@@ -112,6 +129,7 @@ impl BrowserWindow {
             toasts: Vec::new(),
             rows: ListState::new(cx).estimated_row_height(px(crate::sidebar::ROW_HEIGHT)),
             next_toast: 0,
+            frame,
         };
         if !moved {
             for id in this.order() {
@@ -121,6 +139,11 @@ impl BrowserWindow {
         this.show(active, cx);
         this.sync_rows(cx);
         this
+    }
+
+    /// The sidebar's tree: the tabs' order, pins and folders.
+    pub fn tree(&self) -> &SidebarTree {
+        &self.tree
     }
 
     pub fn tab(&self, id: TabId) -> Option<&Tab> {
@@ -186,8 +209,9 @@ impl BrowserWindow {
         tests::record(id, event);
     }
 
-    /// Re-renders the window and brings the menu bar up to date.
+    /// Re-renders the window, brings the menu bar up to date and has the session written.
     pub fn changed(&mut self, cx: &mut Context<Self>) {
+        crate::session::changed(cx);
         if self.settle(cx) {
             return;
         }
@@ -434,6 +458,7 @@ impl BrowserWindow {
         self.tabs.clear();
         self.tree = SidebarTree::default();
         app::forget_window(cx, self.id);
+        crate::session::changed(cx);
     }
 
     /// Shift+Cmd+T: the last tab closed in any window, here.
@@ -514,7 +539,8 @@ impl BrowserWindow {
     /// title, icon and address. Its scroll position is read first and put back when it wakes.
     pub fn sleep(&mut self, id: TabId, cx: &mut Context<Self>) {
         let Some(page) = self.tab(id).filter(|_| self.can_sleep(id)).and_then(|t| t.view().cloned()) else { return };
-        // A page that does not answer in time (a busy renderer) sleeps all the same, at the top.
+        // A page that does not answer in time (a busy renderer) sleeps all the same, at the
+        // last place it reported.
         let answered = Rc::new(Cell::new(false));
         let (this, once) = (cx.weak_entity(), answered.clone());
         page.execute_javascript("[scrollX, scrollY]", move |result, cx| {
@@ -525,17 +551,25 @@ impl BrowserWindow {
                 let pair = v.as_array()?;
                 Some((pair.first()?.as_f64()?, pair.get(1)?.as_f64()?))
             });
-            let _ = this.update(cx, |this, cx| this.fall_asleep(id, scroll.filter(|s| *s != (0., 0.)), cx));
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(id)
+                    && let Some(at) = scroll
+                {
+                    tab.scroll = (at != (0., 0.)).then_some(at);
+                }
+                this.fall_asleep(id, cx);
+            });
         });
         let this = cx.weak_entity();
         nd::system::after(SCROLL_READ_LIMIT, move |cx| {
             if !answered.replace(true) {
-                let _ = this.update(cx, |this, cx| this.fall_asleep(id, None, cx));
+                let _ = this.update(cx, |this, cx| this.fall_asleep(id, cx));
             }
         });
     }
 
-    fn fall_asleep(&mut self, id: TabId, scroll: Option<(f64, f64)>, cx: &mut Context<Self>) {
+    /// A page that did not say where it is scrolled keeps the last place it reported.
+    fn fall_asleep(&mut self, id: TabId, cx: &mut Context<Self>) {
         // The page may have been closed or shown while its scroll was read.
         if !self.can_sleep(id) {
             return;
@@ -555,7 +589,7 @@ impl BrowserWindow {
             }
         }
         if let Some(tab) = self.tab_mut(id) {
-            tab.reset(Page::Asleep { scroll });
+            tab.reset(Page::Asleep);
         }
         self.changed(cx);
     }
@@ -798,7 +832,7 @@ mod tests {
         let mut cx = TestApp::new();
         let (a, _) = closing_pair(&mut cx);
         // A scroll read that started before the close lands now.
-        with(&mut cx, a, |w, cx| w.fall_asleep(1, None, cx));
+        with(&mut cx, a, |w, cx| w.fall_asleep(1, cx));
         with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
         assert!(gone(&cx, a));
     }

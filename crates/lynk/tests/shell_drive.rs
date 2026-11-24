@@ -136,6 +136,53 @@ fn launch_with(urls: &[String]) -> AppHandle {
     app
 }
 
+/// A profile of the test's own, which outlives one launch so the next can restore it.
+fn profile(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// Launches on `profile` with `urls` as the command line's.
+fn launch_on(profile: &std::path::Path, urls: &[String]) -> AppHandle {
+    let options = urls.iter().fold(
+        LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+            .env("ND_CEF_STYLE", "chrome")
+            .env("ND_APP_DATA_DIR", profile.display().to_string()),
+        |o, url| o.arg(url),
+    );
+    let app = launch_app(options).unwrap();
+    activate(app.pid());
+    app
+}
+
+/// SIGTERM, the way a service manager or `kill` quits the app, and the wait for it to go.
+fn quit(app: &AppHandle) {
+    let pid = app.pid().to_string();
+    assert!(std::process::Command::new("kill").args(["-TERM", &pid]).status().unwrap().success());
+    exited(app, 15);
+}
+
+/// The profile's `session.json`, its data.
+fn session_of(profile: &std::path::Path) -> serde_json::Value {
+    let text = std::fs::read_to_string(profile.join("session.json")).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    doc["data"].take()
+}
+
+/// Moves the front window's top-left corner to `(x, y)` in global points.
+fn move_to(app: &AppHandle, x: i32, y: i32) {
+    let pid = app.pid();
+    let script = format!(
+        "tell application \"System Events\" to set position of front window of (first process whose unix id is {pid}) to {{{x}, {y}}}"
+    );
+    let status = std::process::Command::new("osascript").args(["-e", &script]).status().unwrap();
+    assert!(status.success(), "the window would not move");
+    activate(pid);
+    std::thread::sleep(Duration::from_millis(800));
+}
+
 /// Brings the app forward: a launched test app is not, and key events would go elsewhere. The
 /// accessibility call fails until the app has registered with the window server, so it retries.
 fn activate(pid: u32) {
@@ -1496,4 +1543,300 @@ fn sidebar_geometry_holds(app: &AppHandle) {
     let (gap_right, gap_top) = (row.x + row.width - (close.x + close.width), close.y - row.y);
     assert!(gap_right >= 4. && gap_top >= 4., "the close button keeps clear of the row's edges: {close:?} in {row:?}");
     assert!(title.x + title.width <= close.x, "the title stops before the close button: {title:?}, {close:?}");
+}
+
+/// Quitting and launching again brings back the window where it was and as big, its tabs in
+/// order with their titles, the tab it showed, and each page's scroll; only the shown tab loads
+/// until another is shown. A launch with an address adds it to the restored window.
+#[test]
+fn real_a_relaunch_restores_the_session() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("session-restore");
+    let urls: Vec<String> = ["/alpha", "/long", "/beta"].iter().map(|p| format!("{base}{p}")).collect();
+    let app = launch_on(&profile, &urls);
+    until(&app, "three tabs", 30, |a| rows(a).len() == 3 && titles(a)[0] == "Alpha");
+    move_to(&app, 180, 140);
+    resize_to(&app, 1100, 760);
+    let (x, y) = row_at(&app, 1);
+    real_click(&app, x, y);
+    until(&app, "the long page", 30, |a| titles(a)[1] == "Long");
+    click_page(&app, 300.);
+    until(&app, "the long page scrolled", 15, |a| titles(a)[1].starts_with("At 600 "));
+    let (x, y) = row_at(&app, 2);
+    real_click(&app, x, y);
+    until(&app, "beta shown", 30, |a| shown_title(a) == "Beta");
+    let before = front_window(&app).bounds;
+    std::thread::sleep(Duration::from_secs(1));
+    quit(&app);
+
+    let saved = session_of(&profile);
+    let window = &saved["windows"][0];
+    let tabs = window["tabs"].as_array().unwrap();
+    let saved_urls: Vec<&str> = tabs.iter().map(|t| t["url"].as_str().unwrap()).collect();
+    assert_eq!(saved_urls, urls.iter().map(String::as_str).collect::<Vec<_>>(), "{saved}");
+    assert_eq!(window["activeId"], tabs[2]["id"]);
+    assert_eq!(tabs[1]["scroll"], serde_json::json!([0.0, 600.0]), "{saved}");
+    assert_eq!((window["x"].as_f64(), window["y"].as_f64()), (Some(before.0), Some(before.1)), "{saved}");
+    drop(app);
+
+    let app = launch_on(&profile, &[]);
+    until(&app, "the restored tabs", 30, |a| rows(a).len() == 3);
+    let restored = titles(&app);
+    assert_eq!(restored[0], "Alpha");
+    assert!(restored[1].starts_with("At 600 "), "{restored:?}");
+    assert_eq!(restored[2], "Beta");
+    until(&app, "beta shown again", 30, |a| shown_title(a) == "Beta");
+    assert_eq!(live_pages(&app), Some(1), "only the shown tab loads");
+    let after = front_window(&app).bounds;
+    assert!(
+        (after.0 - before.0).abs() < 2. && (after.1 - before.1).abs() < 2. && (after.2 - before.2).abs() < 2.,
+        "the window came back at {after:?}, not {before:?}"
+    );
+    let stamp = restored[1].clone();
+    let (x, y) = row_at(&app, 1);
+    real_click(&app, x, y);
+    until(&app, "the long page back at its scroll", 30, |a| {
+        let title = &titles(a)[1];
+        title.starts_with("At 600 ") && *title != stamp
+    });
+    quit(&app);
+    drop(app);
+
+    let app = launch_on(&profile, &[format!("{base}/press")]);
+    until(&app, "the restored tabs and the launch's", 30, |a| rows(a).len() == 4);
+    until(&app, "the launch's page", 30, |a| titles(a).last().is_some_and(|t| t == "Press"));
+    quit(&app);
+}
+
+/// Writes `windows` as the profile's session, version 3.
+fn write_session(profile: &std::path::Path, windows: serde_json::Value) {
+    let doc = serde_json::json!({ "version": 3, "data": { "windows": windows } });
+    std::fs::write(profile.join("session.json"), doc.to_string()).unwrap();
+}
+
+/// One window of `n` tabs at `base/alpha?<i>`, titled `T<i>`, showing tab `shown`.
+fn many_tabs(base: &str, n: usize, shown: usize) -> serde_json::Value {
+    let tabs: Vec<_> = (1..=n)
+        .map(|i| serde_json::json!({ "id": format!("t{i}"), "url": format!("{base}/alpha?{i}"), "title": format!("T{i}") }))
+        .collect();
+    serde_json::json!([{ "id": "w1", "tabs": tabs, "activeId": format!("t{shown}"), "width": 1280, "height": 800 }])
+}
+
+fn saved_urls(profile: &std::path::Path) -> Vec<String> {
+    session_of(profile)["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|w| w["tabs"].as_array().unwrap().iter().map(|t| t["url"].as_str().unwrap().to_owned()))
+        .collect()
+}
+
+/// A session cut short, not JSON or written by a newer version is set aside whole, and the
+/// browser starts fresh on the launch's address.
+#[test]
+fn real_a_broken_or_newer_session_starts_fresh() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for (name, text) in [
+        ("cut", r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[{"id":"t1","url":"#),
+        ("garbage", "\u{0}\u{1}not json"),
+        ("newer", r#"{"version":99,"data":{"windows":[]}}"#),
+    ] {
+        let profile = profile(&format!("session-{name}"));
+        std::fs::write(profile.join("session.json"), text).unwrap();
+        let app = launch_on(&profile, &[format!("{base}/alpha")]);
+        until(&app, "a fresh window", 30, |a| titles(a) == ["Alpha"]);
+        let aside = std::fs::read_dir(&profile)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.file_name().to_string_lossy().starts_with("session.json.corrupt-"))
+            .unwrap_or_else(|| panic!("{name}: the broken session was not set aside"));
+        assert_eq!(std::fs::read_to_string(aside.path()).unwrap(), text, "{name}: kept as it was");
+        quit(&app);
+        drop(app);
+        assert_eq!(saved_urls(&profile), [format!("{base}/alpha")], "{name}");
+    }
+}
+
+/// `kill -9` while changes are being written leaves the last session written whole: it reads
+/// and restores every time.
+#[test]
+fn real_kill_9_never_leaves_a_broken_session() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("session-kill");
+    let mut expected = 1;
+    let mut app = launch_on(&profile, &[format!("{base}/alpha")]);
+    for round in 0..4 {
+        until(&app, "the restored tabs", 30, |a| rows(a).len() == expected);
+        for _ in 0..3 {
+            press(&app, "cmd-t");
+            press(&app, "escape");
+        }
+        expected += 3;
+        until(&app, "the new tabs", 10, |a| rows(a).len() == expected);
+        // Mid-way through the store's debounce and write, at a different point each round.
+        std::thread::sleep(Duration::from_millis(150 + 120 * round));
+        let pid = app.pid().to_string();
+        assert!(std::process::Command::new("kill").args(["-KILL", &pid]).status().unwrap().success());
+        exited(&app, 10);
+        drop(app);
+        let saved = session_of(&profile);
+        let tabs = saved["windows"][0]["tabs"].as_array().unwrap().len();
+        assert!(tabs == expected || tabs == expected - 3, "round {round}: {tabs} tabs saved: {saved}");
+        expected = tabs;
+        app = launch_on(&profile, &[]);
+    }
+    until(&app, "the last restore", 30, |a| rows(a).len() == expected);
+    quit(&app);
+}
+
+/// Two hundred tabs come back asleep, only the shown one loading, and a quit while they are
+/// still coming up loses none of them.
+#[test]
+fn real_two_hundred_tabs_restore_asleep() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("session-200");
+    write_session(&profile, many_tabs(&base, 200, 100));
+    let urls = saved_urls(&profile);
+    let app = launch_on(&profile, &[]);
+    until(&app, "a window", 30, |a| window_count(a) == 1);
+    quit(&app);
+    drop(app);
+    assert_eq!(saved_urls(&profile), urls, "the quit during the restore kept every tab in order");
+
+    let started = Instant::now();
+    let app = launch_on(&profile, &[]);
+    until(&app, "the shown tab", 30, |a| shown_title(a) == "Alpha");
+    let took = started.elapsed();
+    assert_eq!(live_pages(&app), Some(1), "only the shown tab loads");
+    assert!(took < Duration::from_secs(10), "two hundred tabs took {took:?} to come up");
+    quit(&app);
+    drop(app);
+    assert_eq!(saved_urls(&profile), urls);
+    assert_eq!(session_of(&profile)["windows"][0]["activeId"], "t100");
+}
+
+/// A tab whose address no longer answers comes back, shows why it did not load, and stays.
+#[test]
+fn real_a_restored_tab_that_no_longer_loads_stays() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("session-dead");
+    let dead = "http://127.0.0.1:9/gone".to_owned();
+    write_session(
+        &profile,
+        serde_json::json!([{ "id": "w1", "activeId": "t2", "width": 1280, "height": 800, "tabs": [
+            { "id": "t1", "url": format!("{base}/alpha"), "title": "Alpha" },
+            { "id": "t2", "url": dead, "title": "Gone" },
+        ] }]),
+    );
+    let app = launch_on(&profile, &[]);
+    until(&app, "the error page", 30, |a| has(a, "error-page"));
+    assert_eq!(rows(&app).len(), 2);
+    quit(&app);
+    drop(app);
+    assert_eq!(saved_urls(&profile), [format!("{base}/alpha"), dead]);
+}
+
+/// Two launches at the same moment on one profile: one browser comes up with the session and
+/// the other's address, and the session holds each tab once.
+#[test]
+fn real_two_launches_at_once_share_one_session() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("session-twice");
+    write_session(&profile, many_tabs(&base, 2, 1));
+    let other = std::process::Command::new(env!("CARGO_BIN_EXE_lynk"))
+        .arg(format!("{base}/beta"))
+        .env("ND_APP_DATA_DIR", &profile)
+        .env("ND_CEF_STYLE", "chrome")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut other = other;
+    let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+        .env("ND_CEF_STYLE", "chrome")
+        .env("ND_APP_DATA_DIR", profile.display().to_string())
+        .arg(format!("{base}/press"));
+    match launch_app(options) {
+        Ok(app) => {
+            // This launch holds the profile; the other hands its address over and quits.
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while other.try_wait().unwrap().is_none() {
+                assert!(Instant::now() < deadline, "the other launch kept running");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            activate(app.pid());
+            until(&app, "both launches' tabs", 30, |a| rows(a).len() == 4);
+            quit(&app);
+        }
+        Err(_) => {
+            // This launch lost the race, handed its address to the other and quit; the other
+            // runs without automation, so its session file says when both tabs are in.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while saved_urls(&profile).len() < 4 {
+                assert!(Instant::now() < deadline, "the session never held both launches' tabs");
+                std::thread::sleep(Duration::from_millis(250));
+            }
+            let _ = std::process::Command::new("kill").args(["-TERM", &other.id().to_string()]).status();
+            let _ = other.wait();
+        }
+    }
+    let mut urls = saved_urls(&profile);
+    urls.sort();
+    let mut expected: Vec<String> =
+        ["/alpha?1", "/alpha?2", "/beta", "/press"].iter().map(|p| format!("{base}{p}")).collect();
+    expected.sort();
+    assert_eq!(urls, expected);
+}
+
+/// The main display's frame in global points, `(x, y, width, height)`.
+fn main_display() -> (f64, f64, f64, f64) {
+    let script = "ObjC.import('AppKit'); const f = $.NSScreen.screens.objectAtIndex(0).frame; \
+                  [f.origin.x, f.origin.y, f.size.width, f.size.height].join(',')";
+    let out = std::process::Command::new("osascript").args(["-l", "JavaScript", "-e", script]).output().unwrap();
+    let n: Vec<f64> = String::from_utf8_lossy(&out.stdout).split(',').map(|v| v.trim().parse().unwrap()).collect();
+    (n[0], n[1], n[2], n[3])
+}
+
+/// A window kept on a display that is gone comes back on one that is there.
+#[test]
+fn real_a_window_from_a_display_that_is_gone_comes_back_on_screen() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("session-display");
+    write_session(
+        &profile,
+        serde_json::json!([{ "id": "w1", "activeId": "t1", "width": 1000, "height": 700, "x": 30000, "y": -20000,
+            "tabs": [{ "id": "t1", "url": format!("{base}/alpha"), "title": "Alpha" }] }]),
+    );
+    let app = launch_on(&profile, &[]);
+    until(&app, "the window", 30, |a| on_screen_window(a).is_some());
+    let (x, y, w, h) = front_window(&app).bounds;
+    let screen = main_display();
+    assert!(
+        x >= screen.0 && y >= screen.1 && x + w <= screen.0 + screen.2 + 1. && y + h <= screen.1 + screen.3 + 1.,
+        "the window is at {:?}, off the display {screen:?}",
+        (x, y, w, h)
+    );
+    assert!((w - 1000.).abs() < 2. && (h - 700.).abs() < 30., "it kept its size: {w}x{h}");
+    quit(&app);
 }

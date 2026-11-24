@@ -13,6 +13,7 @@ pub mod app;
 pub mod find;
 pub mod page;
 pub mod process;
+pub mod session;
 pub mod shell;
 pub mod sidebar;
 pub mod site_info;
@@ -37,14 +38,27 @@ pub fn run() -> nd::Result<()> {
     })
 }
 
-/// Opens the first window on `urls`, one tab each; with none, on `LYNK_URL` or the new tab page.
+/// Brings back the session's windows, with `urls` as new tabs in the front one. With no session
+/// to restore, opens one window on `urls`, one tab each; with none, on `LYNK_URL` or the new tab
+/// page.
 pub fn init(cx: &mut App, mut urls: Vec<String>) {
     app::install(cx);
     cx.bind_keys(actions::bindings());
-    if urls.is_empty() {
-        urls.push(std::env::var("LYNK_URL").unwrap_or_default());
+    let restored = session::open(cx, &nd::system::app_dirs().data());
+    if restored.is_empty() {
+        if urls.is_empty() {
+            urls.push(std::env::var("LYNK_URL").unwrap_or_default());
+        }
+        let tabs = urls.into_iter().map(|url| tab::Tab::new(app::next_tab_id(cx), url)).collect();
+        app::open_window(cx, tabs, None);
+    } else {
+        for window in restored {
+            app::open_restored(cx, window);
+        }
+        if !urls.is_empty() {
+            process::open_launch(cx, urls);
+        }
     }
-    let tabs = urls.into_iter().map(|url| tab::Tab::new(app::next_tab_id(cx), url)).collect();
-    app::open_window(cx, tabs, None);
+    session::restored_all(cx);
     app::refresh_menus(cx);
 }

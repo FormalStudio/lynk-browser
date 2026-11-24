@@ -71,7 +71,35 @@ tabs in the key window, or in a new window when none is open.
 `app.rs` holds the `Browser` global: the window registry, the tab id counter (ids are unique
 across windows, so a tab keeps its id when it moves), the closed-tab stack (25 addresses), the
 zoom levels per host, and the last menu signature. Every window is an nd main window
-`browser-<n>`, 1280 by 800, at least 720 by 480, with a custom title bar.
+`browser-<n>`, 1280 by 800 unless the session kept another frame, at least 720 by 480, with a
+custom title bar.
+
+## Session
+
+`session.rs` keeps `session.json` in the app data dir through core's `session::open` (version
+3, versions 1 and 2 migrated, `normalize` on load). A write is the whole session rebuilt from
+the window registry: each window's frame, its tabs in sidebar order with title and scroll, its
+tree and the tab on show. `BrowserWindow::changed`, a window leaving the registry, a page's
+scroll report and a window frame change each call `session::changed`, which coalesces into one
+write per main-loop turn. nd's `Store` debounces that (250 ms, at most 2 s) and writes through a
+temp file and a rename, so `kill -9` leaves the last whole session; `App::on_quit` writes and
+flushes what is pending as the app quits. A write that fails (read-only profile, full disk)
+leaves the old file whole and stays pending. The last window to close stays in the registry, so
+quitting restores it.
+
+At launch `init` brings back every window at its frame (nd centres one whose display is gone),
+its tabs `Page::Waiting` until shown, so only the tab each window shows loads. A session with
+nothing but new tab pages counts as none. A launch's URLs open as tabs in the restored key
+window. Nothing is written while the windows come back. A file that does not read, or comes
+from a newer version, is set aside as `session.json.corrupt-<time>` and the browser starts
+fresh.
+
+A page reports its scroll from the `lynk` world (`tab::SCROLL_MESSAGE`, once parsed and 250 ms
+after each scroll), and `Tab::scroll` is where it goes back to after sleeping or a relaunch. A
+tab's script and handler are added before its first load: nd-cef runs scripts only on documents
+that start after them. Chromium cannot hand a page a back and forward list, so a restored tab's
+history starts at its address. What the shell does not track yet (a pin's page, fields a newer
+build wrote) is carried over from the stored tab.
 
 The menu bar is built from the key window (`app::key_window`). It is rebuilt when a window becomes
 key and after every `BrowserWindow::changed`, and only set when its signature (labels and enabled
@@ -326,6 +354,7 @@ Shell, `crates/lynk/src`:
 | --- | --- | --- |
 | `lib.rs` | `run` and `init`: the first window | hold state |
 | `process.rs` | instance lock, later launches, SIGTERM | touch a window's tabs except through `open_tab` and `open_window` |
+| `session.rs` | `session.json`: restoring windows at launch, writing on change and on quit | open a window except through `app::open_restored` |
 | `app.rs` | the `Browser` global, window open and close, menu bar refresh | draw |
 | `window.rs` | one window's tabs and their lifecycle, `TAB_EVENTS` | draw, or know a feature's internals |
 | `tab.rs` | one tab and its page's lifetime | reach the window |

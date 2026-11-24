@@ -4,7 +4,7 @@
 
 use lynk_core::tabstate::{FindState, SecurityFacts, create_at_url, tab_hover, tab_label};
 use nd::prelude::*;
-use nd::webview::{WebView, WebViewOptions};
+use nd::webview::{UserScript, WebView, WebViewOptions};
 
 /// Unique across every window, so a tab keeps its id when it moves.
 pub type TabId = u64;
@@ -55,10 +55,8 @@ pub enum Page {
     /// None yet: the tab was not shown since it was restored or opened in the background, or it
     /// is the new tab page.
     Waiting,
-    /// Put to sleep, scrolled to `scroll`; shown again, it loads once more and goes back there.
-    Asleep {
-        scroll: Option<(f64, f64)>,
-    },
+    /// Put to sleep; shown again, it loads once more and goes back to the tab's `scroll`.
+    Asleep,
     Live(Live),
 }
 
@@ -71,9 +69,21 @@ pub struct Live {
     pub scroll_back: Option<(f64, f64)>,
 }
 
+/// The message a page posts its scroll position to, `[x, y]`, once it has parsed and then after
+/// each scroll settles, from a world of its own so the page cannot see or fake it.
+pub const SCROLL_MESSAGE: &str = "lynkScroll";
+const SCROLL_WORLD: &str = "lynk";
+const SCROLL_REPORT: &str = "(() => { let wait = 0; \
+    const post = () => window.webkit?.messageHandlers?.lynkScroll?.postMessage([scrollX, scrollY]); \
+    addEventListener('scroll', () => { clearTimeout(wait); wait = setTimeout(post, 250); }, { passive: true }); \
+    post(); })()";
+
 impl Live {
     fn new(view: WebView, scroll_back: Option<(f64, f64)>) -> Self {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        // The handler first: it defines `messageHandlers` in the world the report then posts to.
+        view.register_script_message(SCROLL_MESSAGE, Some(SCROLL_WORLD), ["*"]);
+        view.add_user_script(UserScript::new("lynk-scroll", SCROLL_REPORT).in_world(SCROLL_WORLD));
         Self { view, key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), scroll_back }
     }
 }
@@ -87,6 +97,9 @@ pub struct Tab {
     /// The tab whose page opened this one, for Chrome's placement of the next one it opens.
     pub opener: Option<TabId>,
     pub favicon: Option<SharedString>,
+    /// Where the page was last scrolled, `None` at the top: what it goes back to when it loads
+    /// again after sleeping or a relaunch.
+    pub scroll: Option<(f64, f64)>,
     pub rt: Runtime,
     pub find: FindState,
 }
@@ -105,6 +118,7 @@ impl Tab {
             page: Page::Waiting,
             opener: None,
             favicon: None,
+            scroll: None,
             rt: Runtime::default(),
             find: FindState::default(),
         }
@@ -155,20 +169,18 @@ impl Tab {
     }
 
     pub fn is_asleep(&self) -> bool {
-        matches!(self.page, Page::Asleep { .. })
+        matches!(self.page, Page::Asleep)
     }
 
     /// Gives the tab its page the first time it is shown, and again after it slept.
     pub fn wake(&mut self) {
-        let scroll_back = match self.page {
-            Page::Live(_) => return,
-            _ if self.url.is_empty() => return,
-            Page::Waiting => None,
-            Page::Asleep { scroll } => scroll,
-        };
-        let view = WebView::with_options(page_options());
-        view.load(self.url.clone());
-        self.page = Page::Live(Live::new(view, scroll_back));
+        if self.is_live() || self.url.is_empty() {
+            return;
+        }
+        // Scripts reach only documents that start after them, so the load comes last.
+        let live = Live::new(WebView::with_options(page_options()), self.scroll);
+        live.view.load(self.url.clone());
+        self.page = Page::Live(live);
     }
 
     /// Drops the page for `page` with everything it reported.
@@ -215,7 +227,8 @@ mod tests {
     fn a_tab_wakes_where_it_slept() {
         let mut tab = Tab::new(1, "https://example.com/");
         tab.rt.loading = true;
-        tab.reset(Page::Asleep { scroll: Some((0., 600.)) });
+        tab.scroll = Some((0., 600.));
+        tab.reset(Page::Asleep);
         assert!(tab.is_asleep());
         assert!(!tab.rt.loading);
         tab.wake();

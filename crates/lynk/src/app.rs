@@ -4,10 +4,12 @@
 use std::collections::BTreeMap;
 
 use lynk_core::session::{WINDOW_HEIGHT, WINDOW_WIDTH};
+use lynk_core::sidebar_tree::SidebarTree;
 use nd::core::WindowId;
 use nd::prelude::*;
 
 use crate::actions;
+use crate::session::{Frame, Restored};
 use crate::tab::{Tab, TabId};
 use crate::window::BrowserWindow;
 
@@ -28,6 +30,17 @@ pub struct Browser {
 
 pub fn install(cx: &mut App) {
     cx.set_global(Browser::default());
+}
+
+impl Browser {
+    /// Tab ids from here on start past `last`, which a restored session already handed out.
+    pub fn raise_tab_ids(&mut self, last: TabId) {
+        self.next_tab = self.next_tab.max(last);
+    }
+
+    pub fn last_tab_id(&self) -> TabId {
+        self.next_tab
+    }
 }
 
 pub fn next_tab_id(cx: &mut App) -> TabId {
@@ -117,30 +130,56 @@ pub fn open_window(cx: &mut App, mut tabs: Vec<Tab>, active: Option<TabId>) -> W
     if tabs.is_empty() {
         tabs.push(Tab::new(next_tab_id(cx), ""));
     }
-    open(cx, tabs, active, false)
+    open(cx, tabs, active, false, None, None)
+}
+
+/// Opens a window the session kept, where it was and as big, with its tabs in its order.
+pub fn open_restored(cx: &mut App, restored: Restored) -> WindowId {
+    let Restored { tabs, tree, active, frame } = restored;
+    open(cx, tabs, active, false, Some(tree), Some(frame))
 }
 
 /// Opens a window around `tab`, moved out of another window.
 pub fn open_window_around(cx: &mut App, tab: Tab) -> WindowId {
     let active = Some(tab.id);
-    open(cx, vec![tab], active, true)
+    open(cx, vec![tab], active, true, None, None)
 }
 
-fn open(cx: &mut App, tabs: Vec<Tab>, active: Option<TabId>, moved: bool) -> WindowId {
+fn open(
+    cx: &mut App,
+    tabs: Vec<Tab>,
+    active: Option<TabId>,
+    moved: bool,
+    tree: Option<SidebarTree>,
+    frame: Option<Frame>,
+) -> WindowId {
+    let frame = frame.unwrap_or(Frame { origin: None, width: WINDOW_WIDTH, height: WINDOW_HEIGHT });
     let browser = cx.global_mut::<Browser>();
     browser.next_window += 1;
-    let options = WindowOptions::main(format!("browser-{}", browser.next_window))
+    let mut options = WindowOptions::main(format!("browser-{}", browser.next_window))
         .title("Lynk Browser")
-        .size(size(px(WINDOW_WIDTH as f32), px(WINDOW_HEIGHT as f32)))
+        .size(size(px((frame.width as f32).max(MIN_WIDTH)), px((frame.height as f32).max(MIN_HEIGHT))))
         .min_size(size(px(MIN_WIDTH), px(MIN_HEIGHT)))
         .titlebar(Titlebar::Custom);
+    if let Some((x, y)) = frame.origin {
+        options = options.origin(nd::core::Point { x: x as f32, y: y as f32 });
+    }
     let handle = cx.open_window(options, move |window, cx| {
         let id = window.id();
         window.on_should_close(move |_, cx| {
             self::window(cx, id).is_none_or(|w| w.update(cx, |w, cx| w.should_close(cx)))
         });
         window.on_activate(|_, cx| refresh_menus(cx));
-        cx.new(|cx| BrowserWindow::new(id, tabs, active, moved, cx))
+        window.on_frame_changed(move |window, cx| {
+            let origin = window.origin().map(|o| (f64::from(o.x), f64::from(o.y)));
+            let size = window.viewport_size();
+            let frame = Frame { origin, width: f64::from(size.width), height: f64::from(size.height) };
+            if let Some(w) = self::window(cx, id) {
+                w.update(cx, |w, _| w.frame = frame);
+            }
+            crate::session::changed(cx);
+        });
+        cx.new(|cx| BrowserWindow::new(id, tabs, active, moved, tree, frame, cx))
     });
     let id = handle.id();
     let entity = handle.root().clone();

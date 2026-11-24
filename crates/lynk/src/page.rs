@@ -163,11 +163,13 @@ pub fn mount(tab: &Tab, live: &Live, cx: &mut Context<BrowserWindow>) -> AnyElem
         .on_context_menu_item_clicked(cx.listener(move |w, e: &ContextMenuItemClicked, window, cx| {
             observe(w, id, PageEvent::ContextMenuItemClicked(e), window, cx)
         }))
-        .on_script_message(
-            cx.listener(move |w, e: &ScriptMessage, window, cx| {
-                observe(w, id, PageEvent::ScriptMessage(e), window, cx)
-            }),
-        )
+        .on_script_message(cx.listener(move |w, e: &ScriptMessage, window, cx| {
+            if e.name == crate::tab::SCROLL_MESSAGE {
+                scrolled(w, id, &e.body, cx);
+                return;
+            }
+            observe(w, id, PageEvent::ScriptMessage(e), window, cx)
+        }))
         .on_external_protocol(cx.listener(move |w, e: &ExternalProtocol, window, cx| {
             observe(w, id, PageEvent::ExternalProtocol(e), window, cx)
         }))
@@ -218,6 +220,17 @@ fn navigated(w: &mut BrowserWindow, id: TabId, url: &str, cx: &mut Context<Brows
     tab.find.found = None;
     w.apply_zoom(id, cx);
     w.changed(cx);
+}
+
+/// The page settled at a new scroll position; the session keeps it.
+fn scrolled(w: &mut BrowserWindow, id: TabId, at: &JsValue, cx: &mut Context<BrowserWindow>) {
+    let Some(tab) = w.tab_mut(id) else { return };
+    let at = at.as_array().and_then(|p| Some((p.first()?.as_f64()?, p.get(1)?.as_f64()?)));
+    let scroll = at.filter(|s| *s != (0., 0.));
+    if tab.scroll != scroll {
+        tab.scroll = scroll;
+        crate::session::changed(cx);
+    }
 }
 
 fn loading_changed(w: &mut BrowserWindow, id: TabId, loading: bool, cx: &mut Context<BrowserWindow>) {

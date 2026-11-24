@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use nd::core::WindowId;
 use nd::platform::{Target, target};
 use nd::prelude::*;
-use nd::virtual_list::list;
+use nd::virtual_list::{SelectEvent, Selection, list};
 
 use crate::actions;
 use crate::app;
@@ -36,10 +36,9 @@ const ROW_TAIL: f32 = 2.;
 const FAVICON: f32 = 16.;
 /// Kept on every row, so a title never reflows as the pointer crosses the list.
 const TRAIL_WIDTH: f32 = 24.;
-/// The close button's hit area and glyph, and the load spinner, inside the trailing slot.
+/// The close button's hit area and the load spinner, inside the trailing slot.
 const CLOSE_BOX: f32 = 20.;
 const CLOSE_RADIUS: f32 = 6.;
-const CLOSE_GLYPH: f32 = 12.;
 const SPINNER: f32 = 14.;
 /// Fills, as a share of the primary ink so one number holds in light and dark.
 const SHOWN_FILL: f32 = 0.12;
@@ -158,6 +157,7 @@ impl BrowserWindow {
             .chain((target() != Target::Linux).then_some((SidebarRow::NewTab, 0)))
             .collect();
         self.rows.set_items_versioned(rows, cx);
+        self.rows.set_selected(vec![SidebarRow::Tab(self.active)], cx);
     }
 
     pub fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -173,8 +173,22 @@ impl BrowserWindow {
             .items_center()
             .when(mac, |row| row.mt(px(MAC_MARGIN - (CONTROLS_HEIGHT - LIGHT) / 2.)))
             .child(window_controls().embedded());
+        // The rows draw their own fills; the list's selection is for the keyboard and assistive
+        // tech.
         let rows = list("tabs", &self.rows, cx.processor(Self::row))
+            .own_highlight()
             .estimated_row_height(px(ROW_HEIGHT))
+            .selection(Selection::single())
+            .selectable(|row, _| matches!(row, SidebarRow::Tab(_)))
+            .on_select(cx.listener(|win, e: &SelectEvent<SidebarRow>, window, cx| match e.key {
+                // A click on the row on show opens the command bar on its address.
+                SidebarRow::Tab(id) if id == win.active => {
+                    cx.dispatch_action(window.id(), &actions::OpenAddress);
+                    win.sync_rows(cx);
+                }
+                SidebarRow::Tab(id) => win.select(id, cx),
+                SidebarRow::NewTab => {}
+            }))
             .flex_1()
             .min_h_0();
         v_flex()
@@ -266,14 +280,6 @@ impl BrowserWindow {
                     cx.notify();
                 }
             }))
-            // A click on the row on show opens the command bar on its address.
-            .on_tap(cx.listener(move |win, _: &TapEvent, window, cx| {
-                if win.active == id {
-                    cx.dispatch_action(window.id(), &actions::OpenAddress);
-                } else {
-                    win.select(id, cx);
-                }
-            }))
             .context_menu(move |menu, _, cx| row_menu(menu, me, id, cx))
             .child(
                 h_flex()
@@ -291,21 +297,21 @@ impl BrowserWindow {
 }
 
 /// The row's close button: a quiet glyph that comes up to full ink with its own fill under the
-/// pointer, on a hit area larger than the glyph.
+/// pointer, on a hit area larger than the glyph. The native button inside keeps the keyboard and
+/// assistive tech able to press it.
 fn close_button(id: TabId, label: String, ink: Hsla, cx: &mut Context<BrowserWindow>) -> AnyElement {
-    div()
-        .id(format!("tab-close-{id}"))
-        .role(nd::core::semantic::Role::Button, format!("Close {label}"))
+    let button = icon_button(format!("tab-close-{id}"), Icon::X)
+        .tooltip(format!("Close {label}"))
         .size(px(CLOSE_BOX))
-        .flex()
-        .items_center()
-        .justify_center()
+        .on_click(cx.listener(move |win, _: &ClickEvent, _, cx| win.close_tab(id, cx)));
+    div()
+        .size(px(CLOSE_BOX))
+        .flex_none()
         .rounded(px(CLOSE_RADIUS))
         .opacity(QUIET)
         .hover(|s| s.bg(ink.opacity(CLOSE_HOVER_FILL)).opacity(1.))
         .active(|pose| pose.scale(PRESSED_SCALE))
-        .on_tap(cx.listener(move |win, _: &TapEvent, _, cx| win.close_tab(id, cx)))
-        .child(icon(Icon::X, CLOSE_GLYPH))
+        .child(button)
         .into_any_element()
 }
 

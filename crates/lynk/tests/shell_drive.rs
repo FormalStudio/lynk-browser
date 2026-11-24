@@ -988,6 +988,25 @@ fn row_at(app: &AppHandle, index: usize) -> (f32, f32) {
     rows(app)[index].1
 }
 
+/// The sidebar answers the keyboard and assistive tech, not only the pointer: the list's arrow
+/// keys pick a tab, and a row's close button presses with Space.
+#[test]
+fn real_sidebar_controls_answer_the_keyboard() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/alpha"), format!("{base}/beta")]);
+    // The second tab loads only once shown.
+    until(&app, "both rows", 30, |a| titles(a).len() == 2 && shown_title(a) == "Alpha");
+    let (key, other) = ("down", "Beta");
+    app.get_by_test_id("tabs").press(key).unwrap();
+    until(&app, "the other tab, picked by key", 10, |a| shown_title(a) == other);
+    let shown = rows(&app).into_iter().map(|r| r.0).find(|id| has(&app, &id.replace("tab-row-", "tab-close-"))).unwrap();
+    app.get_by_test_id(&shown.replace("tab-row-", "tab-close-")).press("space").unwrap();
+    until(&app, "the shown tab, closed by key", 10, |a| titles(a).len() == 1);
+}
+
 #[test]
 fn real_tab_row_menu() {
     if !real_allowed() {

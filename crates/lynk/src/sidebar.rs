@@ -208,7 +208,8 @@ impl BrowserWindow {
         let margin = if mac { MAC_MARGIN } else { INSET } + ROW_LEAD;
         // On macOS the foot sits as far up from the bottom edge as the rows sit in from the left.
         let bottom = if mac { MAC_MARGIN - ROW_LEAD } else { INSET };
-        let mut foot = h_flex().id("sidebar-foot").flex_none().items_center().gap(px(ROW_GAP)).px(px(margin)).pb(px(bottom));
+        let mut foot =
+            h_flex().id("sidebar-foot").flex_none().items_center().gap(px(ROW_GAP)).px(px(margin)).pb(px(bottom));
         for slot in FOOT {
             if let Some(el) = slot(self, window, cx) {
                 foot = foot.child(el);

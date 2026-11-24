@@ -56,7 +56,9 @@ pub enum Page {
     /// is the new tab page.
     Waiting,
     /// Put to sleep, scrolled to `scroll`; shown again, it loads once more and goes back there.
-    Asleep { scroll: Option<(f64, f64)> },
+    Asleep {
+        scroll: Option<(f64, f64)>,
+    },
     Live(Live),
 }
 

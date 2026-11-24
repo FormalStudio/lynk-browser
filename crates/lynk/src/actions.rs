@@ -284,7 +284,10 @@ pub const COMMANDS: &[Command] = &[
         .menu(MenuId::File)
         .handler(|w, id, _, cx| w.close_tab(id, cx))
         .listens(listen_close_shown),
-    Command::new::<ReopenClosedTab>("Reopen Closed Tab").key("reopen-tab").menu(MenuId::File).handler(|w, _, _, cx| w.reopen(cx)),
+    Command::new::<ReopenClosedTab>("Reopen Closed Tab")
+        .key("reopen-tab")
+        .menu(MenuId::File)
+        .handler(|w, _, _, cx| w.reopen(cx)),
     Command::new::<SavePage>("Save Page As\u{2026}").key("save-page").menu(MenuId::File).enabled(web_page),
     Command::new::<OpenSettings>("Settings").key("settings").menu(MenuId::File).after_separator(),
     Command::new::<CopyAddress>("Copy Address")
@@ -345,7 +348,10 @@ pub const COMMANDS: &[Command] = &[
             }
         }),
     Command::new::<NextTab>("Next Tab").key("next-tab").menu(MenuId::Tabs).handler(|w, _, _, cx| w.cycle(1, cx)),
-    Command::new::<PreviousTab>("Previous Tab").key("prev-tab").menu(MenuId::Tabs).handler(|w, _, _, cx| w.cycle(-1, cx)),
+    Command::new::<PreviousTab>("Previous Tab")
+        .key("prev-tab")
+        .menu(MenuId::Tabs)
+        .handler(|w, _, _, cx| w.cycle(-1, cx)),
     Command::new::<TogglePin>("Pin Tab").menu(MenuId::Tabs).flips("Unpin Tab", |w, id, _| w.is_pinned(id)),
     Command::new::<ToggleMute>("Mute Tab"),
     Command::new::<SleepTab>("Put Tab to Sleep")

@@ -296,7 +296,9 @@ impl BrowserWindow {
     /// Asks `id`'s page whether it may go, once until it answers. `false` for a tab with nothing
     /// to ask: no page, or a crashed one.
     fn ask(&mut self, id: TabId) -> bool {
-        let Some(view) = self.tab(id).filter(|t| t.rt.crashed.is_none()).and_then(Tab::view).cloned() else { return false };
+        let Some(view) = self.tab(id).filter(|t| t.rt.crashed.is_none()).and_then(Tab::view).cloned() else {
+            return false;
+        };
         if !self.asked(id) {
             view.request_close();
             #[cfg(test)]
@@ -344,9 +346,9 @@ impl BrowserWindow {
     /// Carries out the closes no page holds back any more. `true` when the window went.
     fn settle(&mut self, cx: &mut Context<Self>) -> bool {
         let tabs = &self.tabs;
-        self.closing.asked.retain(|(id, view)| {
-            tabs.iter().any(|t| t.id == *id && t.rt.crashed.is_none() && t.view() == Some(view))
-        });
+        self.closing
+            .asked
+            .retain(|(id, view)| tabs.iter().any(|t| t.id == *id && t.rt.crashed.is_none() && t.view() == Some(view)));
         let ready = self.closing.tabs.iter().copied().find(|id| !self.closing.asked.iter().any(|(t, _)| t == id));
         if let Some(id) = ready {
             // `remove` comes back here through `changed` for the rest.
@@ -844,9 +846,7 @@ mod tests {
         with(&mut cx, a, |w, cx| w.close_tab(1, cx));
         assert!(!cx.request_close(a));
         cx.run_until_idle();
-        let asked = |cx: &TestApp| {
-            app::window(cx, a).unwrap().read(cx).closing.asked.len()
-        };
+        let asked = |cx: &TestApp| app::window(cx, a).unwrap().read(cx).closing.asked.len();
         assert_eq!(asked(&cx), 2);
         // Tab 1's one answer closes its tab; tab 2's then closes the window.
         with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
@@ -1000,7 +1000,8 @@ mod tests {
         use crate::actions::{DuplicateTab, command_for, item_for_tab};
         let mut cx = TestApp::new();
         app::install(&mut cx);
-        let tabs = vec![Tab::new(app::next_tab_id(&mut cx), "https://example.com/"), Tab::new(app::next_tab_id(&mut cx), "")];
+        let tabs =
+            vec![Tab::new(app::next_tab_id(&mut cx), "https://example.com/"), Tab::new(app::next_tab_id(&mut cx), "")];
         let a = app::open_window(&mut cx, tabs, Some(2));
         cx.run_until_idle();
         let win = app::window(&cx, a).unwrap();

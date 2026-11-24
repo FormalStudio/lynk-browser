@@ -9,7 +9,7 @@
 use url::Url;
 
 use crate::keys::{chord, shortcut_label};
-use crate::url::{display_url, host_of, is_search, to_url};
+use crate::url::{display_url, host_of, is_search, strip_www, to_url, typed_text};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OmniRow {
@@ -162,14 +162,12 @@ pub fn command_title(id: &str, pinned: bool) -> String {
 
 /// A host without its `www.`, which nobody types.
 pub fn bare_host(url: &str) -> String {
-    let host = host_of(url);
-    host.strip_prefix("www.").map_or(host.clone(), str::to_owned)
+    strip_www(&host_of(url)).to_owned()
 }
 
 /// What you would have typed to get somewhere: no scheme, no `www.`.
 pub fn place_key(url: &str) -> String {
-    let shown = display_url(url);
-    shown.strip_prefix("www.").map_or(shown.clone(), str::to_owned)
+    strip_www(&display_url(url)).to_owned()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -192,7 +190,8 @@ pub fn completion_for(query: &str, candidates: &[String]) -> Option<Completion> 
         if u.scheme() != "http" && u.scheme() != "https" {
             continue;
         }
-        let host = bare_host(url);
+        // Hosts parse to punycode; people type and read `bücher.de`.
+        let host = idna::domain_to_unicode(&bare_host(url)).0;
         if host.starts_with(&q) {
             return Some(Completion { text: host, url: format!("{}/", u.origin().ascii_serialization()) });
         }
@@ -250,7 +249,8 @@ pub fn omni_rows(input: &OmniInput<'_>) -> Vec<OmniRow> {
 /// Cmd+T and Cmd+L: what Enter does with the typed text (the completed address first when there
 /// is one), open tabs, history, then commands.
 fn address_rows(input: &OmniInput<'_>) -> Vec<OmniRow> {
-    let query = input.query.trim();
+    let query = typed_text(input.query);
+    let query = query.as_str();
     let lowered = query.to_lowercase();
     let mut rows = Vec::new();
     let mut seen: Vec<String> = Vec::new();
@@ -307,7 +307,8 @@ fn address_rows(input: &OmniInput<'_>) -> Vec<OmniRow> {
 /// Cmd+K: with nothing typed the first row is the page you were just on, so Cmd+K then Return
 /// goes back to it; with text typed the first row searches or loads it.
 fn switcher_rows(input: &OmniInput<'_>) -> Vec<OmniRow> {
-    let query = input.query.trim();
+    let query = typed_text(input.query);
+    let query = query.as_str();
     let lowered = query.to_lowercase();
     let mut rows: Vec<OmniRow> = typed_row(query, input, "Open").map(|(_, row)| row).into_iter().collect();
     rows.extend(tab_rows(input.tabs, &lowered, SWITCHER_TABS, input.favicon));
@@ -674,5 +675,20 @@ mod tests {
         assert_eq!(find(&shown, "cmd:restore-hidden").and_then(|r| r.subtitle.as_deref()), Some("2 elements hidden"));
         let blank = s("ads", BlockingFacts { site: String::new(), ..facts });
         assert!(find(&blank, "cmd:blocking").is_none() && find(&blank, "cmd:hide-element").is_none());
+    }
+
+    #[test]
+    fn pasted_lines_long_text_and_scripts_stay_one_safe_row() {
+        let pasted = OmniInput { query: "first line\nsecond\tline", ..base() };
+        let row = find(&omni_rows(&pasted), "url").unwrap().clone();
+        assert_eq!(row.title, "first line second line");
+        let script = OmniInput { query: "javascript:alert(1)", ..base() };
+        assert_eq!(find(&omni_rows(&script), "url").unwrap().hint.as_deref(), Some("Search"));
+        let long = "ä".repeat(4000);
+        let history = [visit("https://bücher.de/", "Bücher")];
+        let huge = OmniInput { query: &long, history: &history, ..base() };
+        assert_eq!(find(&omni_rows(&huge), "url").unwrap().hint.as_deref(), Some("Search"));
+        assert_eq!(completion_for(&long, &[history[0].url.clone()]), None);
+        assert_eq!(completion_for("bü", &[history[0].url.clone()]).map(|c| c.text), Some("bücher.de".into()));
     }
 }

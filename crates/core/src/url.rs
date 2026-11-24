@@ -19,9 +19,13 @@ const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'(')
     .remove(b')');
 
-static SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^[a-z][a-z0-9+.-]*:").unwrap());
-static DOTTED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\S+\.\S{2,}$").unwrap());
-static LOCALHOST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^localhost(:\d+)?(/|$)").unwrap());
+static SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)^([a-z][a-z0-9+.-]*):(.*)$").unwrap());
+static IPV4: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{1,3}(\.\d{1,3}){3}$").unwrap());
+
+/// Schemes that load without `//`. Any other `word:` is a host and port or a user name.
+const BARE_SCHEMES: &[&str] = &["about", "data", "mailto", "tel", "view-source", "blob", "magnet"];
+/// Names no public suffix lists that developers type anyway.
+const LOCAL_SUFFIXES: &[&str] = &["localhost", "test", "local", "internal"];
 
 pub fn encode_component(text: &str) -> String {
     utf8_percent_encode(text, COMPONENT).to_string()
@@ -31,24 +35,66 @@ pub fn is_search(url: &str, search_prefix: &str) -> bool {
     url.starts_with(search_prefix)
 }
 
-/// Omnibox text to a loadable address. A bare word with no dot is a search, so
-/// `localhost:8080` and `example.com` navigate while `native desktop` searches.
+/// Omnibox text to a loadable address. Text names a site when its host is `localhost`, an IP
+/// address or a name under a known suffix, so `localhost:8080`, `bücher.de` and `[::1]:3000`
+/// navigate while `node.js` and `native desktop` search. A `javascript:` address searches:
+/// the field never runs script on the page behind it.
 pub fn to_url(raw: &str, search_prefix: &str) -> Option<String> {
-    let q = raw.trim();
+    let q = typed_text(raw);
     if q.is_empty() {
         return None;
     }
-    // `localhost:` would otherwise read as a scheme.
-    if LOCALHOST.is_match(q) {
-        return Some(format!("https://{q}"));
+    if let Some(c) = SCHEME.captures(&q) {
+        let scheme = c[1].to_ascii_lowercase();
+        if scheme != "javascript" && (c[2].starts_with("//") || BARE_SCHEMES.contains(&scheme.as_str())) {
+            return Some(q);
+        }
     }
-    if SCHEME.is_match(q) {
-        return Some(q.to_owned());
+    let address = format!("https://{q}");
+    if names_a_site(&q, &address) {
+        return Some(address);
     }
-    if DOTTED.is_match(q) {
-        return Some(format!("https://{q}"));
+    Some(format!("{search_prefix}{}", encode_component(&q)))
+}
+
+/// Pasted text loses its line breaks: a wrapped address joins up, and lines of prose become one
+/// search. Tabs read as spaces.
+pub fn typed_text(raw: &str) -> String {
+    let lines: Vec<&str> = raw.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let joined = lines.concat();
+    let text = if joined.contains(char::is_whitespace) { lines.join(" ") } else { joined };
+    text.replace('\t', " ")
+}
+
+fn names_a_site(q: &str, address: &str) -> bool {
+    if q.contains(char::is_whitespace) {
+        return false;
     }
-    Some(format!("{search_prefix}{}", encode_component(q)))
+    let Ok(u) = Url::parse(address) else { return false };
+    match u.host() {
+        Some(url::Host::Ipv6(_)) => true,
+        Some(url::Host::Ipv4(_)) => IPV4.is_match(typed_host(q)),
+        Some(url::Host::Domain(d)) => {
+            let last = d.rsplit('.').next().unwrap_or(d);
+            let resolvable = d.len() <= 253 && d.split('.').all(|l| l.len() <= 63);
+            resolvable
+                && (d == "localhost"
+                    || (d.contains('.')
+                        && (LOCAL_SUFFIXES.contains(&last) || psl::suffix(d.as_bytes()).is_some_and(|s| s.is_known()))))
+        }
+        None => false,
+    }
+}
+
+/// The host as typed: no user name, port or path. `[::1]` keeps its brackets.
+fn typed_host(q: &str) -> &str {
+    let end = q.find(['/', '?', '#']).unwrap_or(q.len());
+    let authority = &q[..end];
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    match host.find(']') {
+        Some(i) if host.starts_with('[') => &host[..=i],
+        _ => host.split(':').next().unwrap_or(host),
+    }
 }
 
 /// A host or address without its leading `www.`, which nobody types and no site means.
@@ -168,6 +214,7 @@ mod tests {
         assert_eq!(to_url("mailto:a@b.c", PREFIX).as_deref(), Some("mailto:a@b.c"));
         assert_eq!(to_url("native desktop", PREFIX).as_deref(), Some("https://search.test/?q=native%20desktop"));
         assert_eq!(to_url("a.b", PREFIX).as_deref(), Some("https://search.test/?q=a.b"));
+        assert_eq!(to_url("example.com:8080", PREFIX).as_deref(), Some("https://example.com:8080"));
         assert_eq!(to_url("c++ & (rust)!", PREFIX).as_deref(), Some("https://search.test/?q=c%2B%2B%20%26%20(rust)!"));
     }
 
@@ -181,5 +228,40 @@ mod tests {
         assert_eq!(file_name_from_url("https://x.test/files/r%C3%A9sum%C3%A9.pdf"), "résumé.pdf");
         assert_eq!(file_name_from_url("https://x.test/"), "download");
         assert_eq!(file_name_from_url("https://x.test/%FF"), "download");
+    }
+
+    #[test]
+    fn hosts_people_type() {
+        let go = |q: &str| to_url(q, PREFIX).unwrap();
+        let searched = |q: &str| go(q).starts_with(PREFIX);
+        // IDN and punycode reach the same host; a mixed-script lookalike shows as punycode.
+        assert_eq!(go("bücher.de"), "https://bücher.de");
+        assert_eq!(go("xn--bcher-kva.de"), "https://xn--bcher-kva.de");
+        assert_eq!(display_url(&go("аpple.com")), "xn--pple-43d.com");
+        assert_eq!(go("localhost"), "https://localhost");
+        assert_eq!(go("app.localhost:5173/x"), "https://app.localhost:5173/x");
+        assert_eq!(go("printer.local"), "https://printer.local");
+        assert_eq!(go("192.168.1.1:8080/admin"), "https://192.168.1.1:8080/admin");
+        assert_eq!(go("[::1]:3000"), "https://[::1]:3000");
+        assert_eq!(go("[2001:db8::1]"), "https://[2001:db8::1]");
+        assert_eq!(go("user:pass@example.com"), "https://user:pass@example.com");
+        assert!(searched("1.5"), "a number is not an address");
+        assert!(searched("node.js"), "js is no suffix");
+        assert!(searched("readme.txt"));
+        assert!(!searched("readme.md"), "md is Moldova");
+    }
+
+    #[test]
+    fn pasted_and_hostile_text() {
+        let go = |q: &str| to_url(q, PREFIX).unwrap();
+        assert_eq!(go("https://exam\nple.com/a\r\n/b"), "https://example.com/a/b");
+        assert_eq!(go("first line\nsecond\tline"), format!("{PREFIX}first%20line%20second%20line"));
+        assert_eq!(go("javascript:alert(1)"), format!("{PREFIX}javascript%3Aalert(1)"));
+        assert_eq!(go("JavaScript://x.test"), format!("{PREFIX}JavaScript%3A%2F%2Fx.test"));
+        assert_eq!(go("data:text/html,<b>hi</b>"), "data:text/html,<b>hi</b>");
+        let long = "a".repeat(4000);
+        assert_eq!(go(&long), format!("{PREFIX}{long}"));
+        let long_host = format!("{}.com", "a".repeat(4000));
+        assert!(go(&long_host).starts_with(PREFIX), "no label is longer than 63");
     }
 }

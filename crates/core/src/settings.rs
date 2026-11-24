@@ -189,6 +189,8 @@ pub struct LynkSettings {
     /// A chord in `keys` spelling that raises the address field over any app. Empty is none.
     pub global_address_key: String,
     pub global_opens_small_window: bool,
+    /// Rebound shortcuts by command id; see [`crate::keys::rebind`].
+    pub shortcuts: crate::keys::Overrides,
 }
 
 impl Default for LynkSettings {
@@ -245,6 +247,7 @@ impl Default for LynkSettings {
             history_swipe: false,
             global_address_key: String::new(),
             global_opens_small_window: false,
+            shortcuts: crate::keys::Overrides::new(),
         }
     }
 }

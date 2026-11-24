@@ -613,20 +613,22 @@ fn real_chrome_only_keys_open_nothing() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     click_page(&app, 500.);
-    let before = on_screen(&app);
+    // Every window of the app, however small: F7's caret browsing prompt is a small dialog.
+    let windows = |app: &AppHandle| ndshell::window_list::of_pid(app.pid()).len();
+    let before = windows(&app);
     // Caret browsing, the task manager and help: Chrome UI with no place in Lynk.
     for (name, code, modifiers) in
         [("F7", key::F7, &[][..]), ("Shift+Esc", key::ESCAPE, &[Modifier::Shift][..]), ("F1", key::F1, &[][..])]
     {
         hid(code, modifiers);
         std::thread::sleep(Duration::from_millis(900));
-        assert_eq!(on_screen(&app), before, "{name} opened a window");
+        assert_eq!(windows(&app), before, "{name} opened a window, dialog or panel");
         assert_eq!(titles(&app), ["Alpha"], "{name} opened a tab");
     }
     // F11 belongs to macOS (Show Desktop), so it goes through the app's own key handling only.
     press(&app, "f11");
     std::thread::sleep(Duration::from_millis(900));
-    assert_eq!(on_screen(&app), before, "F11 opened a window");
+    assert_eq!(windows(&app), before, "F11 opened a window, dialog or panel");
     assert_eq!(titles(&app), ["Alpha"], "F11 opened a tab");
 }
 
@@ -952,18 +954,26 @@ fn shown_title(app: &AppHandle) -> String {
     windows[0]["title"].as_str().unwrap_or_default().to_owned()
 }
 
-/// The centre of the sidebar's `index`th tab row, in window points.
-fn row_at(app: &AppHandle, index: usize) -> (f32, f32) {
+/// The first window's tab rows top to bottom: test id and centre, in window points.
+fn rows(app: &AppHandle) -> Vec<(String, (f32, f32))> {
     let tree = app.tree(None).unwrap();
     let mut rows: Vec<_> = tree.windows[0]
         .root
         .iter()
-        .filter(|n| n.test_id.as_deref().is_some_and(|t| t.starts_with("tab-row-")) && n.visible)
-        .filter_map(|n| n.bounds)
+        .filter(|n| n.visible)
+        .filter_map(|n| {
+            let r = n.bounds?;
+            let id = n.test_id.clone().filter(|t| t.starts_with("tab-row-"))?;
+            Some((id, (r.origin.x + r.size.width / 2., r.origin.y + r.size.height / 2.)))
+        })
         .collect();
-    rows.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
-    let r = rows[index];
-    (r.origin.x + r.size.width / 2., r.origin.y + r.size.height / 2.)
+    rows.sort_by(|a, b| a.1.1.total_cmp(&b.1.1));
+    rows
+}
+
+/// The centre of the sidebar's `index`th tab row, in window points.
+fn row_at(app: &AppHandle, index: usize) -> (f32, f32) {
+    rows(app)[index].1
 }
 
 #[test]
@@ -986,8 +996,10 @@ fn real_tab_row_menu() {
     hid(key::ESCAPE, &[]);
     assert_eq!(shown_title(&app), "New Tab", "the shown tab after a menu on another row");
     // The row's menu acts on its own tab, not the one on show.
+    let duplicate = rows(&app)[1].0.clone();
     pick_menu(&app, row_at(&app, 1), "Close Other");
     until(&app, "only the second tab", 15, |a| titles(a) == ["Alpha"]);
+    assert_eq!(rows(&app).into_iter().map(|r| r.0).collect::<Vec<_>>(), [duplicate], "the duplicate is the one left");
     // Off any tab: the column's menu.
     let n = app.get_by_test_id("new-tab-row").bounding_box().unwrap().unwrap();
     pick_menu(&app, (n.x + n.width / 2., n.y + n.height + 120.), "New Tab");

@@ -133,6 +133,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] "Aw, Snap!" with Reload when the renderer is gone
 - [ ] Tab titles: the page title, else the display address, else "New Tab"; a restored tab never shows "about:blank"
 - [ ] `chrome:`, `chrome-extension:`, `devtools:` and `view-source:` addresses open in a fresh page
+- [ ] DevTools open docked inside the tab's page area (bottom or right, resizable by dragging the divider, undock to its own window and back), on macOS, Linux and Windows
 - [ ] External protocols (`mailto:`, `zoommtg:`): "Open …?" with an "always" option for real origins, remembered per scheme
 - [ ] A tab that aimed at a download goes back to the page it showed; a fresh tab stays until the download ends
 

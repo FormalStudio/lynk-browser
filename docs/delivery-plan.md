@@ -60,7 +60,7 @@ session.
 | --- | --- |
 | `omnibox-panels` | Command bar (all three modes, ranking, inline completion), history, bookmarks and downloads panels and popover, `chrome://` routes, "Search with <engine>" in the context menu |
 | `extensions` | Web Store install with the app's dialog, puzzle popover, pinned actions, popups, extension tabs, Dark Reader; then 1Password on macOS once `package` has the signed build |
-| `blocking-tools` | adblock-rust on the request filter, cosmetic filters and scriptlets, the padlock's ad switch and count, element hider, reading mode, floating video and a page's own picture in picture with "Back to tab", print, save page, view source |
+| `blocking-tools` | adblock-rust on the request filter, cosmetic filters and scriptlets, the padlock's ad switch and count, element hider, reading mode, floating video and a page's own picture in picture with "Back to tab", print, save page, view source, DevTools docked in the tab's own page area (bottom or right, resizable, undockable to a window, as in Chrome), never a loose floating window; required by the owner 2026-11-24 |
 | `windows-session` | Session restore, settings window, private windows, popup windows, permissions and the padlock popover, blocked pop-ups, external protocols |
 | `package` | `nd package mac` signed with the Developer ID (1Password trusts the signature), AppImage, the Nix package from the flake, root-owned in the store (1Password on Linux needs it) |
 

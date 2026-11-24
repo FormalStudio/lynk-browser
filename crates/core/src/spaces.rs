@@ -10,6 +10,7 @@ use url::Url;
 
 use crate::null_default;
 use crate::sidebar_tree::SidebarTree;
+use crate::url::strip_www;
 
 /// The hue pair a space tints the window, sidebar, cards and menus from, in degrees.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,8 +67,7 @@ pub fn space_number(spaces: &[Space], id: &str) -> Option<usize> {
 }
 
 fn bare_host(host: &str) -> String {
-    let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    host.strip_prefix("www.").map_or(host.clone(), str::to_owned)
+    strip_www(&host.trim().trim_end_matches('.').to_ascii_lowercase()).to_owned()
 }
 
 /// Adds or replaces the rule for a host. One rule per host; `www.` is the same site.

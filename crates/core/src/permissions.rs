@@ -183,14 +183,6 @@ pub fn decisions_for(saved: &SitePermissions, origin: &str) -> Vec<(String, Perm
     out
 }
 
-/// The origin a decision is keyed by, empty for a view with no address (a new tab).
-pub fn origin_of(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(u) => normalize_origin(&u.origin().ascii_serialization()).to_owned(),
-        Err(_) => String::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,7 +233,5 @@ mod tests {
         assert_eq!(decisions_for(&saved, "https://a.test/").len(), 2);
         forget_origin(&mut saved, "https://a.test/");
         assert!(saved.is_empty());
-        assert_eq!(origin_of("https://a.test:8443/x"), "https://a.test:8443");
-        assert_eq!(origin_of(""), "");
     }
 }

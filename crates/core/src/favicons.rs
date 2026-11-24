@@ -15,7 +15,7 @@ use base64::Engine as _;
 use percent_encoding::percent_decode_str;
 use regex::Regex;
 
-use crate::url::encode_component;
+use crate::url::{encode_component, origin_of};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Appearance {
@@ -62,13 +62,6 @@ pub struct Favicons {
     dir: Option<PathBuf>,
     memory: HashMap<String, HashMap<Appearance, Icon>>,
     current: Appearance,
-}
-
-pub fn origin_of(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(u) if u.origin().is_tuple() => u.origin().ascii_serialization(),
-        _ => String::new(),
-    }
 }
 
 impl Favicons {

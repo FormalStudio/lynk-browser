@@ -51,6 +51,29 @@ pub fn to_url(raw: &str, search_prefix: &str) -> Option<String> {
     Some(format!("{search_prefix}{}", encode_component(q)))
 }
 
+/// A host or address without its leading `www.`, which nobody types and no site means.
+pub fn strip_www(host: &str) -> &str {
+    host.strip_prefix("www.").unwrap_or(host)
+}
+
+/// The site a web page belongs to: its lower-case host without `www.`. Empty for anything that
+/// is not `http:` or `https:`.
+pub fn site_of(url: &str) -> String {
+    match Url::parse(url) {
+        Ok(u) if matches!(u.scheme(), "http" | "https") => strip_www(&u.host_str().unwrap_or("").to_lowercase()).to_owned(),
+        _ => String::new(),
+    }
+}
+
+/// A page's origin, `https://a.test:8443`; empty where the origin is opaque (`file:`, `data:`,
+/// `about:`), which no two pages share.
+pub fn origin_of(url: &str) -> String {
+    match Url::parse(url) {
+        Ok(u) if u.origin().is_tuple() => u.origin().ascii_serialization(),
+        _ => String::new(),
+    }
+}
+
 /// The WHATWG `host`: hostname and a port that is not the scheme's default.
 pub fn host_of(url: &str) -> String {
     Url::parse(url).map(|u| host_port(&u)).unwrap_or_default()
@@ -107,6 +130,21 @@ mod tests {
     use super::*;
 
     const PREFIX: &str = "https://search.test/?q=";
+
+    #[test]
+    fn sites_and_origins() {
+        assert_eq!(site_of("https://WWW.Example.com/a"), "example.com");
+        assert_eq!(site_of("http://www.a.test:8080/"), "a.test");
+        assert_eq!(site_of("chrome://settings"), "");
+        assert_eq!(site_of("file:///etc/hosts"), "");
+        assert_eq!(strip_www("www.a.test"), "a.test");
+        assert_eq!(strip_www("wwwa.test"), "wwwa.test");
+        assert_eq!(origin_of("https://a.test:8443/x"), "https://a.test:8443");
+        assert_eq!(origin_of("https://a.test:443/x"), "https://a.test");
+        assert_eq!(origin_of("file:///x"), "");
+        assert_eq!(origin_of("data:text/plain,hi"), "");
+        assert_eq!(origin_of(""), "");
+    }
 
     #[test]
     fn an_untouched_address_keeps_the_pages_own_scheme() {

@@ -13,6 +13,7 @@ use nd_settings::Store;
 use serde::{Deserialize, Serialize};
 
 use crate::null_default;
+use crate::url::site_of;
 use crate::ublock::{self, FilterList, Release, write_replacing};
 
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -65,20 +66,6 @@ pub fn adblock_dir(profile: &Path) -> std::io::Result<PathBuf> {
     let dir = profile.join("adblock");
     std::fs::create_dir_all(dir.join("lists"))?;
     Ok(dir)
-}
-
-/// The name a per-site switch and a hidden element are kept under.
-pub fn site_of(url: &str) -> String {
-    if !(url.starts_with("http:") || url.starts_with("https:")) {
-        return String::new();
-    }
-    match url::Url::parse(url) {
-        Ok(u) => {
-            let host = u.host_str().unwrap_or("").to_lowercase();
-            host.strip_prefix("www.").map_or(host.clone(), str::to_owned)
-        }
-        Err(_) => String::new(),
-    }
 }
 
 impl BlockingState {
@@ -317,8 +304,6 @@ mod tests {
     fn the_per_site_switch_and_hidden_elements() {
         let mut s = BlockingState::default();
         assert_eq!(s.release, ublock::pinned());
-        assert_eq!(site_of("https://WWW.Example.com/a"), "example.com");
-        assert_eq!(site_of("chrome://settings"), "");
         assert!(s.filters("https://www.example.com/"));
         s.set_blocking_on("example.com", false);
         s.set_blocking_on("example.com", false);

@@ -1,0 +1,32 @@
+{
+  "version": 2,
+  "data": {
+    "windows": [
+      {
+        "id": "w1",
+        "tabs": [
+          { "id": "t1", "url": "https://mail.example.com/", "title": "Inbox", "pinned": true, "pinnedUrl": "https://mail.example.com/" },
+          { "id": "t2", "url": "https://calendar.example.com/week", "title": "Calendar", "pinned": true, "pinnedUrl": "https://calendar.example.com/" },
+          { "id": "t3", "url": "https://github.com/FormalStudio/NativeDesktop", "title": "NativeDesktop", "pinned": false },
+          { "id": "t4", "url": "", "title": "", "pinned": false },
+          { "id": "t5", "url": "https://news.example.org/story", "title": "A story", "pinned": false }
+        ],
+        "activeId": "t3",
+        "width": 1440,
+        "height": 900
+      },
+      {
+        "id": "w3",
+        "tabs": [
+          { "id": "t7", "url": "https://docs.example.dev/", "title": "Docs", "pinned": false }
+        ],
+        "activeId": "t7",
+        "width": 1024,
+        "height": 768
+      }
+    ],
+    "nextTabId": 8,
+    "nextWindowId": 4,
+    "zoomByHost": { "github.com": 1.1 }
+  }
+}

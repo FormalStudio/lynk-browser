@@ -324,7 +324,7 @@ impl SidebarTree {
 
     /// Brings a tree read from disk back within the rules: tabs `keep` rejects and repeats go,
     /// a split left with one tab becomes that tab, a ratio out of range is clamped.
-    pub fn repair(&mut self, keep: impl Fn(&str) -> bool) {
+    pub fn repair(&mut self, mut keep: impl FnMut(&str) -> bool) {
         let mut seen: HashSet<String> = HashSet::new();
         let mut take = |id: &str| keep(id) && seen.insert(id.to_owned());
         self.pins.retain(|id| take(id));

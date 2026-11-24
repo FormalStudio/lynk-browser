@@ -825,7 +825,12 @@ fn live_pages(app: &AppHandle) -> usize {
         w.root
             .iter()
             .filter(|n| {
-                n.test_id.as_deref().and_then(|t| t.strip_prefix("page-")).is_some_and(|id| id.parse::<u64>().is_ok())
+                // `page-{tab}-{page}`: the tab's id, then which of its pages this is.
+                n.test_id
+                    .as_deref()
+                    .and_then(|t| t.strip_prefix("page-"))
+                    .and_then(|id| id.split_once('-'))
+                    .is_some_and(|(tab, page)| tab.parse::<u64>().is_ok() && page.parse::<u64>().is_ok())
             })
             .count()
     })

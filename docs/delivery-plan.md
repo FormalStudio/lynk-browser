@@ -23,9 +23,9 @@ Written 2026-11-10. Where the port stands, what is left, and the waves that clos
   stray-window guard); `win-osr` has the off-screen path.
 - No box in `nd-parity.md` is ticked. Since the 2026-10-20 decision in nd's
   `docs/plan/PROMPT.md` the port is `main` and the checklist is the work list, not a merge gate.
-- Windows runs happen on real Windows (g815 booted into Windows, `ssh windows`), at a later
-  date. Until then Windows code is checked by `cargo clippy --target x86_64-pc-windows-msvc`
-  only, and nothing on Windows counts as done.
+- Windows runs happen in a Windows 11 guest on g815 under KVM (`scripts/windows-vm`), never by
+  booting g815 into Windows (owner, 2026-11-24). macOS and Linux come first; a Windows box is
+  ticked only from a run in that guest.
 
 ## Rules for every wave
 
@@ -84,7 +84,8 @@ the Rust build, and the nix config switches on every host.
 
 ## Wave 5: beyond parity
 
-Arc features the 0.5.11 app never had and the 2026-09-29 note declined: spaces with their own
-pinned sets and themes, folders in the sidebar, split view, auto-archive of stale tabs, peek for
-links out of pinned tabs, a small window for links opened from other apps, registering as the
-default browser. Each is a lane of its own after wave 4, and needs a yes from the owner first.
+Arc features the 0.5.11 app never had: spaces with their own pinned sets and themes, folders in
+the sidebar, split view, auto-archive of stale tabs, peek for links out of pinned tabs, a small
+window for links opened from other apps, registering as the default browser, and everything in
+[inspiration.md](inspiration.md). The owner approved all of it on 2026-11-24, to start once the
+browser is usable and stable on macOS and Linux. Each is a lane of its own.

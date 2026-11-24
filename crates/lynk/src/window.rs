@@ -293,7 +293,18 @@ impl BrowserWindow {
 
     /// Closes `id` once its page agrees (`beforeunload`, "Leave site?"). A tab with no page has
     /// nothing to ask.
+    /// A second close of the shown tab while its page has not answered closes the next tab that
+    /// is not already closing, so Close Tab pressed at speed never drops a press.
     pub fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
+        let id = if id == self.active && self.closing_tabs.contains(&id) {
+            let order = self.order();
+            let at = order.iter().position(|t| *t == id).unwrap_or(0);
+            let after = order[at..].iter().chain(order[..at].iter().rev());
+            let Some(&next) = after.into_iter().find(|t| !self.closing_tabs.contains(t)) else { return };
+            next
+        } else {
+            id
+        };
         if !self.ask(id) {
             self.remove(id, cx);
         } else if !self.closing_tabs.contains(&id) {
@@ -801,6 +812,25 @@ mod tests {
         assert_eq!(tabs(&cx, a), [2]);
         with(&mut cx, a, |w, cx| w.close_answered(2, true, cx));
         assert!(gone(&cx, a));
+    }
+
+    #[test]
+    fn close_tab_pressed_at_speed_closes_one_tab_per_press() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let first = vec![live(&mut cx), live(&mut cx), live(&mut cx), live(&mut cx)];
+        let a = app::open_window(&mut cx, first, None);
+        cx.run_until_idle();
+        let shown = app::window(&cx, a).unwrap().read(&cx).active;
+        for _ in 0..3 {
+            with(&mut cx, a, |w, cx| w.close_tab(shown, cx));
+        }
+        let closing = app::window(&cx, a).unwrap().read(&cx).closing_tabs.clone();
+        assert_eq!(closing.len(), 3);
+        for id in closing {
+            with(&mut cx, a, |w, cx| w.close_answered(id, true, cx));
+        }
+        assert_eq!(tabs(&cx, a).len(), 1);
     }
 
     #[test]

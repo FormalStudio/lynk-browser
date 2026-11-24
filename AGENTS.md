@@ -28,7 +28,8 @@ On the macbook, outside a Nix shell's SDK. Prefix every cargo command that build
   subcommand (`cargo clippy --config ...`; before it, clippy drops the flag and checks the pin).
   It rewrites `Cargo.lock` in the working tree; never commit that.
 - Linux (headless Hyprland on g815): `scripts/linux-gate sync`, then `scripts/linux-gate drive 3`.
-  Until that script lands on `main`, use nd's `scripts/linux-gate` from the nd checkout.
+  `scripts/linux-gate install` puts a release build in the owner's own session on g815 (`lynk`,
+  plus a launcher entry) and prints its commit; `LYNK_LOCAL_ND=1` builds against the local nd.
 - Windows (Windows 11 guest on g815): `scripts/windows-vm up`, `scripts/windows-vm sync`,
   `scripts/windows-vm run '<powershell>'`, once the Windows lane lands the script. Compile check from the macbook:
   `cargo xwin clippy --target x86_64-pc-windows-msvc -p lynk` with

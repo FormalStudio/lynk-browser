@@ -1,40 +1,67 @@
-# Agent notes for a NativeDesktop app
+# Agent notes
 
-This app runs on the NativeDesktop framework: a Zig host process owning the native widgets, and a
-Bun/SolidJS child rendering into it. The framework's full agent docs are copied into `docs/agents/` at
-scaffold time. Read `docs/agents/README.md` first.
+Lynk is an Arc-style Chromium browser in Rust on NativeDesktop (`nd`, source at
+`~/Developer/ecosystem/nativedesktop`, read only from here).
 
-Three load-bearing rules:
+## Read first
 
-1. **Run with `bun run dev` (`nd dev`)** for hot reload and the crash-restart overlay. It wraps
-   `ND_DEV=1 ND_SCRIPT=src/main.tsx <resolved-host-binary>` and runs the prebuilt native host for
-   your platform, AppKit on macOS or GTK on Linux, without rebuilding the host in place.
-   `docs/agents/README.md` has the marker vocabulary, what `ND_DEV` changes, and the raw invocation
-   to use when you are iterating on the framework's own host.
-2. **Components are Solid 2.0, not React.** A component runs once; signals are read by calling
-   them inside JSX, a memo or an effect; props are passed as values and never destructured;
-   `createEffect` takes a compute and an apply function; refs are variables or callbacks. Lists use
-   `<For>`, conditionals `<Show>`, error boundaries `<Errored>`. `node_modules/solid-js/CHEATSHEET.md`
-   lists what changed from 1.x. The JSX transform is a Bun preload (`@nativedesktop/react/register`)
-   that `nd dev`, `nd build` and `nd package` pass for you.
-3. **Styling is not web CSS.** There is no `flex`, `grid`, `position`, `display`, or
-   `justifyContent`. See `docs/agents/styling.md`.
+1. [docs/architecture.md](docs/architecture.md): layers, lifecycle, registries, state, gates.
+2. [RESUME.md](RESUME.md): where the work stopped. [docs/delivery-plan.md](docs/delivery-plan.md):
+   the waves and lanes. [docs/nd-parity.md](docs/nd-parity.md): the boxes that define done.
+3. The spec for a feature: `docs/sidebar.md`, `docs/omnibox.md`, `docs/native-pages.md`, and the
+   old TypeScript app in `src/`. `src/` and `PLAN.md` are history; never edit or build them.
 
-The CLI is `@nativedesktop/cli` (the `nd` bin): `nd dev` for hot reload, `nd build` to compile to
-`dist/main.js`, `nd package [mac|linux]` to assemble and sign the platform bundle from
-`nativedesktop.config.ts`, and `nd doctor` for packaging/toolchain readiness checks. The app depends
-on `@nativedesktop/react` and `solid-js` plus `@nativedesktop/native`; optional packages from the
-same family are `@nativedesktop/data` (worker SQLite), `@nativedesktop/rpc`, and
-`@nativedesktop/test` (the automation harness for scripted tests).
+## Build, run, gate
 
-Two framework defaults: unhandled promise rejections are reported and survived while uncaught
-exceptions stay fatal (tune with `setUnhandledErrorPolicy`, subscribe with `onUnhandledError`); a
-render error under `<Errored>` is reported and survived, one no boundary catches is fatal; and
-persistent settings go through `createStore` (`await store.load()` before `render()`, then
-synchronous `get()` and the `useStoreValue` signal). All of these come from `@nativedesktop/react`.
+On the macbook, outside a Nix shell's SDK. Prefix every cargo command that builds `lynk` with
+`env -u SDKROOT -u DEVELOPER_DIR CEF_PATH="/Volumes/Kyan Drive/dev-cache.noindex/cef"`
+(written `<env>` below).
 
-If you touch the framework itself rather than this app, read `docs/agents/zig-idiom.md` first. The
-Zig here is 0.16, not the pre-2025 APIs most training data assumes.
+- Build: `<env> cargo build -p lynk`
+- Run: `<env> cargo run -p lynk` (`LYNK_URL=<url>` for the first tab)
+- Core: `env -u SDKROOT -u DEVELOPER_DIR CARGO_TARGET_DIR=target/core cargo test -p lynk-core`,
+  then `cargo clippy -p lynk-core --all-targets -- -D warnings`
+- Shell unit: `<env> cargo test -p lynk --lib`
+- Shell drive (real windows, real pointer, one at a time):
+  `<env> ND_REAL=1 cargo test -p lynk --test shell_drive -- --test-threads=1`
+- Against an unpushed nd, without editing manifests, add
+  `--config 'patch."https://github.com/FormalStudio/NativeDesktop".nd.path="../nativedesktop/crates/nd"'`
+- Linux (headless Hyprland on g815): `scripts/linux-gate sync`, then `scripts/linux-gate drive 3`.
+  Until that script lands on `main`, use nd's `scripts/linux-gate` from the nd checkout.
+- Windows (Windows 11 guest on g815): `scripts/windows-vm up`, `scripts/windows-vm sync`,
+  `scripts/windows-vm run '<powershell>'`, once the Windows lane lands the script. Compile check from the macbook:
+  `cargo xwin clippy --target x86_64-pc-windows-msvc -p lynk` with
+  `/opt/homebrew/opt/llvm@22/bin` on `PATH`.
 
-The automation and testing surface (`getTree`, `click`, `screenshot`, `waitFor`, and the rest) is
-documented in `docs/agents/automation.md`.
+## Ownership and commits
+
+- One agent owns a set of paths. Touch nothing outside it; commit only those paths
+  (`git add <paths>`, never `git add -A`). Never push: the orchestrator reruns the gates and pushes.
+- Never `git reset`, `checkout --`, `restore`, `clean` or `stash` on a tree with someone else's
+  changes. A dirty file you did not make is another agent's work in flight.
+- Subjects are short, lowercase, conventional: `feat(core): ...`, `fix(shell): ...`, `docs: ...`.
+  No body unless it closes an issue. Never push a `wip:` commit.
+- An nd gap is fixed in nd, gated there, pushed, then `cargo update -p nd` here in a
+  `chore(deps): nd <sha>` commit. No workaround in the app.
+- Tick a box in `docs/nd-parity.md` in the same commit as the test that proves it, naming it.
+
+## Code rules
+
+Smallest complete change:
+- Ask whether it needs to exist, and whether it is already here, in nd, in std or in an installed
+  dependency.
+- No wrapper, option, config knob, single-implementor trait, conversion layer or code "for later".
+- Deletion beats addition. Finish every caller, test and fixture in the same change.
+
+Untangled:
+- One module owns one feature and its state. Modules talk through the registries in
+  `docs/architecture.md` and small typed functions, never by writing each other's fields.
+- No god files, no pass-through wrappers, no duplicated logic.
+- Validate at the boundary only. Make illegal states unrepresentable where a type can.
+- Logic that needs no window goes in `crates/core`, which never draws.
+
+Every change:
+- One small test per new non-trivial piece of logic.
+- A known shortcut carries `shortcut: <the limit>, <when to upgrade>`.
+- Each module opens with a `//!` saying what it owns and what it must not do.
+- Comments state only what the code cannot.

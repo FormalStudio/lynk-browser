@@ -1,16 +1,20 @@
 //! Tidy: sorts a sidebar's loose tabs into groups and writes a named separator above each,
-//! using the same separators the user makes by hand. A text model can propose the groups;
-//! grouping by site needs none. Pinned tabs, folders, projects and splits are left alone.
+//! using the same separators the user makes by hand. The groups come from a text model the
+//! shell runs, checked here before anything moves, or from grouping by site, which needs no
+//! model. Pinned tabs, folders, projects and splits are left alone. Running a model is the
+//! shell's; this module only sees its answer.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::sidebar_tree::{Item, SidebarTree};
+use crate::url::strip_www;
 
 /// What the model is told about one tab, and all it is told: no page content.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TidyTab {
     pub id: String,
     pub title: String,
+    /// The tab's host with its port, `localhost:3000`; empty for `file:`, `about:` and new tabs.
     pub host: String,
     /// The tab it was opened from, when that is known.
     pub opener: Option<String>,
@@ -20,13 +24,6 @@ pub struct TidyTab {
 pub struct TidyGroup {
     pub name: String,
     pub tabs: Vec<String>,
-}
-
-/// A text model that groups tabs: Apple's system model on macOS, a local one the user chose
-/// elsewhere. Its answer is checked by [`validate`] before anything moves. Called off the main
-/// thread.
-pub trait TabGrouper {
-    fn group(&self, tabs: &[TidyTab]) -> Result<Vec<TidyGroup>, String>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,6 +36,7 @@ pub enum TidyError {
     Repeated(String),
     EmptyName,
     EmptyGroup,
+    TooManyGroups,
     /// The list changed since the tidy, so undo would lose that change.
     Stale,
 }
@@ -51,16 +49,16 @@ pub enum Source {
 }
 
 pub const OTHER_GROUP: &str = "Other";
+/// More separators than this is a list cut into pieces, not tidied.
+pub const MAX_GROUPS: usize = 12;
+/// A separator name longer than this is cut, at a character boundary.
+pub const MAX_NAME_CHARS: usize = 40;
 
-fn site(host: &str) -> String {
-    let host = host.trim().to_ascii_lowercase();
-    host.strip_prefix("www.").map_or(host.clone(), str::to_owned)
-}
-
-/// The fallback that needs no model: one group per site with two or more tabs, named by the
-/// site, in the order sites first appear; the rest under "Other" at the end. A tab with no host
-/// (a new tab) goes with the tab that opened it.
+/// The fallback that needs no model: one group per host (`www.` aside, subdomains and ports
+/// apart) with two or more tabs, named by the host, in the order hosts first appear; the rest
+/// under "Other" at the end. A tab with no host goes with the tab that opened it.
 pub fn group_by_site(tabs: &[TidyTab]) -> Vec<TidyGroup> {
+    let site = |host: &str| strip_www(&host.trim().to_lowercase()).to_owned();
     let hosts: HashMap<&str, &str> = tabs.iter().map(|t| (t.id.as_str(), t.host.as_str())).collect();
     let site_of = |t: &TidyTab| {
         let own = site(&t.host);
@@ -94,17 +92,22 @@ pub fn group_by_site(tabs: &[TidyTab]) -> Vec<TidyGroup> {
     groups
 }
 
-/// Accepts an answer only if it places every loose tab exactly once, names no other tab, and
-/// gives every group a name and at least one tab. Names come back trimmed.
+/// Accepts an answer only if it places every loose tab exactly once, names no other tab, gives
+/// every group a name and a tab, and keeps to [`MAX_GROUPS`]. Names come back trimmed and cut
+/// to [`MAX_NAME_CHARS`].
 pub fn validate(loose: &[&str], answer: Vec<TidyGroup>) -> Result<Vec<TidyGroup>, TidyError> {
     if loose.is_empty() {
         return Err(TidyError::NothingToTidy);
+    }
+    if answer.len() > MAX_GROUPS {
+        return Err(TidyError::TooManyGroups);
     }
     let wanted: HashSet<&str> = loose.iter().copied().collect();
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for g in answer {
-        let name = g.name.trim().to_owned();
+        let name: String = g.name.trim().chars().take(MAX_NAME_CHARS).collect();
+        let name = name.trim_end().to_owned();
         if name.is_empty() {
             return Err(TidyError::EmptyName);
         }
@@ -134,49 +137,27 @@ pub struct TidyUndo {
     after: Vec<Item>,
 }
 
-/// Rewrites the list as the groups, each under a new named separator, followed by the
-/// folders and splits in their order. The separators that were there go: the groups replace
-/// them.
-pub fn apply(
+/// The Tidy action: the model's answer when there is one and it holds up, else grouping by
+/// site. `new_id` names each separator.
+pub fn tidy(
     tree: &mut SidebarTree,
-    groups: Vec<TidyGroup>,
+    tabs: &[TidyTab],
+    answer: Option<Vec<TidyGroup>>,
     mut new_id: impl FnMut() -> String,
-) -> Result<TidyUndo, TidyError> {
-    let groups = validate(&tree.loose_tabs(), groups)?;
-    let before = tree.items.clone();
-    let mut items = Vec::new();
-    for g in groups {
-        items.push(Item::Separator { id: new_id(), name: g.name });
-        items.extend(g.tabs.into_iter().map(Item::tab));
-    }
-    items.extend(before.iter().filter(|i| matches!(i, Item::Folder(_) | Item::Split(_))).cloned());
-    tree.items = items;
-    Ok(TidyUndo { before, after: tree.items.clone() })
+) -> Result<(TidyUndo, Source), TidyError> {
+    let loose = tree.loose_tabs();
+    let (groups, source) = match answer.map(|a| validate(&loose, a)) {
+        Some(Ok(groups)) => (groups, Source::Model),
+        _ => (validate(&loose, group_by_site(tabs))?, Source::Site),
+    };
+    let groups = groups.into_iter().map(|g| ((new_id(), g.name), g.tabs)).collect();
+    let before = tree.regroup_loose(groups);
+    Ok((TidyUndo { before, after: tree.items.clone() }, source))
 }
 
 /// Puts the list back exactly as it was before the tidy, if nothing changed since.
 pub fn undo(tree: &mut SidebarTree, undo: TidyUndo) -> Result<(), TidyError> {
-    if tree.items != undo.after {
-        return Err(TidyError::Stale);
-    }
-    tree.items = undo.before;
-    Ok(())
-}
-
-/// The Tidy action: the model's groups when there is a model and its answer holds up, else
-/// grouping by site.
-pub fn tidy(
-    tree: &mut SidebarTree,
-    tabs: &[TidyTab],
-    model: Option<&dyn TabGrouper>,
-    new_id: impl FnMut() -> String,
-) -> Result<(TidyUndo, Source), TidyError> {
-    let loose = tree.loose_tabs();
-    let proposed = model.and_then(|m| m.group(tabs).ok()).and_then(|g| validate(&loose, g).ok());
-    match proposed {
-        Some(groups) => apply(tree, groups, new_id).map(|u| (u, Source::Model)),
-        None => apply(tree, group_by_site(tabs), new_id).map(|u| (u, Source::Site)),
-    }
+    if tree.restore_rows(undo.before, &undo.after) { Ok(()) } else { Err(TidyError::Stale) }
 }
 
 #[cfg(test)]
@@ -213,12 +194,7 @@ mod tests {
             ],
             last_active: String::new(),
         };
-        let tabs = vec![
-            t("a", "www.github.com", None),
-            t("b", "news.test", None),
-            t("c", "github.com", None),
-            t("d", "", Some("c")),
-        ];
+        let tabs = vec![t("a", "www.github.com", None), t("b", "news.test", None), t("c", "github.com", None), t("d", "", Some("c"))];
         (tree, tabs)
     }
 
@@ -230,11 +206,50 @@ mod tests {
         }
     }
 
+    /// Forty tabs across twelve hosts as a real sidebar has them.
+    fn real() -> (SidebarTree, Vec<TidyTab>) {
+        let hosts = [
+            "github.com", "www.github.com", "gist.github.com", "docs.rs", "127.0.0.1:8080", "[::1]:3000",
+            "localhost:3000", "localhost:5173", "", "", "news.ycombinator.com", "mail.google.com",
+        ];
+        let mut tabs = Vec::new();
+        for n in 0..40 {
+            let host = hosts[n % hosts.len()];
+            let title = if n == 7 || n == 19 { "Untitled".to_owned() } else { format!("Tab {n}") };
+            let opener = host.is_empty().then(|| format!("x{}", n - 1 - n % hosts.len() % 8));
+            tabs.push(TidyTab { id: format!("x{n}"), title, host: host.into(), opener });
+        }
+        let tree = SidebarTree { items: tabs.iter().map(|t| Item::tab(t.id.clone())).collect(), ..SidebarTree::default() };
+        (tree, tabs)
+    }
+
     #[test]
     fn grouping_by_site_needs_two_tabs_and_follows_openers() {
         let (_, tabs) = sample();
         assert_eq!(group_by_site(&tabs), [g("github.com", &["a", "c", "d"]), g("Other", &["b"])]);
         assert_eq!(group_by_site(&[]), []);
+    }
+
+    #[test]
+    fn forty_real_tabs_group_by_host_and_port() {
+        let (mut tree, tabs) = real();
+        let groups = group_by_site(&tabs);
+        let names: Vec<&str> = groups.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "github.com", "gist.github.com", "docs.rs", "127.0.0.1:8080", "[::1]:3000", "localhost:3000",
+                "localhost:5173", "news.ycombinator.com", "mail.google.com"
+            ]
+        );
+        // github.com and www.github.com are one site; file: and about: tabs follow their opener.
+        assert_eq!(groups[0].tabs.len(), 4 + 4);
+        assert_eq!(groups[6].tabs, ["x7", "x8", "x9", "x19", "x20", "x21", "x31", "x32", "x33"]);
+        assert_eq!(groups.iter().map(|g| g.tabs.len()).sum::<usize>(), 40);
+        let (_, source) = tidy(&mut tree, &tabs, None, ids()).unwrap();
+        assert_eq!(source, Source::Site);
+        assert_eq!(tree.loose_tabs().len(), 40);
+        tree.check().unwrap();
     }
 
     #[test]
@@ -251,16 +266,53 @@ mod tests {
     }
 
     #[test]
-    fn apply_writes_separators_and_leaves_pins_and_folders_alone_and_undo_restores() {
-        let (mut tree, _) = sample();
+    fn real_bad_answers_fall_back_to_sites() {
+        let (tree, tabs) = real();
+        let all: Vec<String> = tabs.iter().map(|t| t.id.clone()).collect();
+        let half = |r: std::ops::Range<usize>| all[r].to_vec();
+        let named = |name: &str, tabs: Vec<String>| TidyGroup { name: name.into(), tabs };
+        let mut dup = half(0..40);
+        dup.push("x3".into());
+        let answers = [
+            ("duplicates a tab", vec![named("All", dup)]),
+            ("omits one", vec![named("All", half(0..39))]),
+            ("invents one", vec![named("All", half(0..40)), named("Ghost", vec!["x99".into()])]),
+            ("empty group", vec![named("All", half(0..40)), named("None", vec![])]),
+            ("200 groups", (0..200).map(|n| named(&format!("G{n}"), all.get(n).cloned().into_iter().collect())).collect()),
+        ];
+        for (case, answer) in answers {
+            let mut t = tree.clone();
+            let (_, source) = tidy(&mut t, &tabs, Some(answer), ids()).unwrap();
+            assert_eq!(source, Source::Site, "{case}");
+            t.check().unwrap();
+            assert_eq!(t.loose_tabs().len(), 40, "{case}");
+        }
+    }
+
+    #[test]
+    fn a_ten_kilobyte_name_is_cut() {
+        let (mut tree, tabs) = real();
+        let all: Vec<String> = tabs.iter().map(|t| t.id.clone()).collect();
+        let long = "é".repeat(10 * 1024);
+        let (_, source) = tidy(&mut tree, &tabs, Some(vec![TidyGroup { name: long, tabs: all }]), ids()).unwrap();
+        assert_eq!(source, Source::Model);
+        let Item::Separator { name, .. } = &tree.items[0] else { panic!("a separator leads") };
+        assert_eq!(name.chars().count(), MAX_NAME_CHARS);
+    }
+
+    #[test]
+    fn tidy_writes_separators_leaves_pins_and_folders_and_undo_restores() {
+        let (mut tree, tabs) = sample();
         let original = tree.clone();
-        let undo_it = apply(&mut tree, vec![g("Dev", &["c", "a"]), g("Read", &["b", "d"])], ids()).unwrap();
+        let answer = vec![g("Dev", &["c", "a"]), g("Read", &["b", "d"])];
+        let (undo_it, source) = tidy(&mut tree, &tabs, Some(answer), ids()).unwrap();
+        assert_eq!(source, Source::Model);
         let rows: Vec<&str> = tree.items.iter().map(Item::id).collect();
         assert_eq!(rows, ["i1", "c", "a", "i2", "b", "d", "f"]);
         assert_eq!(tree.items[0], Item::Separator { id: "i1".into(), name: "Dev".into() });
         assert_eq!(tree.pins, ["p"]);
         assert_eq!(tree.folder("f"), original.folder("f"));
-        assert_eq!(tree.check(), Ok(()));
+        tree.check().unwrap();
         undo(&mut tree, undo_it).unwrap();
         assert_eq!(tree, original);
     }
@@ -268,32 +320,14 @@ mod tests {
     #[test]
     fn undo_refuses_once_the_list_changed() {
         let (mut tree, tabs) = sample();
-        let (u, source) = tidy(&mut tree, &tabs, None, ids()).unwrap();
-        assert_eq!(source, Source::Site);
+        let (u, _) = tidy(&mut tree, &tabs, None, ids()).unwrap();
         tree.close_tab("b");
         assert_eq!(undo(&mut tree, u), Err(TidyError::Stale));
     }
 
-    struct Fixed(Result<Vec<TidyGroup>, String>);
-
-    impl TabGrouper for Fixed {
-        fn group(&self, _: &[TidyTab]) -> Result<Vec<TidyGroup>, String> {
-            self.0.clone()
-        }
-    }
-
     #[test]
-    fn a_bad_or_failed_answer_falls_back_to_sites() {
-        let (tree, tabs) = sample();
-        let good = Fixed(Ok(vec![g("All", &["a", "b", "c", "d"])]));
-        let invented = Fixed(Ok(vec![g("All", &["a", "b", "c", "d", "in"])]));
-        let failed = Fixed(Err("no model".into()));
-        let mut t1 = tree.clone();
-        assert_eq!(tidy(&mut t1, &tabs, Some(&good), ids()).unwrap().1, Source::Model);
-        let mut t2 = tree.clone();
-        assert_eq!(tidy(&mut t2, &tabs, Some(&invented), ids()).unwrap().1, Source::Site);
-        assert_eq!(t2.folder("f").unwrap().children, vec![Child::Tab { id: "in".into() }]);
-        let mut t3 = tree;
-        assert_eq!(tidy(&mut t3, &tabs, Some(&failed), ids()).unwrap().1, Source::Site);
+    fn nothing_loose_is_nothing_to_tidy() {
+        let mut tree = SidebarTree { pins: vec!["p".into()], ..SidebarTree::default() };
+        assert_eq!(tidy(&mut tree, &[], None, ids()).map(|r| r.1), Err(TidyError::NothingToTidy));
     }
 }

@@ -146,6 +146,29 @@ pub fn normalize_chord(chord: &str) -> Option<String> {
     Some(out.join("+"))
 }
 
+/// A chord as the platform hears it, for comparing one spelling with another: modifier and key
+/// aliases resolved, and `ctrl` read as `primary` on Linux and Windows, where it is.
+fn canonical(chord: &str, mac: bool) -> Option<String> {
+    let parts: Vec<&str> = chord
+        .split('+')
+        .map(|p| match p.trim().to_lowercase().as_str() {
+            "cmd" | "command" => "primary",
+            "ctrl" | "control" if !mac => "primary",
+            "control" => "ctrl",
+            "option" | "opt" => "alt",
+            "[" => "bracketleft",
+            "]" => "bracketright",
+            "," => "comma",
+            "-" => "minus",
+            "return" => "enter",
+            "del" => "delete",
+            "esc" => "escape",
+            _ => p,
+        })
+        .collect();
+    normalize_chord(&parts.join("+"))
+}
+
 /// Chords the system keeps, and the editing chords a page's text fields need.
 fn reserved(mac: bool) -> &'static [&'static str] {
     if mac {
@@ -167,8 +190,23 @@ pub enum RebindError {
     Conflict(String),
 }
 
-/// Gives a command a new chord, or none with an empty one. A chord another command answers to
-/// is refused with that command's id, so the editor can offer to swap.
+/// What already answers to `chord` (canonical) other than command `id`.
+fn taken(overrides: &Overrides, id: &str, chord: &str, mac: bool) -> Result<(), RebindError> {
+    if reserved(mac).iter().any(|r| canonical(r, mac).as_deref() == Some(chord)) {
+        return Err(RebindError::Reserved);
+    }
+    if let Some(n) = (1..=9).find(|n| canonical(&format!("primary+{n}"), mac).as_deref() == Some(chord)) {
+        return Err(RebindError::Conflict(format!("tab-{n}")));
+    }
+    let holds = |k: &Key| effective(k.id, mac, overrides).and_then(|c| canonical(&c, mac)).as_deref() == Some(chord);
+    match KEYS.iter().find(|k| k.id != id && holds(k)) {
+        Some(other) => Err(RebindError::Conflict(other.id.into())),
+        None => Ok(()),
+    }
+}
+
+/// Gives a command a new chord, or none with an empty one. A chord another command answers to,
+/// in any spelling, is refused with that command's id, so the editor can offer to swap.
 pub fn rebind(overrides: &mut Overrides, id: &str, chord: &str, mac: bool) -> Result<(), RebindError> {
     if key(id).is_none() {
         return Err(RebindError::UnknownCommand);
@@ -177,17 +215,9 @@ pub fn rebind(overrides: &mut Overrides, id: &str, chord: &str, mac: bool) -> Re
         overrides.insert(id.into(), String::new());
         return Ok(());
     }
-    let chord = normalize_chord(chord).ok_or(RebindError::BadChord)?;
-    if reserved(mac).contains(&chord.as_str()) {
-        return Err(RebindError::Reserved);
-    }
-    if let Some(n) = (1..=9).find(|n| chord == format!("primary+{n}")) {
-        return Err(RebindError::Conflict(format!("tab-{n}")));
-    }
-    if let Some(other) = KEYS.iter().find(|k| k.id != id && effective(k.id, mac, overrides).as_deref() == Some(&chord)) {
-        return Err(RebindError::Conflict(other.id.into()));
-    }
-    if self::chord(id, mac) == Some(chord.as_str()) {
+    let chord = canonical(chord, mac).ok_or(RebindError::BadChord)?;
+    taken(overrides, id, &chord, mac)?;
+    if self::chord(id, mac).and_then(|c| canonical(c, mac)) == Some(chord.clone()) {
         overrides.remove(id);
     } else {
         overrides.insert(id.into(), chord);
@@ -201,15 +231,19 @@ pub fn conflicts(overrides: &Overrides, mac: bool) -> Vec<(String, Vec<&'static 
     let mut by_chord: BTreeMap<String, Vec<&'static str>> = BTreeMap::new();
     for k in KEYS {
         if let Some(c) = effective(k.id, mac, overrides) {
-            by_chord.entry(c).or_default().push(k.id);
+            by_chord.entry(canonical(&c, mac).unwrap_or(c)).or_default().push(k.id);
         }
     }
     by_chord.into_iter().filter(|(_, ids)| ids.len() > 1).collect()
 }
 
-/// Back to the default chord.
-pub fn reset(overrides: &mut Overrides, id: &str) {
+/// Back to the default chord, unless another command has taken it since.
+pub fn reset(overrides: &mut Overrides, id: &str, mac: bool) -> Result<(), RebindError> {
+    if let Some(default) = chord(id, mac).and_then(|c| canonical(c, mac)) {
+        taken(overrides, id, &default, mac)?;
+    }
     overrides.remove(id);
+    Ok(())
 }
 
 /// Commands whose name contains every word of `query`, in table order.
@@ -346,8 +380,7 @@ mod tests {
         // Setting a default back drops the override.
         rebind(&mut o, "tidy", "primary+alt+t", true).unwrap();
         assert!(!o.contains_key("tidy"));
-        reset(&mut o, "new-tab");
-        assert_eq!(rebind(&mut o, "new-tab", "primary+t", true), Err(RebindError::Conflict("new-folder".into())));
+        assert_eq!(reset(&mut o, "new-tab", true), Err(RebindError::Conflict("new-folder".into())));
     }
 
     #[test]
@@ -367,5 +400,33 @@ mod tests {
         assert_eq!(names("space 3"), ["space-3"]);
         assert!(names("zebra").is_empty());
         assert_eq!(names("").len(), KEYS.len());
+    }
+
+    #[test]
+    fn spellings_of_one_chord_conflict_alike() {
+        let mut o = Overrides::new();
+        assert_eq!(rebind(&mut o, "reload", "ctrl+t", false), Err(RebindError::Conflict("new-tab".into())));
+        assert_eq!(rebind(&mut o, "reload", "Control+T", false), Err(RebindError::Conflict("new-tab".into())));
+        assert_eq!(rebind(&mut o, "reload", "ctrl+1", false), Err(RebindError::Conflict("tab-1".into())));
+        assert_eq!(rebind(&mut o, "reload", "ctrl+c", false), Err(RebindError::Reserved));
+        assert_eq!(rebind(&mut o, "reload", "cmd+q", true), Err(RebindError::Reserved));
+        assert_eq!(rebind(&mut o, "reload", "primary+bracketleft", true), Err(RebindError::Conflict("back".into())));
+        assert_eq!(rebind(&mut o, "back", "primary+[", true), Ok(()));
+        assert!(o.is_empty(), "the default in another spelling is no override");
+        o.insert("reload".into(), "ctrl+t".into());
+        assert_eq!(conflicts(&o, false).len(), 1, "a hand-edited spelling still conflicts");
+    }
+
+    #[test]
+    fn a_reset_never_takes_a_chord_another_command_holds() {
+        let mut o = Overrides::new();
+        rebind(&mut o, "new-tab", "primary+alt+n", false).unwrap();
+        rebind(&mut o, "reload", "primary+t", false).unwrap();
+        let before = o.clone();
+        assert_eq!(reset(&mut o, "new-tab", false), Err(RebindError::Conflict("reload".into())));
+        assert_eq!(o, before);
+        rebind(&mut o, "reload", "", false).unwrap();
+        assert_eq!(reset(&mut o, "new-tab", false), Ok(()));
+        assert_eq!(effective("new-tab", false, &o).as_deref(), Some("primary+t"));
     }
 }

@@ -56,7 +56,8 @@ pub const MAX_NAME_CHARS: usize = 40;
 
 /// The fallback that needs no model: one group per host (`www.` aside, subdomains and ports
 /// apart) with two or more tabs, named by the host, in the order hosts first appear; the rest
-/// under "Other" at the end. A tab with no host goes with the tab that opened it.
+/// under "Other" at the end, which also takes the hosts that first appear after the group limit
+/// is reached. A tab with no host goes with the tab that opened it.
 pub fn group_by_site(tabs: &[TidyTab]) -> Vec<TidyGroup> {
     let site = |host: &str| strip_www(&host.trim().to_lowercase()).to_owned();
     let hosts: HashMap<&str, &str> = tabs.iter().map(|t| (t.id.as_str(), t.host.as_str())).collect();
@@ -85,6 +86,12 @@ pub fn group_by_site(tabs: &[TidyTab]) -> Vec<TidyGroup> {
         } else {
             groups.push(TidyGroup { name: s, tabs: ids });
         }
+    }
+    // Past the limit the hosts seen first keep their groups and the rest join Other.
+    let room = if other.is_empty() && groups.len() <= MAX_GROUPS { MAX_GROUPS } else { MAX_GROUPS - 1 };
+    if groups.len() > room {
+        let overflow: Vec<String> = groups.drain(room..).flat_map(|g| g.tabs).collect();
+        other.splice(0..0, overflow);
     }
     if !other.is_empty() {
         groups.push(TidyGroup { name: OTHER_GROUP.into(), tabs: other });
@@ -329,5 +336,16 @@ mod tests {
     fn nothing_loose_is_nothing_to_tidy() {
         let mut tree = SidebarTree { pins: vec!["p".into()], ..SidebarTree::default() };
         assert_eq!(tidy(&mut tree, &[], None, ids()).map(|r| r.1), Err(TidyError::NothingToTidy));
+    }
+
+    #[test]
+    fn grouping_by_site_keeps_to_the_group_limit() {
+        let tabs: Vec<TidyTab> = (0..26).map(|n| t(&format!("x{n}"), &format!("h{}.test", n / 2), None)).collect();
+        let mut tree = SidebarTree { items: tabs.iter().map(|t| Item::tab(t.id.clone())).collect(), ..SidebarTree::default() };
+        let (_, source) = tidy(&mut tree, &tabs, None, ids()).unwrap();
+        assert_eq!(source, Source::Site);
+        let groups = group_by_site(&tabs);
+        assert_eq!(groups.len(), MAX_GROUPS);
+        assert_eq!(groups.last().unwrap(), &g("Other", &["x22", "x23", "x24", "x25"]));
     }
 }

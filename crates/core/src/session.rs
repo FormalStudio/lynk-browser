@@ -137,10 +137,16 @@ impl SessionState {
     }
 
     // shortcut: a counter at u64::MAX hands out its last id again; upgrade if a session ever
-    // gets near 2^64 tabs, which no profile can.
+    // gets near 2^64 tabs or windows, which no profile can.
     pub fn alloc_tab_id(&mut self) -> TabId {
         let id = tab_id(self.next_tab_id);
         self.next_tab_id = self.next_tab_id.saturating_add(1);
+        id
+    }
+
+    pub fn alloc_window_id(&mut self) -> String {
+        let id = format!("w{}", self.next_window_id);
+        self.next_window_id = self.next_window_id.saturating_add(1);
         id
     }
 }
@@ -238,7 +244,8 @@ fn id_number(id: &str) -> u64 {
 /// A restored session has at least one space and one window, every window at least one tab in
 /// the space it shows, every tab exactly once across the session's trees and pages, and
 /// counters ahead of every id in use. A window whose every tab was dropped goes with them,
-/// unless it is the only one.
+/// unless it is the only one, which keeps its folders and separators. The tab on show leads its
+/// window's recency order and has its split's focus.
 pub fn normalize(state: &SessionState) -> SessionState {
     let mut out = SessionState {
         windows: Vec::new(),
@@ -273,14 +280,20 @@ pub fn normalize(state: &SessionState) -> SessionState {
     let first_space = out.spaces[0].id.clone();
     out.space_rules = state.space_rules.iter().filter(|r| space_ids.contains(&r.space_id)).cloned().collect();
 
+    // Rows may not take a tab's id anywhere: tabs move between windows and come back from the
+    // archive.
+    let tab_ids: HashSet<String> = state
+        .windows
+        .iter()
+        .flat_map(|w| w.tabs.iter().map(|t| t.id.clone()))
+        .chain(state.archive.iter().map(|a| a.tab.id.clone()))
+        .collect();
     let mut claimed: HashSet<String> = HashSet::new();
     let mut seen_pages: HashSet<String> = HashSet::new();
+    let mut windows: Vec<(bool, SessionWindow)> = Vec::new();
     for w in &state.windows {
         let tabs: Vec<SessionTab> =
             w.tabs.iter().filter(|t| restorable(t) && seen_pages.insert(t.id.clone())).cloned().collect();
-        if tabs.is_empty() {
-            continue;
-        }
         let known: HashSet<&str> = tabs.iter().map(|t| t.id.as_str()).collect();
         let mut spaces = w.spaces.clone();
         spaces.sidebars.retain(|id, _| space_ids.contains(id));
@@ -292,63 +305,60 @@ pub fn normalize(state: &SessionState) -> SessionState {
         order.extend(spaces.sidebars.keys().filter(|k| **k != spaces.shown).cloned());
         for id in &order {
             if let Some(tree) = spaces.sidebars.get_mut(id) {
-                tree.repair(|t| known.contains(t) && claimed.insert(t.to_owned()));
+                tree.repair(|t| known.contains(t) && claimed.insert(t.to_owned()), &tab_ids, &mut || out.alloc_item_id('i'));
             }
         }
-        let mut tabs = tabs;
         let shown = spaces.tree_mut();
         for t in &tabs {
             if claimed.insert(t.id.clone()) {
                 let _ = shown.insert_tab(&t.id, Dest::Root(usize::MAX));
             }
         }
-        if shown.tab_ids().is_empty() {
+        let had_tabs = !known.is_empty();
+        let window = SessionWindow {
+            id: w.id.clone(),
+            active_id: w.active_id.clone(),
+            width: or_default(w.width, WINDOW_WIDTH),
+            height: or_default(w.height, WINDOW_HEIGHT),
+            spaces,
+            mru: w.mru.clone(),
+            unknown: w.unknown.clone(),
+            tabs,
+        };
+        windows.push((had_tabs, window));
+    }
+    if windows.iter().any(|(had_tabs, _)| *had_tabs) {
+        windows.retain(|(had_tabs, _)| *had_tabs);
+    } else {
+        windows.truncate(1);
+    }
+    let mut windows: Vec<SessionWindow> = windows.into_iter().map(|(_, w)| w).collect();
+    if windows.is_empty() {
+        windows.push(SessionWindow {
+            id: out.alloc_window_id(),
+            width: WINDOW_WIDTH,
+            height: WINDOW_HEIGHT,
+            spaces: WindowSpaces::single(&first_space, SidebarTree::default()),
+            ..SessionWindow::default()
+        });
+    }
+    for w in &mut windows {
+        if w.spaces.tree_mut().tab_ids().is_empty() {
             let id = out.alloc_tab_id();
-            tabs.push(blank_tab(id.clone()));
-            let _ = spaces.tree_mut().insert_tab(&id, Dest::Root(usize::MAX));
+            w.tabs.push(blank_tab(id.clone()));
+            let _ = w.spaces.tree_mut().insert_tab(&id, Dest::Root(usize::MAX));
         }
-        let shown = spaces.tree().expect("space on show has a sidebar");
-        let active_id = [&w.active_id, &shown.last_active]
+        let shown = w.spaces.tree().expect("space on show has a sidebar");
+        let active = [&w.active_id, &shown.last_active]
             .into_iter()
             .find(|id| shown.contains_tab(id))
             .cloned()
             .unwrap_or_else(|| shown.tab_ids()[0].to_owned());
-        let in_window: HashSet<&str> = tabs.iter().map(|t| t.id.as_str()).collect();
-        let mut mru = w.mru.clone();
-        mru.retain(|t| in_window.contains(t));
-        out.windows.push(SessionWindow {
-            id: w.id.clone(),
-            tabs,
-            active_id,
-            width: or_default(w.width, WINDOW_WIDTH),
-            height: or_default(w.height, WINDOW_HEIGHT),
-            spaces,
-            mru,
-            unknown: w.unknown.clone(),
-        });
+        let in_window: HashSet<String> = w.tabs.iter().map(|t| t.id.clone()).collect();
+        w.mru.retain(|t| in_window.contains(t));
+        w.show_tab(&active);
     }
-    if out.windows.is_empty() {
-        let id = out.alloc_tab_id();
-        let first = state.windows.first();
-        let window_id = match first {
-            Some(w) => w.id.clone(),
-            None => {
-                out.next_window_id += 1;
-                format!("w{}", out.next_window_id - 1)
-            }
-        };
-        let mut tree = SidebarTree::default();
-        let _ = tree.insert_tab(&id, Dest::Root(0));
-        out.windows.push(SessionWindow {
-            id: window_id,
-            tabs: vec![blank_tab(id.clone())],
-            active_id: id,
-            width: or_default(first.map_or(0.0, |w| w.width), WINDOW_WIDTH),
-            height: or_default(first.map_or(0.0, |w| w.height), WINDOW_HEIGHT),
-            spaces: WindowSpaces::single(&first_space, tree),
-            ..SessionWindow::default()
-        });
-    }
+    out.windows = windows;
     out
 }
 
@@ -385,36 +395,32 @@ pub struct Placement {
     pub foreground: bool,
 }
 
-/// One tab of the list a page's new tab is placed in.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Slot<'a> {
-    pub id: &'a str,
-    pub pinned: bool,
-}
-
-/// Where Chrome puts a tab a page opened, and whether it is shown. A tab in front goes right
-/// after its opener. One behind it goes after the opener's other tabs still next to it, so a run
-/// of ctrl-clicks reads left to right in click order. Neither lands in the pinned block.
+/// Where Chrome puts a tab a page opened in `tree`, as the list index
+/// [`SidebarTree::add_tab`] takes, and whether it is shown. A tab in front goes right after its
+/// opener's row. One behind it goes after the opener's other tabs still next to it, so a run of
+/// ctrl-clicks reads top to bottom in click order. A pinned opener's tab leads the list.
 /// `openers` maps a tab to the tab that opened it.
 pub fn place_opened_tab(
-    tabs: &[Slot<'_>],
+    tree: &SidebarTree,
     opener_id: &str,
     openers: &HashMap<String, String>,
     disposition: Option<OpenDisposition>,
 ) -> Placement {
     let foreground = disposition != Some(OpenDisposition::BackgroundTab);
-    let Some(from) = tabs.iter().position(|t| t.id == opener_id) else {
-        return Placement { index: tabs.len(), foreground };
-    };
-    let mut index = from + 1;
-    if !foreground {
-        while index < tabs.len() && openers.get(tabs[index].id).is_some_and(|o| o == opener_id) {
+    let index = if tree.is_pinned(opener_id) {
+        0
+    } else if let Some(from) = tree.root_row_of(opener_id) {
+        let mut index = from + 1;
+        while !foreground
+            && let Some(Item::Tab { id }) = tree.items.get(index)
+            && openers.get(id).is_some_and(|o| o == opener_id)
+        {
             index += 1;
         }
-    }
-    while index < tabs.len() && tabs[index].pinned {
-        index += 1;
-    }
+        index
+    } else {
+        tree.items.len()
+    };
     Placement { index, foreground }
 }
 
@@ -461,26 +467,89 @@ mod tests {
                 assert!(seen.insert(id.to_owned()), "{id} in two windows");
             }
             assert!(w.spaces.tree().unwrap().contains_tab(&w.active_id));
+            assert_eq!(w.mru.0.first(), Some(&w.active_id), "window {} recency leads with the tab on show", w.id);
         }
     }
 
     #[test]
     fn a_pages_tab_lands_where_chrome_puts_it() {
-        let slot = |id, pinned| Slot { id, pinned };
-        let tabs = [slot("p", true), slot("a", false), slot("b", false), slot("c", false)];
+        let list = |ids: &[&str]| SidebarTree {
+            pins: vec!["p".into()],
+            items: ids.iter().map(|id| Item::tab(*id)).collect(),
+            ..SidebarTree::default()
+        };
+        let tabs = list(&["a", "b", "c"]);
         let none = HashMap::new();
         let at = |index, foreground| Placement { index, foreground };
-        assert_eq!(place_opened_tab(&tabs, "a", &none, Some(OpenDisposition::ForegroundTab)), at(2, true));
-        assert_eq!(place_opened_tab(&tabs, "a", &none, Some(OpenDisposition::Popup)), at(2, true));
-        assert_eq!(place_opened_tab(&tabs, "a", &none, None), at(2, true));
-        assert_eq!(place_opened_tab(&tabs, "a", &none, Some(OpenDisposition::BackgroundTab)), at(2, false));
+        assert_eq!(place_opened_tab(&tabs, "a", &none, Some(OpenDisposition::ForegroundTab)), at(1, true));
+        assert_eq!(place_opened_tab(&tabs, "a", &none, Some(OpenDisposition::Popup)), at(1, true));
+        assert_eq!(place_opened_tab(&tabs, "a", &none, None), at(1, true));
+        assert_eq!(place_opened_tab(&tabs, "a", &none, Some(OpenDisposition::BackgroundTab)), at(1, false));
         // Two earlier ctrl-clicks from a sit right after it: the third goes after them.
-        let run = [slot("a", false), slot("x", false), slot("y", false), slot("c", false)];
+        let run = list(&["a", "x", "y", "c"]);
         let openers: HashMap<String, String> = [("x", "a"), ("y", "a")].map(|(k, v)| (k.into(), v.into())).into();
         assert_eq!(place_opened_tab(&run, "a", &openers, Some(OpenDisposition::BackgroundTab)), at(3, false));
         assert_eq!(place_opened_tab(&run, "a", &openers, Some(OpenDisposition::ForegroundTab)), at(1, true));
-        assert_eq!(place_opened_tab(&tabs, "p", &none, Some(OpenDisposition::ForegroundTab)), at(1, true));
-        assert_eq!(place_opened_tab(&tabs, "gone", &none, Some(OpenDisposition::BackgroundTab)), at(4, false));
+        assert_eq!(place_opened_tab(&tabs, "p", &none, Some(OpenDisposition::ForegroundTab)), at(0, true));
+        assert_eq!(place_opened_tab(&tabs, "gone", &none, Some(OpenDisposition::BackgroundTab)), at(3, false));
+    }
+
+    #[test]
+    fn a_pages_tab_lands_after_its_opener_across_separators() {
+        let mut tree = SidebarTree {
+            items: vec![Item::Separator { id: "s".into(), name: "Work".into() }, Item::tab("a"), Item::tab("c")],
+            ..SidebarTree::default()
+        };
+        let at = place_opened_tab(&tree, "a", &HashMap::new(), Some(OpenDisposition::ForegroundTab));
+        tree.add_tab("n", Some("a"), at.index).unwrap();
+        let rows: Vec<&str> = tree.items.iter().map(Item::id).collect();
+        assert_eq!(rows, ["s", "a", "n", "c"]);
+    }
+
+    #[test]
+    fn a_window_left_without_tabs_keeps_its_folders_and_separators() {
+        let mut w = window("w1", vec![tab("t1", "about:blank")], "t1", 0.0, 0.0);
+        let mut tree = SidebarTree::default();
+        tree.insert_tab("t1", Dest::Root(0)).unwrap();
+        tree.new_folder("i1", crate::sidebar_tree::FolderKind::Plain, "Daily", "", None, 0).unwrap();
+        tree.add_separator_below("t1", "i2", "Later").unwrap();
+        w.spaces = WindowSpaces::single("s1", tree);
+        let spaces = vec![Space { id: "s1".into(), ..Space::default() }];
+        let out = normalize(&SessionState { windows: vec![w], spaces, ..SessionState::default() });
+        let tree = out.windows[0].spaces.tree().unwrap();
+        assert!(tree.folder("i1").is_some());
+        assert!(tree.items.iter().any(|i| i.id() == "i2"));
+        check_all(&out);
+    }
+
+    #[test]
+    fn a_null_pin_drops_alone() {
+        let (s, _) = load(r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[{"id":"t1","url":"https://a.test/"}],
+            "activeId":"t1","spaces":{"shown":"s1","sidebars":{"s1":{"pins":[null,"t1",7]}}}}],
+            "spaces":[{"id":"s1","name":"Personal"}]}}"#);
+        assert_eq!(s.windows[0].id, "w1");
+        assert_eq!(s.windows[0].spaces.tree().unwrap().pins, ["t1"]);
+    }
+
+    #[test]
+    fn a_row_named_like_a_tab_gives_way_to_the_tab() {
+        let mut w = window("w1", vec![tab("t1", "https://a.test/"), tab("t2", "https://b.test/")], "t2", 0.0, 0.0);
+        let tree = SidebarTree {
+            items: vec![Item::Separator { id: "t1".into(), name: "Odd".into() }, Item::tab("t2")],
+            ..SidebarTree::default()
+        };
+        w.spaces = WindowSpaces::single("s1", tree);
+        let out = normalize(&SessionState { windows: vec![w], ..SessionState::default() });
+        let tree = out.windows[0].spaces.tree().unwrap();
+        assert!(tree.contains_tab("t1"), "page t1 has a row");
+        assert_eq!(tree.items.iter().filter(|i| i.id() == "t1").count(), 1);
+        check_all(&out);
+    }
+
+    #[test]
+    fn an_empty_session_at_the_last_window_number_opens() {
+        let out = normalize(&SessionState { next_window_id: u64::MAX, ..SessionState::default() });
+        assert_eq!(out.windows.len(), 1);
     }
 
     #[test]
@@ -629,7 +698,7 @@ mod tests {
     fn recency_survives_closing_and_reopening_the_app() {
         let (mut s, _) = load(include_str!("../fixtures/session-v2.json"));
         for id in ["t5", "t3", "t1"] {
-            s.windows[0].mru.shown(id);
+            s.windows[0].show_tab(id);
         }
         s.windows[0].mru.shown("gone");
         let dir = tempfile::tempdir().unwrap();

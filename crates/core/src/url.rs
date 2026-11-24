@@ -22,8 +22,10 @@ const COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
 static SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)^([a-z][a-z0-9+.-]*):(.*)$").unwrap());
 static IPV4: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d{1,3}(\.\d{1,3}){3}$").unwrap());
 
-/// Schemes that load without `//`. Any other `word:` is a host and port or a user name.
-const BARE_SCHEMES: &[&str] = &["about", "data", "mailto", "tel", "view-source", "blob", "magnet"];
+/// Schemes that load as typed, `//` or not (`file:/tmp/a.html`, `https:example.com`). Any other
+/// `word:` without `//` is a host and port or a user name.
+const BARE_SCHEMES: &[&str] =
+    &["http", "https", "file", "about", "data", "mailto", "tel", "view-source", "blob", "magnet"];
 /// Names no public suffix lists that developers type anyway.
 const LOCAL_SUFFIXES: &[&str] = &["localhost", "test", "local", "internal"];
 
@@ -259,6 +261,8 @@ mod tests {
         assert_eq!(go("javascript:alert(1)"), format!("{PREFIX}javascript%3Aalert(1)"));
         assert_eq!(go("JavaScript://x.test"), format!("{PREFIX}JavaScript%3A%2F%2Fx.test"));
         assert_eq!(go("data:text/html,<b>hi</b>"), "data:text/html,<b>hi</b>");
+        assert_eq!(go("file:/tmp/report.html"), "file:/tmp/report.html");
+        assert_eq!(go("https:example.com"), "https:example.com");
         let long = "a".repeat(4000);
         assert_eq!(go(&long), format!("{PREFIX}{long}"));
         let long_host = format!("{}.com", "a".repeat(4000));

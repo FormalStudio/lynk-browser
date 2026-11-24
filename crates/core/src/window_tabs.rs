@@ -31,17 +31,36 @@ impl SessionWindow {
         Ok(())
     }
 
+    /// Puts a tab of the space on show on show: it leads the recency order and gets its split's
+    /// focus. An empty id shows nothing, for a space with no tabs. `false` for a tab not in the
+    /// space on show.
+    pub fn show_tab(&mut self, tab_id: &str) -> bool {
+        if tab_id.is_empty() {
+            self.active_id.clear();
+            return true;
+        }
+        let tree = self.spaces.tree_mut();
+        if !tree.contains_tab(tab_id) {
+            return false;
+        }
+        tree.focus_tab(tab_id);
+        self.mru.shown(tab_id);
+        self.active_id = tab_id.to_owned();
+        true
+    }
+
     /// Takes a tab's page out of the window and its tree. The tab on show hands over to its
-    /// neighbour in the sidebar.
+    /// neighbour in the sidebar on show, or to nothing when that sidebar is left empty.
     fn take(&mut self, tab_id: &str) -> Option<SessionTab> {
         let at = self.tabs.iter().position(|t| t.id == tab_id)?;
-        let order: Vec<TabId> = self.spaces.tab_ids().into_iter().map(str::to_owned).collect();
+        let order: Vec<TabId> =
+            self.spaces.tree().map(|t| t.tab_ids()).unwrap_or_default().into_iter().map(str::to_owned).collect();
         for tree in self.spaces.sidebars.values_mut() {
             tree.close_tab(tab_id);
         }
         self.mru.closed(tab_id);
         if self.active_id == tab_id {
-            self.active_id = neighbour(&order, tab_id).unwrap_or_default();
+            self.show_tab(&neighbour(&order, tab_id).unwrap_or_default());
         }
         Some(self.tabs.remove(at))
     }
@@ -71,7 +90,7 @@ pub fn move_tab_in(state: &mut SessionState, tab_id: &str, to_window: &str, dest
     let target = &mut state.windows[target_at];
     let space = target.spaces.shown.clone();
     target.insert_tab(tab, &space, dest)?;
-    target.active_id = tab_id.to_owned();
+    target.show_tab(tab_id);
     Ok(())
 }
 
@@ -98,7 +117,7 @@ pub fn fresh_start(stored: &SessionState, homepage: &str) -> SessionState {
     window
         .insert_tab(SessionTab { url: homepage.to_owned(), ..blank_tab(id.clone()) }, &shown, Dest::Root(usize::MAX))
         .expect("a fresh id is new");
-    window.active_id = id;
+    window.show_tab(&id);
     s.windows = vec![window];
     s
 }
@@ -106,8 +125,11 @@ pub fn fresh_start(stored: &SessionState, homepage: &str) -> SessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Lcg;
+    use crate::mru::Mru;
     use crate::session::open;
-    use crate::sidebar_tree::FolderKind;
+    use crate::sidebar_tree::{FolderKind, SidebarTree};
+    use crate::spaces::Space;
 
     fn fixture() -> SessionState {
         let dir = tempfile::tempdir().unwrap();
@@ -181,5 +203,148 @@ mod tests {
         assert_eq!(fresh.next_tab_id, 9);
         assert_eq!(normalize(&fresh), fresh);
         pages_match_trees(&fresh);
+    }
+
+    /// One window showing space s1 with a, b, c; space s2 holds h. Recency a, c, b.
+    fn two_spaces() -> SessionState {
+        let mut shown = SidebarTree::default();
+        for t in ["a", "b", "c"] {
+            shown.insert_tab(t, Dest::Root(usize::MAX)).unwrap();
+        }
+        let mut hidden = SidebarTree::default();
+        hidden.insert_tab("h", Dest::Root(0)).unwrap();
+        let spaces = WindowSpaces { shown: "s1".into(), sidebars: BTreeMap::from([("s1".into(), shown), ("s2".into(), hidden)]) };
+        let window = SessionWindow {
+            id: "w1".into(),
+            tabs: ["a", "b", "c", "h"].map(blank_tab).into(),
+            active_id: "a".into(),
+            spaces,
+            mru: Mru(["a", "c", "b"].map(String::from).into()),
+            ..SessionWindow::default()
+        };
+        let spaces = ["s1", "s2"].map(|id| Space { id: id.into(), ..Space::default() }).into();
+        SessionState { windows: vec![window], spaces, ..SessionState::default() }
+    }
+
+    /// The rules a window keeps between operations: pages and rows agree; the tab on show is in
+    /// the space on show (nothing is on show only when that space is empty), heads the recency
+    /// order, and has its split's focus.
+    fn check_window(w: &SessionWindow) -> Result<(), String> {
+        let mut pages: Vec<&str> = w.tabs.iter().map(|t| t.id.as_str()).collect();
+        let mut rows = w.spaces.tab_ids();
+        pages.sort_unstable();
+        rows.sort_unstable();
+        if pages != rows {
+            return Err(format!("pages {pages:?} and rows {rows:?} differ"));
+        }
+        let shown = w.spaces.tree().map(SidebarTree::tab_ids).unwrap_or_default();
+        if w.active_id.is_empty() {
+            return if shown.is_empty() { Ok(()) } else { Err(format!("nothing on show beside {shown:?}")) };
+        }
+        if !shown.contains(&w.active_id.as_str()) {
+            return Err(format!("{} on show from a hidden space", w.active_id));
+        }
+        if w.mru.0.first() != Some(&w.active_id) {
+            return Err(format!("recency {:?} does not lead with {}", w.mru.0, w.active_id));
+        }
+        match w.spaces.tree().and_then(|t| t.split_of(&w.active_id)) {
+            Some(s) if s.focused() != w.active_id => Err(format!("split {} focuses {}", s.id, s.focused())),
+            _ => Ok(()),
+        }
+    }
+
+    #[test]
+    fn closing_the_last_tab_on_show_shows_nothing_from_a_hidden_space() {
+        let mut s = two_spaces();
+        for t in ["b", "c", "a"] {
+            s.close_tab(t);
+        }
+        assert_eq!(s.windows[0].active_id, "");
+        check_window(&s.windows[0]).unwrap();
+    }
+
+    #[test]
+    fn a_neighbour_in_a_split_comes_on_show_with_the_splits_focus() {
+        let mut s = two_spaces();
+        let tree = s.windows[0].spaces.tree_mut();
+        tree.make_split("x", "b", "c").unwrap();
+        tree.focus_tab("c");
+        s.close_tab("a");
+        assert_eq!(s.windows[0].active_id, "b");
+        check_window(&s.windows[0]).unwrap();
+    }
+
+    #[test]
+    fn the_tab_that_comes_on_show_leads_the_recency_order() {
+        let mut s = two_spaces();
+        s.close_tab("a");
+        assert_eq!(s.windows[0].mru.0, ["b", "c"]);
+        move_tab_in(&mut s, "c", "w1", Dest::Root(0)).unwrap();
+        assert_eq!(s.windows[0].mru.0, ["c", "b"]);
+        check_window(&s.windows[0]).unwrap();
+    }
+
+    #[test]
+    fn no_walk_of_window_operations_strands_the_tab_on_show() {
+        let mut s = two_spaces();
+        let mut second = s.windows[0].clone();
+        second.id = "w2".into();
+        second.tabs.clear();
+        second.active_id.clear();
+        second.mru = Mru::default();
+        second.spaces.sidebars.values_mut().for_each(|t| *t = SidebarTree::default());
+        s.windows.push(second);
+        s.next_tab_id = 1;
+        let spaces = s.spaces.clone();
+        let mut rng = Lcg(0x5eed);
+        for step in 0..5000 {
+            let wi = rng.below(2);
+            let all: Vec<String> = s.windows[wi].tabs.iter().map(|t| t.id.clone()).collect();
+            let shown: Vec<String> = s.windows[wi].spaces.tree().map(|t| t.tab_ids()).unwrap_or_default().into_iter().map(String::from).collect();
+            let any = all.get(rng.below(all.len())).cloned().unwrap_or_default();
+            let on_show = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
+            let other = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
+            let n = rng.below(8);
+            let op = rng.below(7);
+            match op {
+                0 | 1 => {
+                    let id = s.alloc_tab_id();
+                    let w = &mut s.windows[wi];
+                    let front = w.active_id.clone();
+                    if w.add_tab(blank_tab(id.clone()), Some(&front), n).is_ok() {
+                        w.show_tab(&id);
+                    }
+                }
+                2 => {
+                    s.close_tab(&any);
+                }
+                3 => {
+                    let to = s.windows[rng.below(2)].id.clone();
+                    let _ = move_tab_in(&mut s, &any, &to, Dest::Root(n));
+                }
+                4 => {
+                    let id = s.alloc_item_id('i');
+                    let w = &mut s.windows[wi];
+                    // A new split comes on show, its first half focused.
+                    if w.spaces.tree_mut().make_split(&id, &on_show, &other).is_ok() {
+                        w.show_tab(&on_show);
+                    }
+                }
+                5 => {
+                    s.windows[wi].show_tab(&on_show);
+                }
+                _ => {
+                    let w = &mut s.windows[wi];
+                    let mut active = w.active_id.clone();
+                    if w.spaces.switch(&spaces, 1 + n % 2, true, &mut active) == Ok(true) {
+                        w.show_tab(&active);
+                    }
+                }
+            }
+            for w in &s.windows {
+                check_window(w).unwrap_or_else(|e| panic!("step {step} op {op} in {}: {e}", w.id));
+            }
+        }
+        assert!(s.windows.iter().map(|w| w.tabs.len()).sum::<usize>() > 10);
     }
 }

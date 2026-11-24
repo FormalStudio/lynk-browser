@@ -220,7 +220,7 @@ struct TabLoc {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SidebarTree {
-    #[serde(deserialize_with = "null_default")]
+    #[serde(deserialize_with = "lenient_items")]
     pub pins: Vec<String>,
     #[serde(deserialize_with = "lenient_items")]
     pub items: Vec<Item>,
@@ -705,6 +705,17 @@ impl SidebarTree {
     /// The index in the list of a row sitting directly in it.
     pub fn row_index(&self, id: &str) -> Option<usize> {
         self.items.iter().position(|i| i.id() == id)
+    }
+
+    /// The index in the list of the row a tab sits in: its own, its split's or its folder's.
+    /// `None` for a pinned tab or one not in the tree.
+    pub fn root_row_of(&self, tab: &str) -> Option<usize> {
+        let loc = self.locate(tab)?;
+        match loc.container {
+            Container::Root => Some(loc.index),
+            Container::Folder(at) => Some(at),
+            Container::Pins => None,
+        }
     }
 
     /// The row directly above a row in the list, `None` at the top.

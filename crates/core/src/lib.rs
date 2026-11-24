@@ -67,6 +67,18 @@ pub(crate) fn lenient_items<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D
     Ok(raw.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
 }
 
+/// A seeded generator for the random walks, so a failing walk replays exactly.
+#[cfg(test)]
+pub(crate) struct Lcg(pub u64);
+
+#[cfg(test)]
+impl Lcg {
+    pub fn below(&mut self, n: usize) -> usize {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((self.0 >> 33) as usize) % n.max(1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

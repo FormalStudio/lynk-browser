@@ -6,14 +6,24 @@ use std::collections::HashSet;
 use crate::sidebar_tree::{Child, Item, SidebarTree, Split};
 
 impl SidebarTree {
-    /// Tabs `keep` rejects and repeats go, a split left with one tab becomes that tab, and a
-    /// repeated separator, folder or split id keeps its first row (a split's tabs stay as plain
-    /// rows).
-    pub(crate) fn repair(&mut self, mut keep: impl FnMut(&str) -> bool) {
+    /// Tabs `keep` rejects and repeats go, and a split left with one tab becomes that tab. A
+    /// separator, folder or split whose id is a tab's (one of `tab_ids`) or an earlier row's gets
+    /// a fresh one from `new_id`, so every tab can still have a row.
+    pub(crate) fn repair(
+        &mut self,
+        mut keep: impl FnMut(&str) -> bool,
+        tab_ids: &HashSet<String>,
+        new_id: &mut impl FnMut() -> String,
+    ) {
         let mut seen: HashSet<String> = HashSet::new();
         let mut take = |id: &str| keep(id) && seen.insert(id.to_owned());
         self.pins.retain(|id| take(id));
-        let mut rows = HashSet::new();
+        let mut rows: HashSet<String> = HashSet::new();
+        let mut row_id = |id: String| {
+            let id = if tab_ids.contains(&id) || rows.contains(&id) { new_id() } else { id };
+            rows.insert(id.clone());
+            id
+        };
         let mut items = Vec::new();
         for item in std::mem::take(&mut self.items) {
             match item {
@@ -22,16 +32,10 @@ impl SidebarTree {
                         items.push(Item::Tab { id });
                     }
                 }
-                Item::Separator { id, name } => {
-                    if rows.insert(id.clone()) {
-                        items.push(Item::Separator { id, name });
-                    }
-                }
-                Item::Split(s) => items.extend(repair_split(s, &mut take, &mut rows).into_iter().map(Child::into_item)),
+                Item::Separator { id, name } => items.push(Item::Separator { id: row_id(id), name }),
+                Item::Split(s) => items.extend(repair_split(s, &mut take, &mut row_id).into_iter().map(Child::into_item)),
                 Item::Folder(mut f) => {
-                    if !rows.insert(f.id.clone()) {
-                        continue;
-                    }
+                    f.id = row_id(f.id);
                     let mut children = Vec::new();
                     for child in std::mem::take(&mut f.children) {
                         match child {
@@ -40,7 +44,7 @@ impl SidebarTree {
                                     children.push(Child::Tab { id });
                                 }
                             }
-                            Child::Split(s) => children.extend(repair_split(s, &mut take, &mut rows)),
+                            Child::Split(s) => children.extend(repair_split(s, &mut take, &mut row_id)),
                         }
                     }
                     f.children = children;
@@ -88,9 +92,10 @@ impl SidebarTree {
     }
 }
 
-fn repair_split(s: Split, take: &mut impl FnMut(&str) -> bool, rows: &mut HashSet<String>) -> Vec<Child> {
+fn repair_split(mut s: Split, take: &mut impl FnMut(&str) -> bool, row_id: &mut impl FnMut(String) -> String) -> Vec<Child> {
     let kept: Vec<String> = s.tabs.iter().filter(|t| take(t)).cloned().collect();
-    if kept.len() == 2 && rows.insert(s.id.clone()) {
+    if kept.len() == 2 {
+        s.id = row_id(s.id);
         return vec![Child::Split(s)];
     }
     kept.into_iter().map(|id| Child::Tab { id }).collect()
@@ -103,6 +108,7 @@ mod tests {
     use super::*;
     use crate::sidebar_tree::{Dest, Folder, FolderKind, Half, Ratio};
     use crate::spaces::{Space, WindowSpaces};
+    use crate::Lcg;
 
     fn split(id: &str, a: &str, b: &str) -> Split {
         Split { id: id.into(), tabs: [a.into(), b.into()], ratio: Ratio::EVEN, focus: Half::First }
@@ -125,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn repair_drops_repeats_and_unknown_tabs_and_heals_splits() {
+    fn repair_drops_repeats_and_unknown_tabs_and_renames_clashing_rows() {
         let mut t = SidebarTree {
             pins: vec!["a".into(), "a".into()],
             items: vec![
@@ -135,14 +141,21 @@ mod tests {
                 folder("f1", vec![Child::Split(split("x2", "gone", "d")), ctab("e")]),
                 folder("f1", vec![ctab("z")]),
                 Item::Split(split("x1", "y", "w")),
+                Item::Separator { id: "q".into(), name: String::new() },
             ],
             last_active: String::new(),
         };
-        t.repair(|id| id != "gone");
+        let tabs: HashSet<String> = ["a", "b", "c", "d", "e", "z", "y", "w", "q"].map(String::from).into();
+        let mut n = 0;
+        t.repair(|id| id != "gone", &tabs, &mut || {
+            n += 1;
+            format!("new{n}")
+        });
         assert_eq!(t.pins, ["a"]);
         let rows: Vec<&str> = t.items.iter().map(Item::id).collect();
-        assert_eq!(rows, ["b", "c", "f1", "x1"], "the first x1 broke up, so the second keeps its id");
+        assert_eq!(rows, ["b", "c", "f1", "new1", "x1", "new2"], "a second f1 and a row named like tab q get new ids");
         assert_eq!(t.folder("f1").unwrap().children, vec![ctab("d"), ctab("e")]);
+        assert_eq!(t.folder("new1").unwrap().children, vec![ctab("z")]);
         assert_eq!(t.check(), Ok(()));
     }
 
@@ -157,16 +170,6 @@ mod tests {
         assert!(broken(vec![], vec![Item::Split(split("x", "a", "a"))]).check().is_err());
         let sep = || Item::Separator { id: "s".into(), name: String::new() };
         assert!(broken(vec![], vec![sep(), sep()]).check().is_err());
-    }
-
-    /// A seeded generator, so a failing walk replays exactly.
-    struct Lcg(u64);
-
-    impl Lcg {
-        fn below(&mut self, n: usize) -> usize {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            ((self.0 >> 33) as usize) % n.max(1)
-        }
     }
 
     #[test]

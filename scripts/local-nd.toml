@@ -1,0 +1,11 @@
+# Builds against the nd checkout next to this repo instead of the pinned rev:
+#   cargo <subcommand> --config scripts/local-nd.toml ...
+# The flag goes after the subcommand; before it, clippy and other external subcommands drop it.
+# It rewrites Cargo.lock in the working tree; never commit that.
+[patch."https://github.com/FormalStudio/NativeDesktop"]
+nd = { path = "../nativedesktop/crates/nd" }
+nd-ipc = { path = "../nativedesktop/crates/nd-ipc" }
+nd-test = { path = "../nativedesktop/crates/nd-test" }
+ndshell = { path = "../nativedesktop/crates/ndshell" }
+nd-data = { path = "../nativedesktop/crates/nd-data" }
+nd-settings = { path = "../nativedesktop/crates/nd-settings" }

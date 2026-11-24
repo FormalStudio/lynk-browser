@@ -24,8 +24,9 @@ On the macbook, outside a Nix shell's SDK. Prefix every cargo command that build
 - Shell unit: `<env> cargo test -p lynk --lib`
 - Shell drive (real windows, real pointer, one at a time):
   `<env> ND_REAL=1 cargo test -p lynk --test shell_drive -- --test-threads=1`
-- Against an unpushed nd, without editing manifests, add
-  `--config 'patch."https://github.com/FormalStudio/NativeDesktop".nd.path="../nativedesktop/crates/nd"'`
+- Against an unpushed nd, without editing manifests, add `--config scripts/local-nd.toml` after the
+  subcommand (`cargo clippy --config ...`; before it, clippy drops the flag and checks the pin).
+  It rewrites `Cargo.lock` in the working tree; never commit that.
 - Linux (headless Hyprland on g815): `scripts/linux-gate sync`, then `scripts/linux-gate drive 3`.
   Until that script lands on `main`, use nd's `scripts/linux-gate` from the nd checkout.
 - Windows (Windows 11 guest on g815): `scripts/windows-vm up`, `scripts/windows-vm sync`,

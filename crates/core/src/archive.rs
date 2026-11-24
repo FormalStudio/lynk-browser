@@ -1,6 +1,10 @@
 //! Auto-archive: which loose tabs are due under the user's rule, and the archive list that can
 //! put each one back where it was. Pinned tabs, tabs in folders or splits, audible tabs and the
 //! tab on show never archive. It does not track when tabs were shown; the shell passes that in.
+//!
+//! A restored tab goes under the nearest row that was above it and is still there. With none
+//! left it goes to the top of the list, ahead of rows added since, the way Arc puts a tab back
+//! at the top of the unpinned tabs.
 
 use std::collections::{HashMap, HashSet};
 
@@ -8,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::null_default;
-use crate::session::{SessionState, SessionTab, TabId, window_of_tab};
+use crate::session::{SessionState, SessionTab, TabId, row_ids};
 use crate::sidebar_tree::{Dest, SidebarTree};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -122,8 +126,13 @@ pub fn restore(state: &mut SessionState, at: usize) -> Option<(String, TabId)> {
     if at >= state.archive.len() || state.windows.is_empty() {
         return None;
     }
-    let mut entry = state.archive.remove(at);
-    if entry.tab.id.is_empty() || window_of_tab(state, &entry.tab.id).is_some() {
+    let mut entry = state.archive[at].clone();
+    let taken = |id: &str| {
+        state.windows.iter().any(|w| {
+            w.tab(id).is_some() || w.spaces.sidebars.values().any(|t| t.items.iter().any(|i| row_ids(i).contains(&id)))
+        })
+    };
+    if entry.tab.id.is_empty() || taken(&entry.tab.id) {
         entry.tab.id = state.alloc_tab_id();
     }
     let space_known = state.spaces.iter().any(|s| s.id == entry.space_id);
@@ -138,14 +147,20 @@ pub fn restore(state: &mut SessionState, at: usize) -> Option<(String, TabId)> {
         .map_or(0, |above| above + 1);
     let id = entry.tab.id.clone();
     w.insert_tab(entry.tab, &space, Dest::Root(index)).ok()?;
-    Some((w.id.clone(), id))
+    if w.active_id.is_empty() && space == w.spaces.shown {
+        w.show_tab(&id);
+    }
+    let window = w.id.clone();
+    // Only a tab that made it back leaves the archive.
+    state.archive.remove(at);
+    Some((window, id))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::{blank_tab, normalize};
-    use crate::sidebar_tree::{Child, FolderKind};
+    use crate::sidebar_tree::{Child, FolderKind, Item};
 
     fn state() -> SessionState {
         let mut s = normalize(&SessionState::default());
@@ -287,5 +302,68 @@ mod tests {
             }
             assert_eq!(s.windows[0].spaces.tab_ids(), ["a", "b", "c", "d", "e", "f"], "restored as {order:?}");
         }
+    }
+
+    #[test]
+    fn an_archived_tab_keeps_its_id_from_a_renamed_row_and_comes_back() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("session.json"),
+            r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[{"id":"t5","url":"https://a.test/"}],"activeId":"t5",
+                "spaces":{"shown":"s1","sidebars":{"s1":{"items":[{"type":"separator","id":"t1","name":"Later"},
+                {"type":"tab","id":"t5"}]}}}}],
+                "spaces":[{"id":"s1","name":"Personal"}],"nextItemId":2,
+                "archive":[{"tab":{"id":"i2","url":"https://b.test/"},"windowId":"w1","spaceId":"s1","above":[]}]}}"#,
+        )
+        .unwrap();
+        let mut s = crate::session::open(dir.path()).get().as_ref().clone();
+        let separator = s.windows[0].spaces.tree().unwrap().items[0].id().to_owned();
+        assert_ne!(separator, "i2", "the renamed separator does not take the archived tab's id");
+        assert_eq!(restore(&mut s, 0), Some(("w1".into(), "i2".into())));
+        let tree = s.windows[0].spaces.tree().unwrap();
+        assert!(tree.contains_tab("i2"));
+        assert!(s.windows[0].tab("i2").is_some());
+        assert!(s.archive.is_empty());
+    }
+
+    #[test]
+    fn a_restore_never_drops_the_entry_it_cannot_place() {
+        let mut s = normalize(&SessionState::default());
+        s.windows[0].spaces.tree_mut().items.push(Item::Separator { id: "x".into(), name: String::new() });
+        s.archive.push(ArchivedTab { tab: blank_tab("x"), window_id: s.windows[0].id.clone(), ..ArchivedTab::default() });
+        let (_, id) = restore(&mut s, 0).expect("a row holding the id gives the tab a new one");
+        assert_ne!(id, "x");
+        assert!(s.windows[0].spaces.tree().unwrap().contains_tab(&id));
+        assert!(s.archive.is_empty());
+    }
+
+    #[test]
+    fn a_tab_restored_into_an_empty_space_on_show_comes_on_show() {
+        let mut s = normalize(&SessionState::default());
+        let only = s.windows[0].active_id.clone();
+        s.windows[0].add_tab(blank_tab("b"), None, 0).unwrap();
+        archive_tabs(&mut s, &["b".into()], 0);
+        s.close_tab(&only);
+        assert_eq!(s.windows[0].active_id, "");
+        restore(&mut s, 0).unwrap();
+        assert_eq!(s.windows[0].active_id, "b");
+        assert_eq!(s.windows[0].mru.0, ["b"]);
+    }
+
+    #[test]
+    fn an_archived_tab_sharing_a_live_tabs_id_loads_under_a_new_one() {
+        let mut state = normalize(&SessionState::default());
+        let live = state.windows[0].active_id.clone();
+        state.archive = vec![
+            ArchivedTab { tab: blank_tab(live.clone()), ..ArchivedTab::default() },
+            ArchivedTab { tab: blank_tab("z"), ..ArchivedTab::default() },
+            ArchivedTab { tab: blank_tab("z"), ..ArchivedTab::default() },
+        ];
+        let out = normalize(&state);
+        let ids: Vec<&str> = out.archive.iter().map(|e| e.tab.id.as_str()).collect();
+        assert_ne!(ids[0], live);
+        assert_eq!(ids[1], "z");
+        assert_ne!(ids[2], "z");
+        assert_ne!(ids[0], ids[2]);
     }
 }

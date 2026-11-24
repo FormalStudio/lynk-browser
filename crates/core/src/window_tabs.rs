@@ -129,6 +129,7 @@ mod tests {
     use super::*;
     use crate::Lcg;
     use crate::mru::Mru;
+    use crate::archive::{archive_tabs, restore};
     use crate::session::{open, row_ids, tab_number};
     use crate::sidebar_tree::{FolderKind, SidebarTree};
     use crate::spaces::Space;
@@ -286,13 +287,20 @@ mod tests {
         check_window(&s.windows[0]).unwrap();
     }
 
-    /// Every window's rules, and across the session: no two rows share an id, and no row id is
-    /// a tab's id, now or one the session could hand out later.
+    /// Every window's rules, and across the session: a tab is in exactly one of a window's
+    /// sidebars and the archive, no two rows share an id, and no row id is a tab's id, live,
+    /// archived, or one the session could hand out later.
     fn check_session(s: &SessionState) -> Result<(), String> {
         for w in &s.windows {
             check_window(w).map_err(|e| format!("in {}: {e}", w.id))?;
         }
-        let tabs: HashSet<&str> = s.windows.iter().flat_map(|w| w.tabs.iter().map(|t| t.id.as_str())).collect();
+        let mut tabs: HashSet<&str> = HashSet::new();
+        let placed = s.windows.iter().flat_map(|w| w.spaces.tab_ids()).chain(s.archive.iter().map(|a| a.tab.id.as_str()));
+        for id in placed {
+            if !tabs.insert(id) {
+                return Err(format!("tab {id} is in more than one of the sidebars and the archive"));
+            }
+        }
         let mut rows = HashSet::new();
         let trees = s.windows.iter().flat_map(|w| w.spaces.sidebars.values());
         for id in trees.flat_map(|t| t.items.iter().flat_map(row_ids)) {
@@ -313,7 +321,8 @@ mod tests {
     }
 
     /// Two windows and two spaces from a file with clashing ids: a separator and a folder named
-    /// like tabs, a split id twice, a page in two windows, a null pin and null counters.
+    /// like tabs, a split id twice, a page in two windows, a null pin, null counters, an archived
+    /// tab named like the next row id and one whose id a live tab holds.
     const MALFORMED: &str = r#"{"version":3,"data":{
         "windows":[
             {"id":"w1","tabs":[{"id":"t1","url":"https://a.test/"},{"id":"t2","url":"https://b.test/"},
@@ -328,6 +337,8 @@ mod tests {
              "activeId":"t5","spaces":{"shown":"s1","sidebars":{"s1":{"items":[
                 {"type":"separator","id":"t5","name":""},{"type":"tab","id":"t5"}]}}}}],
         "spaces":[{"id":"s1","name":"Personal"},{"id":"s2","name":"Work"}],
+        "archive":[{"tab":{"id":"i2","url":"https://f.test/"},"windowId":"w1","spaceId":"s1","above":["t2"]},
+            {"tab":{"id":"t1","url":"https://a.test/"},"windowId":"w9","spaceId":"s9"}],
         "nextTabId":null,"nextItemId":null}}"#;
 
     /// Sol's: a window with no tabs and a separator named `t1`.
@@ -349,7 +360,7 @@ mod tests {
             let on_show = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
             let other = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
             let n = rng.below(8);
-            let op = rng.below(9);
+            let op = rng.below(11);
             match op {
                 0 | 1 => {
                     let id = s.alloc_tab_id();
@@ -392,6 +403,17 @@ mod tests {
                     let mut active = w.active_id.clone();
                     if w.spaces.move_tab(&spaces, &any, to, true, &mut active).is_ok() {
                         w.show_tab(&active);
+                    }
+                }
+                8 => {
+                    archive_tabs(&mut s, &[any], step as i64);
+                }
+                9 => {
+                    if !s.archive.is_empty() {
+                        let at = rng.below(s.archive.len());
+                        let id = s.archive[at].tab.id.clone();
+                        let back = restore(&mut s, at);
+                        assert_eq!(back.is_some(), !s.archive.iter().any(|e| e.tab.id == id), "seed {seed} step {step}");
                     }
                 }
                 _ => {

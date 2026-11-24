@@ -305,7 +305,13 @@ pub fn normalize(state: &SessionState) -> SessionState {
         order.extend(spaces.sidebars.keys().filter(|k| **k != spaces.shown).cloned());
         for id in &order {
             if let Some(tree) = spaces.sidebars.get_mut(id) {
-                tree.repair(|t| known.contains(t) && claimed.insert(t.to_owned()), &tab_ids, &mut || out.alloc_item_id('i'));
+                let mut new_id = || loop {
+                    let id = out.alloc_item_id('i');
+                    if !tab_ids.contains(&id) {
+                        break id;
+                    }
+                };
+                tree.repair(|t| known.contains(t) && claimed.insert(t.to_owned()), &tab_ids, &mut new_id);
             }
         }
         let shown = spaces.tree_mut();
@@ -359,6 +365,16 @@ pub fn normalize(state: &SessionState) -> SessionState {
         w.show_tab(&active);
     }
     out.windows = windows;
+    // An archived tab is nowhere else: one whose id a live tab or an earlier entry holds takes
+    // a new one.
+    let mut held: HashSet<String> = out.windows.iter().flat_map(|w| w.tabs.iter().map(|t| t.id.clone())).collect();
+    for i in 0..out.archive.len() {
+        if out.archive[i].tab.id.is_empty() || !held.insert(out.archive[i].tab.id.clone()) {
+            let id = out.alloc_tab_id();
+            held.insert(id.clone());
+            out.archive[i].tab.id = id;
+        }
+    }
     out
 }
 

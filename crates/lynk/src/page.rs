@@ -16,7 +16,7 @@ use nd::prelude::*;
 use nd::webview::*;
 
 use crate::actions;
-use crate::tab::{LoadError, Page, Tab, TabId};
+use crate::tab::{Live, LoadError, Page, Tab, TabId};
 use crate::window::{BrowserWindow, Open};
 
 /// What a page reported, for the modules that listen in.
@@ -51,14 +51,15 @@ fn observe(win: &mut BrowserWindow, id: TabId, event: PageEvent, window: &mut Wi
     }
 }
 
-pub fn element_id(id: TabId) -> SharedString {
-    format!("page-{id}").into()
+fn element_id(id: TabId, live: &Live) -> SharedString {
+    format!("page-{id}-{}", live.key).into()
 }
 
 /// The page of `tab`, wired to the window.
-pub fn mount(tab: &Tab, page: &WebView, cx: &mut Context<BrowserWindow>) -> AnyElement {
+pub fn mount(tab: &Tab, live: &Live, cx: &mut Context<BrowserWindow>) -> AnyElement {
     let id = tab.id;
-    webview(element_id(id), page)
+    let page = live.view.clone();
+    webview(element_id(id, live), &live.view)
         .size_full()
         .on_navigate(cx.listener(move |w, e: &Navigate, window, cx| {
             navigated(w, id, &e.url, cx);
@@ -129,7 +130,7 @@ pub fn mount(tab: &Tab, page: &WebView, cx: &mut Context<BrowserWindow>) -> AnyE
         .on_fullscreen_changed(
             cx.listener(move |w, e: &FullscreenChanged, _, cx| w.page_fullscreen_changed(id, e.fullscreen, cx)),
         )
-        .on_close_approved(cx.listener(move |w, e: &CloseApproved, _, cx| w.close_answered(id, e.approved, cx)))
+        .on_close_approved(cx.listener(move |w, e: &CloseApproved, _, cx| w.close_answered(id, &page, e.approved, cx)))
         .on_chrome_command(
             cx.listener(move |w, e: &ChromeCommand, window, cx| chrome_command(w, e.command, window, cx)),
         )

@@ -127,11 +127,12 @@ stateDiagram-v2
   | Tab close asked | `close_tab(id)` | `id` joins `tabs` and its page is asked once; the same id again does nothing; a tab with no page or a crashed one goes at once |
   | Close Tab pressed | `close_shown` (key, menu bar, page command) | the shown tab, or while it waits the next tab not already closing |
   | Window close asked | `should_close` | `window` is set and every page not already asked is asked; with nothing to ask the window goes at once |
-  | Approved | `close_answered(id, true)` | the page leaves `asked`; `settle` removes its tab if that tab's close was asked, and closes the window once nothing is asked |
-  | Cancelled | `close_answered(id, false)` | the page leaves `asked`, its tab leaves `tabs`, `window` is cleared; other tabs' closes go on |
+  | Approved | `close_answered(id, page, true)` | the page leaves `asked`; `settle` removes its tab if that tab's close was asked, and closes the window once nothing is asked |
+  | Cancelled | `close_answered(id, page, false)` | the page leaves `asked`, its tab leaves `tabs`, `window` is cleared; other tabs' closes go on |
   | Timed out | nd | arrives as an approval |
   | Page slept | `sleep` | refused while the page is asked or the window is closing |
   | Page replaced or crashed | `navigate`, a native page in `page.rs`, a renderer gone | `settle` drops the stale ask; a tab close then goes ahead, a window close stops waiting on it |
+  | Replaced page answers late | `close_answered` with the old page | ignored: an answer counts only from the page that was asked, and each page mounts under its own element key (`Live::key`), so nd never routes the old page's events to its successor |
   | Page closed itself | `remove` (`WindowClosed`) | the tab and its ask go |
   | Tab moved out | `take` | refused while the tab is closing or its page is asked |
   | Tab moved in | `move_tab` | refused into a window that is closing or whose every tab is |

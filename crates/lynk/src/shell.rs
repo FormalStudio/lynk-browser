@@ -81,8 +81,8 @@ impl BrowserWindow {
         let active = self.active;
         let mut cover = None;
         for tab in self.tabs() {
-            let Some(page) = tab.view() else { continue };
-            let el = page::mount(tab, page, cx);
+            let Some(live) = tab.live() else { continue };
+            let el = page::mount(tab, live, cx);
             if tab.id == active {
                 shown = shown.child(el);
             } else {

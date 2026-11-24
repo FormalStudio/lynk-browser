@@ -64,8 +64,18 @@ pub enum Page {
 
 pub struct Live {
     pub view: WebView,
+    /// Tells this page from any earlier one of the tab. nd routes a page's events by its
+    /// element's key, so a replaced page's queued events must not land on its successor.
+    pub key: u64,
     /// Where to scroll once the load that woke the page ends.
     pub scroll_back: Option<(f64, f64)>,
+}
+
+impl Live {
+    fn new(view: WebView, scroll_back: Option<(f64, f64)>) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self { view, key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), scroll_back }
+    }
 }
 
 pub struct Tab {
@@ -102,7 +112,7 @@ impl Tab {
 
     /// A tab around a page that already exists: a popup a page opened and holds.
     pub fn with_page(id: TabId, url: impl Into<String>, view: WebView) -> Self {
-        Self { page: Page::Live(Live { view, scroll_back: None }), ..Self::new(id, url) }
+        Self { page: Page::Live(Live::new(view, None)), ..Self::new(id, url) }
     }
 
     pub fn label(&self) -> String {
@@ -117,6 +127,13 @@ impl Tab {
     pub fn view(&self) -> Option<&WebView> {
         match &self.page {
             Page::Live(live) => Some(&live.view),
+            _ => None,
+        }
+    }
+
+    pub fn live(&self) -> Option<&Live> {
+        match &self.page {
+            Page::Live(live) => Some(live),
             _ => None,
         }
     }
@@ -151,7 +168,7 @@ impl Tab {
         };
         let view = WebView::with_options(page_options());
         view.load(self.url.clone());
-        self.page = Page::Live(Live { view, scroll_back });
+        self.page = Page::Live(Live::new(view, scroll_back));
     }
 
     /// Drops the page for `page` with everything it reported.

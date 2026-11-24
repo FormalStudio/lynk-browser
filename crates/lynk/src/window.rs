@@ -330,10 +330,10 @@ impl BrowserWindow {
         }
     }
 
-    /// The page answered whether it may go. An answer from a page no longer asked is stale.
-    pub fn close_answered(&mut self, id: TabId, approved: bool, cx: &mut Context<Self>) {
-        let Some(view) = self.tab(id).and_then(Tab::view) else { return };
-        let Some(at) = self.closing.asked.iter().position(|(t, v)| *t == id && v == view) else { return };
+    /// `page` answered whether it may go. An answer from a page no longer asked, or no longer
+    /// the tab's, is stale.
+    pub fn close_answered(&mut self, id: TabId, page: &WebView, approved: bool, cx: &mut Context<Self>) {
+        let Some(at) = self.closing.asked.iter().position(|(t, v)| *t == id && v == page) else { return };
         self.closing.asked.remove(at);
         if !approved {
             // The page stays, and so does its window. Other tabs' closes go on.
@@ -726,6 +726,12 @@ mod tests {
         assert_eq!(urls(&cx, b), ["https://example.com/"]);
     }
 
+    /// The tab's page as it is now answers its close.
+    fn answer(w: &mut BrowserWindow, id: TabId, approved: bool, cx: &mut Context<BrowserWindow>) {
+        let page = w.tab(id).and_then(Tab::view).cloned().expect("a live page");
+        w.close_answered(id, &page, approved, cx);
+    }
+
     fn live(cx: &mut TestApp) -> Tab {
         Tab::with_page(app::next_tab_id(cx), "https://example.com/", WebView::new())
     }
@@ -749,7 +755,7 @@ mod tests {
         with(&mut cx, a, |w, cx| w.close_tab(1, cx));
         launch(&mut cx);
         assert_eq!(tabs(&cx, a), [1], "the launch stays out of the closing window");
-        with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
         assert!(!cx.window_ids().any(|w| w == a));
         let b = app::key_window(&cx).expect("the launch has its own window");
         assert_eq!(urls(&cx, b), ["https://example.org/"]);
@@ -765,7 +771,7 @@ mod tests {
         assert!(!cx.request_close(a), "the page is asked first");
         launch(&mut cx);
         assert_eq!(tabs(&cx, a), [1, 2]);
-        with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
         assert!(!cx.window_ids().any(|w| w == a));
         let b = app::key_window(&cx).expect("the launch has its own window");
         assert_eq!(urls(&cx, b), ["https://example.org/"]);
@@ -779,7 +785,7 @@ mod tests {
         let b = app::open_window(cx, Vec::new(), None);
         cx.run_until_idle();
         assert!(!cx.request_close(a));
-        with(cx, a, |w, cx| w.close_answered(2, true, cx));
+        with(cx, a, |w, cx| answer(w, 2, true, cx));
         (a, b)
     }
 
@@ -793,7 +799,7 @@ mod tests {
         let (a, _) = closing_pair(&mut cx);
         // A scroll read that started before the close lands now.
         with(&mut cx, a, |w, cx| w.fall_asleep(1, None, cx));
-        with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
         assert!(gone(&cx, a));
     }
 
@@ -811,7 +817,7 @@ mod tests {
         let (a, b) = closing_pair(&mut cx);
         with(&mut cx, a, |w, cx| move_tab(w, 1, Some(b), cx));
         assert_eq!(tabs(&cx, b), [3], "an awaited page waits where it was asked");
-        with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
         assert!(gone(&cx, a));
     }
 
@@ -827,11 +833,11 @@ mod tests {
             w.close_tab(1, cx);
             w.close_tab(2, cx);
         });
-        with(&mut cx, a, |w, cx| w.close_answered(1, false, cx));
-        with(&mut cx, a, |w, cx| w.close_answered(2, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 1, false, cx));
+        with(&mut cx, a, |w, cx| answer(w, 2, true, cx));
         assert_eq!(tabs(&cx, a), [1, 3], "Cancel on one page leaves another page's close standing");
         // A repeated close of one page makes one tab close, settled by its one answer.
-        with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
         assert_eq!(tabs(&cx, a), [1, 3], "a refused close is over");
     }
 
@@ -849,9 +855,9 @@ mod tests {
         let asked = |cx: &TestApp| app::window(cx, a).unwrap().read(cx).closing.asked.len();
         assert_eq!(asked(&cx), 2);
         // Tab 1's one answer closes its tab; tab 2's then closes the window.
-        with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
         assert_eq!(tabs(&cx, a), [2]);
-        with(&mut cx, a, |w, cx| w.close_answered(2, true, cx));
+        with(&mut cx, a, |w, cx| answer(w, 2, true, cx));
         assert!(gone(&cx, a));
     }
 
@@ -868,7 +874,7 @@ mod tests {
         let closing = app::window(&cx, a).unwrap().read(&cx).closing.tabs.clone();
         assert_eq!(closing.len(), 3);
         for id in closing {
-            with(&mut cx, a, |w, cx| w.close_answered(id, true, cx));
+            with(&mut cx, a, |w, cx| answer(w, id, true, cx));
         }
         assert_eq!(tabs(&cx, a).len(), 1);
     }
@@ -880,7 +886,7 @@ mod tests {
 
     fn approve_all(cx: &mut TestApp, id: WindowId) {
         for tab in asked(cx, id) {
-            with(cx, id, |w, cx| w.close_answered(tab, true, cx));
+            with(cx, id, |w, cx| answer(w, tab, true, cx));
         }
     }
 
@@ -934,11 +940,33 @@ mod tests {
         assert!(!cx.request_close(a));
         cx.run_until_idle();
         with(&mut cx, a, |w, cx| {
-            w.close_answered(1, true, cx);
-            w.close_answered(2, true, cx);
+            answer(w, 1, true, cx);
+            answer(w, 2, true, cx);
         });
         with(&mut cx, a, |w, cx| w.navigate(3, "chrome://version/".into(), cx));
         assert!(app::window(&cx, a).is_none(), "nothing is left to answer the close");
+    }
+
+    #[test]
+    fn a_replaced_page_answering_late_leaves_the_new_page_asked() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        assert!(!cx.request_close(a));
+        cx.run_until_idle();
+        let old = Rc::new(RefCell::new(None));
+        let kept = old.clone();
+        with(&mut cx, a, move |w, cx| {
+            *kept.borrow_mut() = w.tab(1).and_then(Tab::view).cloned();
+            w.navigate(1, "chrome://version/".into(), cx);
+            w.close_tab(1, cx);
+        });
+        let old = old.borrow_mut().take().unwrap();
+        with(&mut cx, a, |w, cx| w.close_answered(1, &old, true, cx));
+        assert_eq!(tabs(&cx, a), [1, 2, 3], "the old page's answer closed nothing");
+        assert_eq!(asked(&cx, a), [2, 3, 1], "the new page is still asked");
+        with(&mut cx, a, |w, cx| answer(w, 1, true, cx));
+        assert_eq!(tabs(&cx, a), [2, 3]);
     }
 
     #[test]

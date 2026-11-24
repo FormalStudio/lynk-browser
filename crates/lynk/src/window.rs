@@ -14,7 +14,7 @@ use nd::webview::WebView;
 
 use crate::app;
 use crate::sidebar::SidebarRow;
-use crate::tab::{Tab, TabId};
+use crate::tab::{Page, Tab, TabId};
 use crate::zoom::ZoomPopover;
 
 /// Where a new tab goes and whether it is shown.
@@ -130,7 +130,7 @@ impl BrowserWindow {
     }
 
     pub fn active_page(&self) -> Option<&WebView> {
-        self.active_tab().and_then(|t| t.page.as_ref())
+        self.active_tab().and_then(Tab::view)
     }
 
     fn index_of(&self, id: TabId) -> Option<usize> {
@@ -232,7 +232,7 @@ impl BrowserWindow {
     fn show(&mut self, id: TabId, cx: &mut Context<Self>) {
         // Chrome leaves a page's fullscreen when its tab stops being the one shown.
         if let Some(full) = self.page_fullscreen.filter(|f| *f != id) {
-            if let Some(page) = self.tab(full).and_then(|t| t.page.as_ref()) {
+            if let Some(page) = self.tab(full).and_then(Tab::view) {
                 page.exit_fullscreen();
             }
             self.page_fullscreen = None;
@@ -271,10 +271,11 @@ impl BrowserWindow {
     /// nothing to ask.
     pub fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
         let Some(tab) = self.tab_mut(id) else { return };
-        match &tab.page {
-            Some(page) if tab.rt.crashed.is_none() => {
-                tab.rt.closing = true;
-                page.request_close();
+        let crashed = tab.rt.crashed.is_some();
+        match tab.live_mut() {
+            Some(live) if !crashed => {
+                live.closing = true;
+                live.view.request_close();
             }
             _ => self.remove(id, cx),
         }
@@ -282,20 +283,20 @@ impl BrowserWindow {
 
     /// The page answered whether it may go.
     pub fn close_answered(&mut self, id: TabId, approved: bool, cx: &mut Context<Self>) {
-        let Some(tab) = self.tab_mut(id) else { return };
-        if !std::mem::take(&mut tab.rt.closing) {
+        let Some(live) = self.tab_mut(id).and_then(Tab::live_mut) else { return };
+        if !std::mem::take(&mut live.closing) {
             return;
         }
         if !approved {
             // A page that keeps itself open keeps its window open too.
             self.closing = false;
-            for tab in &mut self.tabs {
-                tab.rt.closing = false;
+            for live in self.tabs.iter_mut().filter_map(Tab::live_mut) {
+                live.closing = false;
             }
             return;
         }
         if self.closing {
-            if self.tabs.iter().all(|t| !t.rt.closing) {
+            if !self.tabs.iter().any(|t| matches!(&t.page, Page::Live(live) if live.closing)) {
                 self.close_window(cx);
             }
             return;
@@ -333,9 +334,10 @@ impl BrowserWindow {
         }
         let mut asked = false;
         for tab in &mut self.tabs {
-            if let Some(page) = tab.page.as_ref().filter(|_| tab.rt.crashed.is_none()) {
-                tab.rt.closing = true;
-                page.request_close();
+            let crashed = tab.rt.crashed.is_some();
+            if let Some(live) = tab.live_mut().filter(|_| !crashed) {
+                live.closing = true;
+                live.view.request_close();
                 asked = true;
             }
         }
@@ -409,7 +411,7 @@ impl BrowserWindow {
         }
         let at = self.index_of(id)?;
         if self.page_fullscreen == Some(id) {
-            if let Some(page) = &self.tabs[at].page {
+            if let Some(page) = self.tabs[at].view() {
                 page.exit_fullscreen();
             }
             self.page_fullscreen = None;
@@ -440,7 +442,7 @@ impl BrowserWindow {
     /// Put Tab to Sleep: closes the page, which gives its memory back, and keeps the tab's place,
     /// title, icon and address. Its scroll position is read first and put back when it wakes.
     pub fn sleep(&mut self, id: TabId, cx: &mut Context<Self>) {
-        let Some(page) = self.tab(id).filter(|_| self.can_sleep(id)).and_then(|t| t.page.clone()) else { return };
+        let Some(page) = self.tab(id).filter(|_| self.can_sleep(id)).and_then(|t| t.view().cloned()) else { return };
         // A page that does not answer in time (a busy renderer) sleeps all the same, at the top.
         let answered = Rc::new(Cell::new(false));
         let (this, once) = (cx.weak_entity(), answered.clone());
@@ -482,7 +484,7 @@ impl BrowserWindow {
             }
         }
         if let Some(tab) = self.tab_mut(id) {
-            tab.sleep(scroll);
+            tab.reset(Page::Asleep { scroll });
         }
         self.changed(cx);
     }
@@ -501,9 +503,7 @@ impl BrowserWindow {
         let Some(url) = self.tab(id).map(|t| t.url.clone()) else { return };
         let factor = app::zoom_for(cx, &url);
         let Some(tab) = self.tab_mut(id) else { return };
-        if let Some(page) = &tab.page
-            && tab.rt.zoom != factor
-        {
+        if let Some(page) = tab.view().filter(|_| tab.rt.zoom != factor).cloned() {
             tab.rt.zoom = factor;
             page.set_zoom(factor);
         }

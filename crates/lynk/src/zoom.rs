@@ -53,7 +53,7 @@ fn set(win: &mut BrowserWindow, id: TabId, url: &str, factor: f64, cx: &mut Cont
     if host_of(url).is_empty() {
         if let Some(tab) = win.tab_mut(id) {
             tab.rt.zoom = factor;
-            if let Some(page) = &tab.page {
+            if let Some(page) = tab.view() {
                 page.set_zoom(factor);
             }
         }

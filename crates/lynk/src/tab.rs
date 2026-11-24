@@ -1,6 +1,6 @@
 //! One tab: what it shows, the page that shows it, and what that page last reported. A tab has
 //! no page until it is first shown (a restored or background tab waits), none while it sleeps,
-//! and none on the new tab page.
+//! and none on the new tab page. It does not know its window: `window.rs` orders and shows tabs.
 
 use lynk_core::tabstate::{FindState, SecurityFacts, create_at_url, tab_hover, tab_label};
 use nd::prelude::*;
@@ -32,8 +32,6 @@ pub struct Runtime {
     pub security: SecurityFacts,
     /// The page holds element fullscreen.
     pub fullscreen: bool,
-    /// The page was asked whether it may go (`beforeunload`).
-    pub closing: bool,
 }
 
 impl Default for Runtime {
@@ -48,9 +46,26 @@ impl Default for Runtime {
             zoom: 1.,
             security: SecurityFacts::default(),
             fullscreen: false,
-            closing: false,
         }
     }
+}
+
+/// Where a tab's page is in its life.
+pub enum Page {
+    /// None yet: the tab was not shown since it was restored or opened in the background, or it
+    /// is the new tab page.
+    Waiting,
+    /// Put to sleep, scrolled to `scroll`; shown again, it loads once more and goes back there.
+    Asleep { scroll: Option<(f64, f64)> },
+    Live(Live),
+}
+
+pub struct Live {
+    pub view: WebView,
+    /// Where to scroll once the load that woke the page ends.
+    pub scroll_back: Option<(f64, f64)>,
+    /// The page was asked whether it may go (`beforeunload`) and has not answered.
+    pub closing: bool,
 }
 
 pub struct Tab {
@@ -59,15 +74,12 @@ pub struct Tab {
     pub url: String,
     pub title: String,
     pub pinned: bool,
-    pub page: Option<WebView>,
-    pub asleep: bool,
+    pub page: Page,
     /// The tab whose page opened this one, for Chrome's placement of the next one it opens.
     pub opener: Option<TabId>,
     pub favicon: Option<SharedString>,
     pub rt: Runtime,
     pub find: FindState,
-    /// Where a page put to sleep was scrolled to, put back once it loads again.
-    pub scroll: Option<(f64, f64)>,
 }
 
 pub fn page_options() -> WebViewOptions {
@@ -82,19 +94,17 @@ impl Tab {
             url: url.into(),
             title: String::new(),
             pinned: false,
-            page: None,
-            asleep: false,
+            page: Page::Waiting,
             opener: None,
             favicon: None,
             rt: Runtime::default(),
             find: FindState::default(),
-            scroll: None,
         }
     }
 
     /// A tab around a page that already exists: a popup a page opened and holds.
-    pub fn with_page(id: TabId, url: impl Into<String>, page: WebView) -> Self {
-        Self { page: Some(page), ..Self::new(id, url) }
+    pub fn with_page(id: TabId, url: impl Into<String>, view: WebView) -> Self {
+        Self { page: Page::Live(Live { view, scroll_back: None, closing: false }), ..Self::new(id, url) }
     }
 
     pub fn label(&self) -> String {
@@ -105,19 +115,47 @@ impl Tab {
         tab_hover(&self.title, &self.url)
     }
 
+    /// The live page's view.
+    pub fn view(&self) -> Option<&WebView> {
+        match &self.page {
+            Page::Live(live) => Some(&live.view),
+            _ => None,
+        }
+    }
+
+    pub fn live_mut(&mut self) -> Option<&mut Live> {
+        match &mut self.page {
+            Page::Live(live) => Some(live),
+            _ => None,
+        }
+    }
+
     pub fn is_live(&self) -> bool {
-        self.page.is_some()
+        matches!(self.page, Page::Live(_))
+    }
+
+    pub fn is_asleep(&self) -> bool {
+        matches!(self.page, Page::Asleep { .. })
     }
 
     /// Gives the tab its page the first time it is shown, and again after it slept.
     pub fn wake(&mut self) {
-        if self.page.is_some() || self.url.is_empty() {
-            return;
-        }
-        let page = WebView::with_options(page_options());
-        page.load(self.url.clone());
-        self.page = Some(page);
-        self.asleep = false;
+        let scroll_back = match self.page {
+            Page::Live(_) => return,
+            _ if self.url.is_empty() => return,
+            Page::Waiting => None,
+            Page::Asleep { scroll } => scroll,
+        };
+        let view = WebView::with_options(page_options());
+        view.load(self.url.clone());
+        self.page = Page::Live(Live { view, scroll_back, closing: false });
+    }
+
+    /// Drops the page for `page` with everything it reported.
+    pub fn reset(&mut self, page: Page) {
+        self.page = page;
+        self.rt = Runtime::default();
+        self.find = FindState::default();
     }
 
     /// Loads `url`. Chromium refuses to walk an existing page to `chrome:` and the other
@@ -125,31 +163,19 @@ impl Tab {
     pub fn navigate(&mut self, url: String) {
         self.rt.error = None;
         self.rt.crashed = None;
-        if !url.is_empty() && self.url == url && self.page.is_some() {
-            if let Some(page) = &self.page {
-                page.reload();
-            }
+        if let Some(view) = self.view().filter(|_| !url.is_empty() && self.url == url) {
+            view.reload();
             return;
         }
         self.url = url.clone();
-        match &self.page {
-            Some(page) if !create_at_url(&url) => page.load(url),
+        match self.view() {
+            Some(view) if !create_at_url(&url) => view.load(url),
             _ => {
-                self.page = None;
                 // A fresh page starts at 100%; the window applies the host's level to it.
-                self.rt = Runtime::default();
+                self.reset(Page::Waiting);
                 self.wake();
             }
         }
-    }
-
-    /// Closes the page and keeps the tab's place, title, icon and address.
-    pub fn sleep(&mut self, scroll: Option<(f64, f64)>) {
-        self.page = None;
-        self.asleep = true;
-        self.scroll = scroll;
-        self.find = FindState::default();
-        self.rt = Runtime::default();
     }
 }
 
@@ -163,6 +189,17 @@ mod tests {
         tab.wake();
         assert!(!tab.is_live());
         assert_eq!(tab.label(), "New Tab");
+    }
+
+    #[test]
+    fn a_tab_wakes_where_it_slept() {
+        let mut tab = Tab::new(1, "https://example.com/");
+        tab.rt.loading = true;
+        tab.reset(Page::Asleep { scroll: Some((0., 600.)) });
+        assert!(tab.is_asleep());
+        assert!(!tab.rt.loading);
+        tab.wake();
+        assert!(tab.live_mut().is_some_and(|live| live.scroll_back == Some((0., 600.)) && !live.closing));
     }
 
     #[test]

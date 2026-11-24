@@ -41,7 +41,7 @@ fn step(win: &mut BrowserWindow, forward: bool, window: &mut Window, cx: &mut Co
         tab.find.open = true;
         window.focus(FIELD);
     }
-    if let Some(page) = &tab.page
+    if let Some(page) = tab.view()
         && !tab.find.query.is_empty()
     {
         if forward { page.find_next() } else { page.find_previous() }
@@ -52,7 +52,7 @@ fn step(win: &mut BrowserWindow, forward: bool, window: &mut Window, cx: &mut Co
 pub fn close(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
     let Some(tab) = win.tab_mut(win.active) else { return };
     tab.find = FindState { query: std::mem::take(&mut tab.find.query), ..FindState::default() };
-    if let Some(page) = &tab.page {
+    if let Some(page) = tab.view() {
         page.stop_find();
         page.focus();
     }
@@ -63,7 +63,7 @@ fn search(win: &mut BrowserWindow, id: TabId, query: String, cx: &mut Context<Br
     let Some(tab) = win.tab_mut(id) else { return };
     tab.find.count = None;
     tab.find.found = None;
-    if let Some(page) = &tab.page {
+    if let Some(page) = tab.view() {
         if query.is_empty() { page.stop_find() } else { page.find(query.clone(), FindOptions::default()) }
     }
     tab.find.query = query;

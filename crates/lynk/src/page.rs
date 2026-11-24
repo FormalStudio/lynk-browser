@@ -16,7 +16,7 @@ use nd::prelude::*;
 use nd::webview::*;
 
 use crate::actions;
-use crate::tab::{LoadError, Tab, TabId};
+use crate::tab::{LoadError, Page, Tab, TabId};
 use crate::window::{BrowserWindow, Open};
 
 /// What a page reported, for the modules that listen in.
@@ -201,13 +201,12 @@ fn navigated(w: &mut BrowserWindow, id: TabId, url: &str, cx: &mut Context<Brows
             NativePage::Bookmarks => Some(Box::new(actions::ShowBookmarks)),
             NativePage::TabSearch => Some(Box::new(actions::OpenSwitcher)),
         };
-        match (&tab.page, tab.rt.can_go_back) {
+        match (tab.view(), tab.rt.can_go_back) {
             (Some(page), true) => page.go_back(),
             _ => {
                 tab.url.clear();
                 tab.title.clear();
-                tab.page = None;
-                tab.rt = Default::default();
+                tab.reset(Page::Waiting);
             }
         }
         if let Some(action) = action {
@@ -229,9 +228,11 @@ fn loading_changed(w: &mut BrowserWindow, id: TabId, loading: bool, cx: &mut Con
     tab.rt.loading = loading;
     if loading {
         tab.rt.progress = 0.;
-    } else if let (Some(page), Some((x, y))) = (&tab.page, tab.scroll.take()) {
+    } else if let Some(live) = tab.live_mut()
+        && let Some((x, y)) = live.scroll_back.take()
+    {
         // A page that slept gets its scroll position back once it has loaded again.
-        page.execute_javascript(format!("scrollTo({x}, {y})"), |_, _| {});
+        live.view.execute_javascript(format!("scrollTo({x}, {y})"), |_, _| {});
     }
     w.changed(cx);
 }
@@ -323,7 +324,7 @@ pub fn cover(tab: &Tab, cx: &mut Context<BrowserWindow>) -> Option<AnyElement> {
                 .child(button("crash-reload", "Reload").on_click(cx.listener(move |w, _: &ClickEvent, _, cx| {
                     if let Some(tab) = w.tab_mut(id) {
                         tab.rt.crashed = None;
-                        if let Some(page) = &tab.page {
+                        if let Some(page) = tab.view() {
                             page.reload();
                         }
                     }

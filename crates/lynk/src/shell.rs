@@ -81,7 +81,7 @@ impl BrowserWindow {
         let active = self.active;
         let mut cover = None;
         for tab in &self.tabs {
-            let Some(page) = &tab.page else { continue };
+            let Some(page) = tab.view() else { continue };
             let el = page::mount(tab, page, cx);
             if tab.id == active {
                 shown = shown.child(el);
@@ -163,7 +163,7 @@ fn reload_tab(win: &mut BrowserWindow, id: TabId, cx: &mut Context<BrowserWindow
     let Some(tab) = win.tab_mut(id) else { return };
     tab.rt.error = None;
     tab.rt.crashed = None;
-    match &tab.page {
+    match tab.view() {
         Some(page) => page.reload(),
         None => tab.wake(),
     }
@@ -171,7 +171,7 @@ fn reload_tab(win: &mut BrowserWindow, id: TabId, cx: &mut Context<BrowserWindow
 }
 
 pub fn toggle_fullscreen(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    if let Some(page) = win.page_fullscreen.and_then(|id| win.tab(id)).and_then(|t| t.page.as_ref()) {
+    if let Some(page) = win.page_fullscreen.and_then(|id| win.tab(id)).and_then(|t| t.view()) {
         page.exit_fullscreen();
         return;
     }

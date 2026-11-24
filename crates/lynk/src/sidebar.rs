@@ -99,7 +99,7 @@ impl BrowserWindow {
             .iter()
             .map(|t| {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                (t.label(), &t.favicon, t.rt.loading, t.asleep, self.active == t.id, self.hovered == Some(t.id))
+                (t.label(), &t.favicon, t.rt.loading, t.is_asleep(), self.active == t.id, self.hovered == Some(t.id))
                     .hash(&mut h);
                 (SidebarRow::Tab(t.id), h.finish())
             })
@@ -215,7 +215,7 @@ impl BrowserWindow {
             .items_center()
             .rounded(t.radius.md)
             .when(!active, |row| row.hover(|s| s.bg(hover_fill)))
-            .when(tab.asleep, |row| row.opacity(0.6))
+            .when(tab.is_asleep(), |row| row.opacity(0.6))
             .on_hover(cx.listener(move |win, over: &bool, _, cx| {
                 let now = if *over { Some(id) } else { win.hovered.filter(|h| *h != id) };
                 if win.hovered != now {

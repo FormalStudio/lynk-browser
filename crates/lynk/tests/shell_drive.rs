@@ -39,7 +39,7 @@ const LEAVE: &str = r#"<!doctype html><title>Leave</title>
 /// first paint (the release still arrives), and a cached load can name itself before that.
 const LONG: &str = r#"<!doctype html>
 <body style="margin:0;height:5000px;background:#fff" onclick="window.scrollTo(0, 600)">
-<script>new PerformanceObserver(() => document.title = "Long").observe({ type: "paint", buffered: true });
+<script>new PerformanceObserver(() => document.title ||= "Long").observe({ type: "paint", buffered: true });
 onscroll = () => document.title = "At " + Math.round(scrollY) + " " + Math.round(performance.timeOrigin);</script></body>"#;
 /// Hangs its renderer on a click.
 const BUSY: &str = r#"<!doctype html><title>Busy</title>

@@ -13,9 +13,12 @@ use nd::core::WindowId;
 use nd::platform::{Target, target};
 use nd::prelude::*;
 
+use nd::webview::WebView;
+
+use crate::app;
 use crate::shell;
-use crate::tab::TabId;
-use crate::window::BrowserWindow;
+use crate::tab::{Tab, TabId};
+use crate::window::{BrowserWindow, Open};
 
 /// The key context of a browser window's root.
 pub const CONTEXT: &str = "Browser";
@@ -83,31 +86,21 @@ pub struct SelectTabAt(pub usize);
 #[action(namespace = lynk, no_json)]
 pub struct SelectTab(pub TabId);
 
-/// What a tab row's menu does to its tab, which need not be the one shown.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum RowCommand {
-    Reload,
-    Duplicate,
-    CopyAddress,
-    MoveToNewWindow,
-    Sleep,
-    Close,
-    CloseOthers,
-}
-
-/// A tab row's menu item, for the row's tab.
+/// A command, named by its action, run on a tab that need not be the one shown: a tab row's
+/// menu item.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = lynk, no_json)]
-pub struct ForTab(pub TabId, pub RowCommand);
+pub struct ForTab(pub TabId, pub &'static str);
 
 /// Moves the shown tab, its live page included, to another window.
 #[derive(Clone, PartialEq, Debug, Action)]
 #[action(namespace = lynk, no_json)]
 pub struct MoveTabToWindow(pub WindowId);
 
-pub type Handler = fn(&mut BrowserWindow, &mut Window, &mut Context<BrowserWindow>);
-/// Reads the window the menu acts on: whether an item is enabled, or shows its other label.
-pub type Probe = fn(&BrowserWindow, &App) -> bool;
+/// Runs a command on a tab of the window: the shown one, or a row's.
+pub type Handler = fn(&mut BrowserWindow, TabId, &mut Window, &mut Context<BrowserWindow>);
+/// Reads a tab of the window: whether an item is enabled, or shows its other label.
+pub type Probe = fn(&BrowserWindow, TabId, &App) -> bool;
 type Listen = fn(Scaffold, Handler, &mut Context<BrowserWindow>) -> Scaffold;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -159,7 +152,7 @@ fn bind<A: Action + Default>(keys: &'static str) -> KeyBinding {
 }
 
 fn listen<A: Action>(root: Scaffold, handler: Handler, cx: &mut Context<BrowserWindow>) -> Scaffold {
-    root.on_action(cx.listener(move |this, _: &A, window, cx| handler(this, window, cx)))
+    root.on_action(cx.listener(move |this, _: &A, window, cx| handler(this, this.active, window, cx)))
 }
 
 impl Command {
@@ -220,33 +213,64 @@ impl Command {
         self.on_mac || target() != Target::MacOs
     }
 
-    /// The label as the window `win` makes it read.
-    pub fn label_for(&self, win: &BrowserWindow, cx: &App) -> &'static str {
+    /// The label as tab `id` of `win` makes it read.
+    pub fn label_for(&self, win: &BrowserWindow, id: TabId, cx: &App) -> &'static str {
         match self.flipped {
-            Some((label, when)) if when(win, cx) => label,
+            Some((label, when)) if when(win, id, cx) => label,
             _ => self.label,
         }
     }
+
+    fn enabled_for(&self, win: &BrowserWindow, id: TabId, cx: &App) -> bool {
+        self.enabled.is_none_or(|when| when(win, id, cx))
+    }
 }
 
-fn web_page(w: &BrowserWindow, _: &App) -> bool {
-    w.menu_facts().web_page
+/// The row for action `A`.
+pub fn command_for<A: Action + Default>() -> &'static Command {
+    let name = A::default().name();
+    COMMANDS.iter().find(|c| c.action().name() == name).expect("every action has a row")
 }
-fn has_address(w: &BrowserWindow, _: &App) -> bool {
-    w.menu_facts().has_address
+
+/// `command` as a menu item acting on tab `id`, disabled while no module handles it.
+pub fn item_for_tab(command: &Command, win: &BrowserWindow, id: TabId, cx: &App) -> MenuItem {
+    let enabled = command.handler.is_some() && command.enabled_for(win, id, cx);
+    MenuItem::action(command.label_for(win, id, cx), ForTab(id, command.action().name())).enabled(enabled)
+}
+
+/// Runs a [`ForTab`] item.
+pub fn run_for_tab(win: &mut BrowserWindow, a: &ForTab, window: &mut Window, cx: &mut Context<BrowserWindow>) {
+    let handler = COMMANDS.iter().find(|c| c.action().name() == a.1).and_then(|c| c.handler);
+    if let Some(handler) = handler.filter(|_| win.tab(a.0).is_some()) {
+        handler(win, a.0, window, cx);
+    }
+}
+
+fn web_page(w: &BrowserWindow, id: TabId, _: &App) -> bool {
+    w.tab(id).is_some_and(Tab::is_web_page)
+}
+fn has_address(w: &BrowserWindow, id: TabId, _: &App) -> bool {
+    w.tab(id).is_some_and(|t| !t.url.is_empty())
+}
+fn view_of(w: &BrowserWindow, id: TabId) -> Option<&WebView> {
+    w.tab(id).and_then(Tab::view)
 }
 
 /// Keys bound inside one part of the window, under that part's key context, off the menus.
 pub const CONTEXT_KEYS: &[fn() -> KeyBinding] = &[crate::find::close_key];
 
 pub const COMMANDS: &[Command] = &[
-    Command::new::<NewTab>("New Tab").key("new-tab").menu(MenuId::File).handler(shell::new_tab),
-    Command::new::<NewWindow>("New Window").key("new-window").menu(MenuId::File).handler(shell::new_window),
+    Command::new::<NewTab>("New Tab").key("new-tab").menu(MenuId::File).handler(|w, _, _, cx| {
+        w.open_tab("", Open::End, cx);
+    }),
+    Command::new::<NewWindow>("New Window").key("new-window").menu(MenuId::File).handler(|_, _, _, cx| {
+        app::open_window(cx, Vec::new(), None);
+    }),
     Command::new::<NewPrivateWindow>("New Private Window").key("private").menu(MenuId::File),
     Command::new::<OpenAddress>("Open Address Bar").key("address").menu(MenuId::File),
     Command::new::<OpenSwitcher>("Switch Tabs").key("switcher").menu(MenuId::File),
-    Command::new::<CloseTab>("Close Tab").key("close-tab").menu(MenuId::File).handler(shell::close_tab),
-    Command::new::<ReopenClosedTab>("Reopen Closed Tab").key("reopen-tab").menu(MenuId::File).handler(shell::reopen),
+    Command::new::<CloseTab>("Close Tab").key("close-tab").menu(MenuId::File).handler(|w, id, _, cx| w.close_tab(id, cx)),
+    Command::new::<ReopenClosedTab>("Reopen Closed Tab").key("reopen-tab").menu(MenuId::File).handler(|w, _, _, cx| w.reopen(cx)),
     Command::new::<SavePage>("Save Page As\u{2026}").key("save-page").menu(MenuId::File).enabled(web_page),
     Command::new::<OpenSettings>("Settings").key("settings").menu(MenuId::File).after_separator(),
     Command::new::<CopyAddress>("Copy Address")
@@ -267,12 +291,12 @@ pub const COMMANDS: &[Command] = &[
         .key("fullscreen")
         .menu(MenuId::View)
         .not_on_mac()
-        .flips("Exit Full Screen", |w, _| w.browser_fullscreen)
+        .flips("Exit Full Screen", |w, _, _| w.browser_fullscreen)
         .handler(shell::toggle_fullscreen),
     Command::new::<ToggleSidebar>("Hide Sidebar")
         .key("toggle-sidebar")
         .menu(MenuId::View)
-        .flips("Show Sidebar", |w, _| w.sidebar_hidden)
+        .flips("Show Sidebar", |w, _, _| w.sidebar_hidden)
         .handler(shell::toggle_sidebar),
     Command::new::<SwitchLayout>("Use Compact Layout").key("layout").menu(MenuId::View),
     Command::new::<ShowDownloads>("Downloads").key("downloads").menu(MenuId::View).after_separator(),
@@ -301,36 +325,58 @@ pub const COMMANDS: &[Command] = &[
         .extra_keys(&["f12"])
         .menu(MenuId::View)
         .enabled(has_address)
-        .handler(shell::dev_tools),
-    Command::new::<NextTab>("Next Tab").key("next-tab").menu(MenuId::Tabs).handler(shell::next_tab),
-    Command::new::<PreviousTab>("Previous Tab").key("prev-tab").menu(MenuId::Tabs).handler(shell::previous_tab),
-    Command::new::<TogglePin>("Pin Tab").menu(MenuId::Tabs).flips("Unpin Tab", |w, _| w.menu_facts().pinned),
+        .handler(|w, id, _, _| {
+            if let Some(page) = view_of(w, id) {
+                page.open_dev_tools();
+            }
+        }),
+    Command::new::<NextTab>("Next Tab").key("next-tab").menu(MenuId::Tabs).handler(|w, _, _, cx| w.cycle(1, cx)),
+    Command::new::<PreviousTab>("Previous Tab").key("prev-tab").menu(MenuId::Tabs).handler(|w, _, _, cx| w.cycle(-1, cx)),
+    Command::new::<TogglePin>("Pin Tab").menu(MenuId::Tabs).flips("Unpin Tab", |w, id, _| w.tab(id).is_some_and(|t| t.pinned)),
     Command::new::<ToggleMute>("Mute Tab"),
     Command::new::<SleepTab>("Put Tab to Sleep")
         .menu(MenuId::Tabs)
-        .enabled(|w, _| w.can_sleep(w.active))
-        .handler(shell::sleep_tab),
-    Command::new::<CloseOtherTabs>("Close Other Tabs").handler(shell::close_others),
-    Command::new::<DuplicateTab>("Duplicate Tab").handler(shell::duplicate),
-    Command::new::<MoveTabLeft>("Move Tab Left").handler(shell::move_left),
-    Command::new::<MoveTabRight>("Move Tab Right").handler(shell::move_right),
-    Command::new::<MoveTabToNewWindow>("Move Tab to New Window").handler(shell::move_to_new_window),
+        .enabled(|w, id, _| w.can_sleep(id))
+        .handler(|w, id, _, cx| w.sleep(id, cx)),
+    Command::new::<CloseOtherTabs>("Close Other Tabs").handler(|w, id, _, cx| w.close_others(id, cx)),
+    Command::new::<DuplicateTab>("Duplicate Tab").enabled(has_address).handler(|w, id, _, cx| w.duplicate(id, cx)),
+    Command::new::<MoveTabLeft>("Move Tab Left")
+        .enabled(|w, id, _| w.tabs.first().is_some_and(|t| t.id != id))
+        .handler(|w, id, _, cx| w.move_by(id, -1, cx)),
+    Command::new::<MoveTabRight>("Move Tab Right")
+        .enabled(|w, id, _| w.tabs.last().is_some_and(|t| t.id != id))
+        .handler(|w, id, _, cx| w.move_by(id, 1, cx)),
+    Command::new::<MoveTabToNewWindow>("Move Tab to New Window")
+        .enabled(|w, _, _| w.tabs.len() > 1)
+        .handler(|w, id, _, cx| shell::move_tab(w, id, None, cx)),
     Command::new::<Back>("Back")
         .key("back")
         .menu(MenuId::Go)
-        .enabled(|w, _| w.menu_facts().can_go_back)
-        .handler(shell::back),
+        .enabled(|w, id, _| w.tab(id).is_some_and(|t| t.rt.can_go_back))
+        .handler(|w, id, _, _| {
+            if let Some(page) = view_of(w, id) {
+                page.go_back();
+            }
+        }),
     Command::new::<Forward>("Forward")
         .key("forward")
         .menu(MenuId::Go)
-        .enabled(|w, _| w.menu_facts().can_go_forward)
-        .handler(shell::forward),
+        .enabled(|w, id, _| w.tab(id).is_some_and(|t| t.rt.can_go_forward))
+        .handler(|w, id, _, _| {
+            if let Some(page) = view_of(w, id) {
+                page.go_forward();
+            }
+        }),
     Command::new::<OpenExtensions>("Extensions").menu(MenuId::Extensions),
     Command::new::<OpenWebStore>("Chrome Web Store").menu(MenuId::Extensions),
     Command::new::<ShowHistory>("Show All History").key("history").menu(MenuId::History),
     Command::new::<ClearBrowsingData>("Clear Browsing Data\u{2026}").key("clear-data").menu(MenuId::History),
     Command::new::<Print>("Print\u{2026}"),
-    Command::new::<SelectLastTab>("Select Last Tab").handler(shell::select_last),
+    Command::new::<SelectLastTab>("Select Last Tab").handler(|w, _, _, cx| {
+        if let Some(last) = w.tabs.len().checked_sub(1) {
+            w.select_at(last, cx);
+        }
+    }),
 ];
 
 /// Menu items that are not commands, appended to their menu after its commands.
@@ -419,14 +465,14 @@ fn tab_items(win: &BrowserWindow, _: &App) -> Vec<MenuItem> {
 
 fn command_item(command: &Command, win: &BrowserWindow, cx: &App) -> MenuItem {
     let item = MenuItem::Action {
-        label: command.label_for(win, cx).into(),
+        label: command.label_for(win, win.active, cx).into(),
         action: command.action(),
         icon: None,
         destructive: false,
         enabled: true,
         checked: false,
     };
-    item.enabled(command.enabled.is_none_or(|when| when(win, cx)))
+    item.enabled(command.enabled_for(win, win.active, cx))
 }
 
 /// The menu bar for the window it acts on.

@@ -8,10 +8,10 @@ use nd::platform::{Target, target};
 use nd::prelude::*;
 use nd::virtual_list::{SelectEvent, Selection, list};
 
-use crate::actions::{self, ForTab, MoveTabToWindow, RowCommand};
+use crate::actions::{self, MoveTabToWindow};
 use crate::app;
 use crate::tab::TabId;
-use crate::window::BrowserWindow;
+use crate::window::{BrowserWindow, Open};
 
 pub const TAB_ROW_HEIGHT: f32 = 28.;
 pub const ROW_GAP: f32 = 2.;
@@ -175,6 +175,7 @@ impl BrowserWindow {
             SidebarRow::NewTab => return new_tab_row(cx),
         };
         let Some(tab) = self.tab(id) else { return div().into_any_element() };
+        let me = self.id;
         let active = self.active == id;
         let hovered = self.hovered == Some(id);
         let t = cx.theme();
@@ -205,8 +206,6 @@ impl BrowserWindow {
         } else {
             div().into_any_element()
         };
-        let facts =
-            RowFacts { sleeps: self.can_sleep(id), addressed: !tab.url.is_empty(), alone: self.tabs.len() == 1 };
         h_flex()
             .id(format!("tab-row-{id}"))
             .h(px(TAB_ROW_HEIGHT))
@@ -225,7 +224,7 @@ impl BrowserWindow {
                     cx.notify();
                 }
             }))
-            .context_menu(move |menu, _, _| row_menu(menu, id, facts))
+            .context_menu(move |menu, _, cx| row_menu(menu, me, id, cx))
             .child(favicon)
             .child(title.flex_1().min_w_0())
             .child(div().w(px(TRAIL_WIDTH)).flex_none().flex().justify_center().child(trail))
@@ -233,27 +232,23 @@ impl BrowserWindow {
     }
 }
 
-#[derive(Clone, Copy)]
-struct RowFacts {
-    sleeps: bool,
-    addressed: bool,
-    /// The window's only tab, which a new window would take as it is.
-    alone: bool,
-}
-
-/// A tab row's menu. Pin and mute arrive with their lanes, so they show disabled.
-fn row_menu(menu: ContextMenu, id: TabId, facts: RowFacts) -> ContextMenu {
-    let item = |label: &'static str, command| MenuItem::action(label, ForTab(id, command));
-    menu.entry(item("Reload", RowCommand::Reload))
-        .entry(item("Duplicate Tab", RowCommand::Duplicate).enabled(facts.addressed))
-        .entry(item("Copy Address", RowCommand::CopyAddress).enabled(facts.addressed))
-        .entry(MenuItem::action("Pin Tab", actions::TogglePin).enabled(false))
-        .entry(MenuItem::action("Mute Tab", actions::ToggleMute).enabled(false))
-        .entry(item("Move Tab to New Window", RowCommand::MoveToNewWindow).enabled(!facts.alone))
-        .entry(item("Put Tab to Sleep", RowCommand::Sleep).enabled(facts.sleeps))
+/// A tab row's menu, acting on the row's tab. Pin and mute arrive with their lanes, so they show
+/// disabled.
+fn row_menu(menu: ContextMenu, win: WindowId, id: TabId, cx: &App) -> ContextMenu {
+    use actions::*;
+    let Some(win) = app::window(cx, win) else { return menu };
+    let win = win.read(cx);
+    let item = |command| item_for_tab(command, win, id, cx);
+    menu.entry(item(command_for::<Reload>()))
+        .entry(item(command_for::<DuplicateTab>()))
+        .entry(item(command_for::<CopyAddress>()))
+        .entry(item(command_for::<TogglePin>()))
+        .entry(item(command_for::<ToggleMute>()))
+        .entry(item(command_for::<MoveTabToNewWindow>()))
+        .entry(item(command_for::<SleepTab>()))
         .separator()
-        .entry(item("Close Tab", RowCommand::Close))
-        .entry(item("Close Other Tabs", RowCommand::CloseOthers))
+        .entry(item(command_for::<CloseTab>()))
+        .entry(item(command_for::<CloseOtherTabs>()))
 }
 
 /// The menu on the column off any tab. The compact layout arrives with its lane.
@@ -275,7 +270,9 @@ fn new_tab_row(cx: &mut Context<BrowserWindow>) -> AnyElement {
         .rounded(t.radius.md)
         .opacity(0.6)
         .hover(|s| s.bg(hover_fill).opacity(1.))
-        .on_tap(cx.listener(|win, _: &TapEvent, window, cx| crate::shell::new_tab(win, window, cx)))
+        .on_tap(cx.listener(|win, _: &TapEvent, _, cx| {
+            win.open_tab("", Open::End, cx);
+        }))
         .child(icon(Icon::Plus, FAVICON))
         .child(label("New tab").secondary())
         .into_any_element()

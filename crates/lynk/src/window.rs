@@ -47,18 +47,6 @@ pub type TabListener = fn(&mut BrowserWindow, TabId, TabEvent, &mut Context<Brow
 /// The tab event listeners, called in order after the window's own change.
 pub const TAB_EVENTS: &[TabListener] = &[];
 
-/// What the menu bar reads of the tab on show.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct MenuFacts {
-    pub pinned: bool,
-    pub can_go_back: bool,
-    pub can_go_forward: bool,
-    /// The tab has an address (it is not the new tab page).
-    pub has_address: bool,
-    /// Its address is http, https or file.
-    pub web_page: bool,
-}
-
 pub struct BrowserWindow {
     pub id: WindowId,
     pub tabs: Vec<Tab>,
@@ -147,18 +135,6 @@ impl BrowserWindow {
         self.sync_rows(cx);
         cx.notify();
         app::refresh_menus_for(self, cx);
-    }
-
-    pub fn menu_facts(&self) -> MenuFacts {
-        let tab = self.active_tab();
-        let url = tab.map_or("", |t| t.url.as_str());
-        MenuFacts {
-            pinned: tab.is_some_and(|t| t.pinned),
-            can_go_back: tab.is_some_and(|t| t.rt.can_go_back),
-            can_go_forward: tab.is_some_and(|t| t.rt.can_go_forward),
-            has_address: !url.is_empty(),
-            web_page: ["http:", "https:", "file:"].iter().any(|s| url.starts_with(s)),
-        }
     }
 
     /// The window's name in another window's "Move Tab to Window" menu.
@@ -625,5 +601,22 @@ mod tests {
         assert_ne!(b, a);
         let urls: Vec<String> = app::window(&cx, b).unwrap().read(&cx).tabs.iter().map(|t| t.url.clone()).collect();
         assert_eq!(urls, ["https://example.com/"]);
+    }
+
+    #[test]
+    fn a_row_item_reads_its_own_tab() {
+        use crate::actions::{DuplicateTab, command_for, item_for_tab};
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let tabs = vec![Tab::new(app::next_tab_id(&mut cx), "https://example.com/"), Tab::new(app::next_tab_id(&mut cx), "")];
+        let a = app::open_window(&mut cx, tabs, Some(2));
+        cx.run_until_idle();
+        let win = app::window(&cx, a).unwrap();
+        let enabled = |id| match item_for_tab(command_for::<DuplicateTab>(), win.read(&cx), id, &cx) {
+            MenuItem::Action { enabled, .. } => enabled,
+            _ => unreachable!("a command is an action item"),
+        };
+        assert!(enabled(1), "the row's tab has an address");
+        assert!(!enabled(2), "the shown new tab page has none");
     }
 }

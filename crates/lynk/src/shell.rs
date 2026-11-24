@@ -5,7 +5,7 @@
 use nd::core::WindowId;
 use nd::prelude::*;
 
-use crate::actions::{self, CONTEXT, ForTab, MoveTabToWindow, RowCommand, SelectTab, SelectTabAt};
+use crate::actions::{self, CONTEXT, MoveTabToWindow, SelectTab, SelectTabAt};
 use crate::app;
 use crate::page;
 use crate::sidebar;
@@ -66,8 +66,8 @@ impl Render for BrowserWindow {
             .overlay(overlay)
             .on_action(cx.listener(|win, a: &SelectTabAt, _, cx| win.select_at(a.0, cx)))
             .on_action(cx.listener(|win, a: &SelectTab, _, cx| win.select(a.0, cx)))
-            .on_action(cx.listener(|win, a: &MoveTabToWindow, _, cx| move_to_window(win, Some(a.0), cx)))
-            .on_action(cx.listener(|win, a: &ForTab, _, cx| for_tab(win, a.0, a.1, cx)));
+            .on_action(cx.listener(|win, a: &MoveTabToWindow, _, cx| move_tab(win, win.active, Some(a.0), cx)))
+            .on_action(cx.listener(actions::run_for_tab));
         actions::listen_all(root, cx)
     }
 }
@@ -128,38 +128,14 @@ impl BrowserWindow {
     }
 }
 
-pub fn new_tab(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.open_tab("", Open::End, cx);
-}
-
-pub fn new_window(_: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    app::open_window(cx, Vec::new(), None);
-}
-
-pub fn close_tab(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.close_tab(win.active, cx);
-}
-
-pub fn reopen(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.reopen(cx);
-}
-
-pub fn copy_address(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    copy_address_of(win, win.active, cx);
-}
-
-fn copy_address_of(win: &mut BrowserWindow, id: TabId, cx: &mut Context<BrowserWindow>) {
+pub fn copy_address(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
     let Some(url) = win.tab(id).map(|t| t.url.clone()).filter(|u| !u.is_empty()) else { return };
     nd::clipboard::write_text(cx, url);
     win.toast("Link copied");
     cx.notify();
 }
 
-pub fn reload(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    reload_tab(win, win.active, cx);
-}
-
-fn reload_tab(win: &mut BrowserWindow, id: TabId, cx: &mut Context<BrowserWindow>) {
+pub fn reload(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
     let Some(tab) = win.tab_mut(id) else { return };
     tab.rt.error = None;
     tab.rt.crashed = None;
@@ -170,7 +146,7 @@ fn reload_tab(win: &mut BrowserWindow, id: TabId, cx: &mut Context<BrowserWindow
     win.changed(cx);
 }
 
-pub fn toggle_fullscreen(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
+pub fn toggle_fullscreen(win: &mut BrowserWindow, _: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
     if let Some(page) = win.page_fullscreen.and_then(|id| win.tab(id)).and_then(|t| t.view()) {
         page.exit_fullscreen();
         return;
@@ -180,82 +156,16 @@ pub fn toggle_fullscreen(win: &mut BrowserWindow, _: &mut Window, cx: &mut Conte
     win.changed(cx);
 }
 
-pub fn toggle_sidebar(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
+pub fn toggle_sidebar(win: &mut BrowserWindow, _: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
     win.sidebar_hidden = !win.sidebar_hidden;
     win.changed(cx);
 }
 
 /// `view-source:` of the page, in a tab to the right of it.
-pub fn view_source(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    if !win.menu_facts().web_page {
-        return;
-    }
-    let Some((at, url)) = win.tabs.iter().position(|t| t.id == win.active).map(|i| (i, win.tabs[i].url.clone())) else {
-        return;
-    };
-    win.open_tab(format!("view-source:{url}"), Open::At { index: at + 1, foreground: true }, cx);
-}
-
-pub fn dev_tools(win: &mut BrowserWindow, _: &mut Window, _: &mut Context<BrowserWindow>) {
-    if let Some(page) = win.active_page() {
-        page.open_dev_tools();
-    }
-}
-
-pub fn next_tab(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.cycle(1, cx);
-}
-
-pub fn previous_tab(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.cycle(-1, cx);
-}
-
-pub fn select_last(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    if let Some(last) = win.tabs.len().checked_sub(1) {
-        win.select_at(last, cx);
-    }
-}
-
-pub fn sleep_tab(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.sleep(win.active, cx);
-}
-
-pub fn close_others(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.close_others(win.active, cx);
-}
-
-pub fn duplicate(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.duplicate(win.active, cx);
-}
-
-pub fn move_left(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.move_by(win.active, -1, cx);
-}
-
-pub fn move_right(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    win.move_by(win.active, 1, cx);
-}
-
-pub fn move_to_new_window(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    move_to_window(win, None, cx);
-}
-
-/// A tab row's menu, acting on the row's tab.
-fn for_tab(win: &mut BrowserWindow, id: TabId, command: RowCommand, cx: &mut Context<BrowserWindow>) {
-    match command {
-        RowCommand::Reload => reload_tab(win, id, cx),
-        RowCommand::Duplicate => win.duplicate(id, cx),
-        RowCommand::CopyAddress => copy_address_of(win, id, cx),
-        RowCommand::MoveToNewWindow => move_tab(win, id, None, cx),
-        RowCommand::Sleep => win.sleep(id, cx),
-        RowCommand::Close => win.close_tab(id, cx),
-        RowCommand::CloseOthers => win.close_others(id, cx),
-    }
-}
-
-/// Moves the shown tab, its page live, to `target`, or to a new window.
-fn move_to_window(win: &mut BrowserWindow, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
-    move_tab(win, win.active, target, cx);
+pub fn view_source(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
+    let Some(at) = win.tabs.iter().position(|t| t.id == id && t.is_web_page()) else { return };
+    let url = format!("view-source:{}", win.tabs[at].url);
+    win.open_tab(url, Open::At { index: at + 1, foreground: true }, cx);
 }
 
 pub(crate) fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
@@ -272,17 +182,5 @@ pub(crate) fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<Window
         None => {
             app::open_window_around(cx, tab);
         }
-    }
-}
-
-pub fn back(win: &mut BrowserWindow, _: &mut Window, _: &mut Context<BrowserWindow>) {
-    if let Some(page) = win.active_page() {
-        page.go_back();
-    }
-}
-
-pub fn forward(win: &mut BrowserWindow, _: &mut Window, _: &mut Context<BrowserWindow>) {
-    if let Some(page) = win.active_page() {
-        page.go_forward();
     }
 }

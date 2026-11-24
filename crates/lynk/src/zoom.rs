@@ -28,10 +28,10 @@ impl ZoomPopover {
     }
 }
 
-/// Steps the shown tab's zoom, as a chord or the View menu does.
-fn step(win: &mut BrowserWindow, factor: impl FnOnce(f64) -> f64, cx: &mut Context<BrowserWindow>) {
-    let Some(tab) = win.active_tab() else { return };
-    let (id, url, current) = (tab.id, tab.url.clone(), tab.rt.zoom);
+/// Steps tab `id`'s zoom, as a chord or the View menu does.
+fn step(win: &mut BrowserWindow, id: TabId, factor: impl FnOnce(f64) -> f64, cx: &mut Context<BrowserWindow>) {
+    let Some(tab) = win.tab(id) else { return };
+    let (url, current) = (tab.url.clone(), tab.rt.zoom);
     set(win, id, &url, factor(current), cx);
     win.zoom.open = true;
     win.zoom.notice += 1;
@@ -69,16 +69,16 @@ fn set(win: &mut BrowserWindow, id: TabId, url: &str, factor: f64, cx: &mut Cont
     }
 }
 
-pub fn zoom_in(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    step(win, |z| step_zoom(z, true), cx);
+pub fn zoom_in(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
+    step(win, id, |z| step_zoom(z, true), cx);
 }
 
-pub fn zoom_out(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    step(win, |z| step_zoom(z, false), cx);
+pub fn zoom_out(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
+    step(win, id, |z| step_zoom(z, false), cx);
 }
 
-pub fn reset(win: &mut BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    step(win, |_| 1., cx);
+pub fn reset(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
+    step(win, id, |_| 1., cx);
 }
 
 /// The page zoomed itself (ctrl-wheel, its own chord): the level is kept for the host as a
@@ -136,17 +136,17 @@ fn popover_body(percent: &str, cx: &mut Context<BrowserWindow>) -> AnyElement {
                 .child(
                     icon_button("zoom-out", Icon::Minus)
                         .tooltip("Zoom Out")
-                        .on_click(cx.listener(|win, _: &ClickEvent, window, cx| zoom_out(win, window, cx))),
+                        .on_click(cx.listener(|win, _: &ClickEvent, window, cx| zoom_out(win, win.active, window, cx))),
                 )
                 .child(div().min_w(px(48.)).flex().justify_center().child(label(percent.to_owned()).id("zoom-value")))
                 .child(
                     icon_button("zoom-in", Icon::Plus)
                         .tooltip("Zoom In")
-                        .on_click(cx.listener(|win, _: &ClickEvent, window, cx| zoom_in(win, window, cx))),
+                        .on_click(cx.listener(|win, _: &ClickEvent, window, cx| zoom_in(win, win.active, window, cx))),
                 )
                 .child(
                     button("zoom-reset", "Reset")
-                        .on_click(cx.listener(|win, _: &ClickEvent, window, cx| reset(win, window, cx))),
+                        .on_click(cx.listener(|win, _: &ClickEvent, window, cx| reset(win, win.active, window, cx))),
                 ),
         )
         .into_any_element()

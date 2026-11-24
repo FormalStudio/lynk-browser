@@ -19,24 +19,24 @@ pub fn close_key() -> KeyBinding {
     KeyBinding::new("escape", Close, Some(CONTEXT))
 }
 
-pub fn open(win: &mut BrowserWindow, window: &mut Window, cx: &mut Context<BrowserWindow>) {
-    let Some(tab) = win.tab_mut(win.active) else { return };
+pub fn open(win: &mut BrowserWindow, id: TabId, window: &mut Window, cx: &mut Context<BrowserWindow>) {
+    let Some(tab) = win.tab_mut(id) else { return };
     tab.find.open = true;
     window.focus(FIELD);
     cx.notify();
 }
 
-pub fn next(win: &mut BrowserWindow, window: &mut Window, cx: &mut Context<BrowserWindow>) {
-    step(win, true, window, cx);
+pub fn next(win: &mut BrowserWindow, id: TabId, window: &mut Window, cx: &mut Context<BrowserWindow>) {
+    step(win, id, true, window, cx);
 }
 
-pub fn previous(win: &mut BrowserWindow, window: &mut Window, cx: &mut Context<BrowserWindow>) {
-    step(win, false, window, cx);
+pub fn previous(win: &mut BrowserWindow, id: TabId, window: &mut Window, cx: &mut Context<BrowserWindow>) {
+    step(win, id, false, window, cx);
 }
 
 /// Cmd+G with the bar closed opens it on the last query, as Chrome does.
-fn step(win: &mut BrowserWindow, forward: bool, window: &mut Window, cx: &mut Context<BrowserWindow>) {
-    let Some(tab) = win.tab_mut(win.active) else { return };
+fn step(win: &mut BrowserWindow, id: TabId, forward: bool, window: &mut Window, cx: &mut Context<BrowserWindow>) {
+    let Some(tab) = win.tab_mut(id) else { return };
     if !tab.find.open {
         tab.find.open = true;
         window.focus(FIELD);
@@ -106,19 +106,19 @@ pub fn bar(win: &BrowserWindow, cx: &mut Context<BrowserWindow>) -> Option<AnyEl
                     .placeholder("Find in Page")
                     .text(tab.find.query.clone())
                     .on_change(cx.listener(move |win, e: &TextChanged, _, cx| search(win, id, e.text.to_string(), cx)))
-                    .on_submit(cx.listener(|win, _: &TextSubmitted, window, cx| next(win, window, cx)))
+                    .on_submit(cx.listener(|win, _: &TextSubmitted, window, cx| next(win, win.active, window, cx)))
                     .flex_1(),
             )
             .child(count)
             .child(
                 icon_button("find-previous", Icon::ChevronUp)
                     .tooltip("Previous match")
-                    .on_click(cx.listener(|win, _: &ClickEvent, window, cx| previous(win, window, cx))),
+                    .on_click(cx.listener(|win, _: &ClickEvent, window, cx| previous(win, win.active, window, cx))),
             )
             .child(
                 icon_button("find-next", Icon::ChevronDown)
                     .tooltip("Next match")
-                    .on_click(cx.listener(|win, _: &ClickEvent, window, cx| next(win, window, cx))),
+                    .on_click(cx.listener(|win, _: &ClickEvent, window, cx| next(win, win.active, window, cx))),
             )
             .child(
                 icon_button("find-close", Icon::X)

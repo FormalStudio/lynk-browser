@@ -130,6 +130,11 @@ impl Tab {
         }
     }
 
+    /// Its address is http, https or file.
+    pub fn is_web_page(&self) -> bool {
+        ["http:", "https:", "file:"].iter().any(|s| self.url.starts_with(s))
+    }
+
     pub fn is_live(&self) -> bool {
         matches!(self.page, Page::Live(_))
     }

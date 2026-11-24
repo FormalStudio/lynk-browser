@@ -54,6 +54,9 @@ const FULL: &str = r#"<!doctype html><title>Full</title>
 
 /// No colours of its own: Chromium's default white is what it sits on.
 const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own.";
+const DARK_SCHEME: &str = "<!doctype html><meta name=color-scheme content=dark><title>Dark</title><p>Dark only.";
+const BOTH_SCHEMES: &str =
+    "<!doctype html><meta name=color-scheme content=\"light dark\"><title>Both</title><p>Either scheme.";
 
 /// A title no sidebar row has room for.
 const LONG_TITLE: &str = "<!doctype html><title>A page whose title runs on well past the width of any sidebar row</title>";
@@ -95,6 +98,8 @@ fn respond(mut stream: std::net::TcpStream) {
         "/press" => page(PRESS),
         "/popups" => page(POPUPS),
         "/plain" => page(PLAIN),
+        "/dark-scheme" => page(DARK_SCHEME),
+        "/both-schemes" => page(BOTH_SCHEMES),
         "/long-title" => page(LONG_TITLE),
         "/many" => page(&format!("<!doctype html><title>Many</title><p>{}", "needle ".repeat(10_000))),
         // 50 MB of text under a title.
@@ -1335,6 +1340,33 @@ fn real_a_page_without_colours_sits_on_white() {
     std::thread::sleep(Duration::from_secs(1));
     let plain = page_backdrop(&app, "page-plain");
     assert!(plain.iter().all(|c| *c >= 250), "a page with no colours of its own is white, got {plain:?}");
+}
+
+/// A page that declares its colour scheme keeps Chromium's canvas for it: dark for `dark` and for
+/// `light dark` under a dark appearance, white for `light dark` under a light one.
+#[test]
+fn real_a_page_with_a_colour_scheme_keeps_its_canvas() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for (appearance, path, title, dark) in
+        [("dark", "/dark-scheme", "Dark", true), ("dark", "/both-schemes", "Both", true), ("light", "/both-schemes", "Both", false)]
+    {
+        let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-theme-{appearance}.toml"));
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+            .env("ND_CEF_STYLE", "chrome")
+            .env("ND_THEME_TOML", theme.display().to_string())
+            .arg(format!("{base}{path}"));
+        let app = launch_app(options).unwrap();
+        activate(app.pid());
+        until(&app, "the page", 30, |a| titles(a) == [title]);
+        std::thread::sleep(Duration::from_secs(1));
+        let canvas = page_backdrop(&app, &format!("page-scheme-{title}-{appearance}"));
+        let ok = if dark { canvas.iter().all(|c| *c <= 40) } else { canvas.iter().all(|c| *c >= 250) };
+        assert!(ok, "{path} under a {appearance} appearance, got {canvas:?}");
+    }
 }
 
 /// The sidebar's rows in every state at once, in each appearance and at the minimum width:

@@ -17,18 +17,18 @@ the nd lanes the open boxes wait on, and the order of work are in
 [nd-port-plan.md](nd-port-plan.md).
 
 Status: **not at parity.** The skeleton opens a window with a sidebar and one Chromium page on
-macOS. Nothing below is ticked yet. The 0.5.11 build stays the default until every box is.
+macOS. A ticked box names its proof. The 0.5.11 build stays the default until every box is.
 
 ## Engine
 - [ ] Every page runs in Chromium in Chrome style, so Chromium's extension runtime, `chrome://` pages and picture-in-picture work (lane `cef-chrome-style`)
 - [ ] [linux] Pages on Hyprland run under XWayland, sharp with `xwayland:force_zero_scaling`; the rest of the window stays Wayland-native where nd allows
 - [ ] Chrome's own browser UI never shows: no toolbar, download bubble, download arrow, zoom bubble or tab search bubble
 - [ ] Chrome commands a focused page swallows reach the app: new window, new private window, new tab, reopen closed tab, close tab, next and previous tab, downloads, history, bookmarks, bookmark page, settings, extensions, find, find next and previous, focus address, fullscreen, print, save page, view source, clear browsing data
-- [ ] F7, Shift+Esc, F11 and F1 never open a Chromium surface
+- [x] F7, Shift+Esc, F11 and F1 never open a Chromium surface; drive `real_chrome_only_keys_open_nothing` (macOS)
 - [ ] App shortcuts win over page chords (Shift+Cmd+R is reading mode, not a hard reload; old drive `mac-reader-drive`)
 - [ ] Password manager, autofill save and translate bubbles stay off per profile; other Chromium bubbles (passkeys) anchor to the window
-- [ ] The identity probe passes: no `navigator.webdriver`, no automation globals, `userAgent` and `userAgentData` agree, `Sec-CH-UA*` headers consistent (old `scripts/identity-probe.ts`)
-- [ ] One running instance per profile; a second launch does not corrupt the profile
+- [x] The identity probe passes: no `navigator.webdriver`, no automation globals, `userAgent` and `userAgentData` agree, `Sec-CH-UA*` headers consistent (old `scripts/identity-probe.ts`); drive `real_identity_holds_together` (macOS)
+- [x] One running instance per profile; a second launch does not corrupt the profile; drive `real_one_instance_per_profile` (macOS)
 
 ## Windows and layout
 - [ ] Sidebar layout: no toolbar and no title band, sidebar the full window height on the leading side
@@ -51,9 +51,9 @@ macOS. Nothing below is ticked yet. The 0.5.11 build stays the default until eve
 - [ ] Multi-window: each window has its own tabs, active tab and size; tab ids are unique across windows
 - [ ] Cmd+N opens a window; the menu bar acts on the focused window
 - [ ] Secondary windows carry a main-menu button: New Tab, New Window, Close Tab, Sleep, Find, History, Downloads, Bookmarks, Settings, Move Tab Left, Right, to New Window, to Window
-- [ ] Closing a window closes its tabs; the last window closing quits
+- [x] Closing a window closes its tabs; the last window closing quits; drives `real_windows_and_closing`, `real_window_of_thirty_live_tabs_closes` (macOS)
 - [ ] Cmd+W on the last tab closes the window, and quits if it was the last one
-- [ ] `beforeunload` asks "Leave site?" before a tab or window closes
+- [x] `beforeunload` asks "Leave site?" before a tab or window closes; drive `real_beforeunload_holds_the_close` (macOS)
 - [ ] Settings window, 640x620, opened with Cmd+,
 
 ## Private window
@@ -120,7 +120,7 @@ macOS. Nothing below is ticked yet. The 0.5.11 build stays the default until eve
 - [ ] `homepage` setting: where new windows open, empty for the new tab page
 - [ ] Back, forward, reload (Cmd+[, Cmd+], Cmd+R); Go menu items enabled from the page's history; compact has buttons for them
 - [ ] Entering the address already shown reloads
-- [ ] Cmd+W closes through `beforeunload`; Shift+Cmd+T reopens from the closed-tab stack
+- [x] Cmd+W closes through `beforeunload`; Shift+Cmd+T reopens from the closed-tab stack; drive `real_beforeunload_holds_the_close` (macOS)
 - [ ] Close Other Tabs closes the unpinned others only
 - [ ] Duplicate Tab opens the address in the same window
 - [ ] Cmd+1 to Cmd+8 by place, Cmd+9 the last tab once there are nine; the Tabs menu lists every tab with its chord
@@ -139,7 +139,7 @@ macOS. Nothing below is ticked yet. The 0.5.11 build stays the default until eve
 ## Page tools
 - [ ] Find: Cmd+F, Cmd+G, Shift+Cmd+G; a 420 pt bar with previous, next and close; per tab and kept when the tab moves windows; "N matches", "1 match", "Found" or "No matches", tinted on no match; Esc closes
 - [ ] Zoom: Cmd+plus, Cmd+minus, Cmd+0 and ctrl-wheel, Chromium's steps (25% to 500%), remembered per host
-- [ ] Zoom glyph while not 100%, its popover (Zoom Out, value, Zoom In, Reset), shown for 1.5 s after a chord or menu step (old `zoom-shots`)
+- [x] Zoom glyph while not 100%, its popover (Zoom Out, value, Zoom In, Reset), shown for 1.5 s after a chord or menu step (old `zoom-shots`); drive `real_zoom_steps_and_glyph`, shot `shell-zoom-popover.png` (macOS)
 - [ ] Developer tools: Alt+Cmd+I (Ctrl+Shift+I), and F12 anywhere in the window
 - [ ] View source: Alt+Cmd+U (Ctrl+U) opens `view-source:` in a tab to the right, http, https and file only
 - [ ] Print: Cmd+P opens the system print panel for the page (lane `webview-print`)

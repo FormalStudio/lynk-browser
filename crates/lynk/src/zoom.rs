@@ -26,8 +26,7 @@ struct Popover {
     pinned: bool,
 }
 
-/// Each window's popover. shortcut: a closed window's entry stays, a few bytes each; drop it once
-/// windows report their close to the modules.
+/// Each window's popover.
 #[derive(Default)]
 struct Popovers(HashMap<WindowId, Popover>);
 
@@ -42,10 +41,26 @@ fn state(cx: &mut App, win: WindowId) -> &mut Popover {
     cx.global_mut::<Popovers>().0.entry(win).or_default()
 }
 
+/// The popover of a window that has one; never makes an entry.
+fn existing(cx: &mut App, win: WindowId) -> Option<&mut Popover> {
+    if !cx.has_global::<Popovers>() {
+        return None;
+    }
+    cx.global_mut::<Popovers>().0.get_mut(&win)
+}
+
 fn close(cx: &mut App, win: WindowId) {
-    let p = state(cx, win);
-    p.open = false;
-    p.pinned = false;
+    if let Some(p) = existing(cx, win) {
+        p.open = false;
+        p.pinned = false;
+    }
+}
+
+/// A window listener: the window's popover goes with it.
+pub fn forget(cx: &mut App, win: WindowId) {
+    if cx.has_global::<Popovers>() {
+        cx.global_mut::<Popovers>().0.remove(&win);
+    }
 }
 
 /// A tab listener: the popover closes when another tab is shown.
@@ -67,7 +82,7 @@ fn step(win: &mut BrowserWindow, id: TabId, factor: impl FnOnce(f64) -> f64, cx:
     let notice = p.notice;
     let this = cx.weak_entity();
     nd::system::after(ZOOM_NOTICE, move |cx| {
-        let p = state(cx, me);
+        let Some(p) = existing(cx, me) else { return };
         if p.notice == notice && !p.pinned {
             p.open = false;
             let _ = this.update(cx, |_, cx| cx.notify());
@@ -173,4 +188,29 @@ fn popover_body(percent: &str, cx: &mut Context<BrowserWindow>) -> AnyElement {
                 ),
         )
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use nd::test::TestApp;
+
+    use super::*;
+    use crate::tab::Tab;
+
+    #[test]
+    fn a_closed_window_keeps_no_zoom_popover() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let tabs = vec![Tab::new(app::next_tab_id(&mut cx), "")];
+        let a = app::open_window(&mut cx, tabs, None);
+        let _b = app::open_window(&mut cx, Vec::new(), None);
+        cx.run_until_idle();
+        app::window(&cx, a).unwrap().update(&mut cx, |w, cx| step(w, 1, |z| step_zoom(z, true), cx));
+        assert!(is_open(&cx, a));
+        assert!(cx.request_close(a));
+        assert!(cx.global::<Popovers>().0.is_empty());
+        // The notice timer of that step finds nothing to close and makes no entry.
+        close(&mut cx, a);
+        assert!(cx.global::<Popovers>().0.is_empty());
+    }
 }

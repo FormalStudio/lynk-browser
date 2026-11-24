@@ -34,13 +34,17 @@ pub enum SidebarRow {
     NewTab,
 }
 
-/// The row under the pointer in each window, whose close button shows. shortcut: a closed
-/// window's entry stays, a few bytes each; drop it once windows report their close to the modules.
+/// The row under the pointer in each window, whose close button shows.
 #[derive(Default)]
 struct Hovered(HashMap<WindowId, TabId>);
 
 fn hovered_row(cx: &App, win: WindowId) -> Option<TabId> {
     cx.try_global::<Hovered>()?.0.get(&win).copied()
+}
+
+/// A window listener: the window's hovered row goes with it.
+pub fn forget(cx: &mut App, win: WindowId) {
+    set_hovered(cx, win, None);
 }
 
 fn set_hovered(cx: &mut App, win: WindowId, id: Option<TabId>) {
@@ -118,8 +122,8 @@ impl BrowserWindow {
     pub fn sync_rows(&mut self, cx: &mut Context<Self>) {
         let hovered = hovered_row(cx, self.id);
         let rows: Vec<(SidebarRow, u64)> = self
-            .tabs
-            .iter()
+            .tabs()
+            .into_iter()
             .map(|t| {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 (t.label(), &t.favicon, t.rt.loading, t.is_asleep(), self.active == t.id, hovered == Some(t.id))
@@ -299,4 +303,23 @@ fn new_tab_row(cx: &mut Context<BrowserWindow>) -> AnyElement {
         .child(icon(Icon::Plus, FAVICON))
         .child(label("New tab").secondary())
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use nd::test::TestApp;
+
+    use super::*;
+
+    #[test]
+    fn a_closed_window_keeps_no_hovered_row() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = app::open_window(&mut cx, Vec::new(), None);
+        let _b = app::open_window(&mut cx, Vec::new(), None);
+        cx.run_until_idle();
+        set_hovered(&mut cx, a, Some(1));
+        assert!(cx.request_close(a));
+        assert_eq!(hovered_row(&cx, a), None);
+    }
 }

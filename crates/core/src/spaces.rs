@@ -199,7 +199,7 @@ impl WindowSpaces {
 
 /// The tab that takes over when `gone` leaves a list in `order`: the next one, else the one
 /// before.
-pub(crate) fn neighbour(order: &[String], gone: &str) -> Option<String> {
+pub fn neighbour(order: &[String], gone: &str) -> Option<String> {
     let at = order.iter().position(|t| t == gone)?;
     order.get(at + 1).or_else(|| at.checked_sub(1).and_then(|i| order.get(i))).cloned()
 }

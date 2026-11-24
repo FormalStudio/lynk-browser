@@ -332,7 +332,7 @@ pub const COMMANDS: &[Command] = &[
         }),
     Command::new::<NextTab>("Next Tab").key("next-tab").menu(MenuId::Tabs).handler(|w, _, _, cx| w.cycle(1, cx)),
     Command::new::<PreviousTab>("Previous Tab").key("prev-tab").menu(MenuId::Tabs).handler(|w, _, _, cx| w.cycle(-1, cx)),
-    Command::new::<TogglePin>("Pin Tab").menu(MenuId::Tabs).flips("Unpin Tab", |w, id, _| w.tab(id).is_some_and(|t| t.pinned)),
+    Command::new::<TogglePin>("Pin Tab").menu(MenuId::Tabs).flips("Unpin Tab", |w, id, _| w.is_pinned(id)),
     Command::new::<ToggleMute>("Mute Tab"),
     Command::new::<SleepTab>("Put Tab to Sleep")
         .menu(MenuId::Tabs)
@@ -341,13 +341,13 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<CloseOtherTabs>("Close Other Tabs").handler(|w, id, _, cx| w.close_others(id, cx)),
     Command::new::<DuplicateTab>("Duplicate Tab").enabled(has_address).handler(|w, id, _, cx| w.duplicate(id, cx)),
     Command::new::<MoveTabLeft>("Move Tab Left")
-        .enabled(|w, id, _| w.tabs.first().is_some_and(|t| t.id != id))
+        .enabled(|w, id, _| w.order().first().is_some_and(|t| *t != id))
         .handler(|w, id, _, cx| w.move_by(id, -1, cx)),
     Command::new::<MoveTabRight>("Move Tab Right")
-        .enabled(|w, id, _| w.tabs.last().is_some_and(|t| t.id != id))
+        .enabled(|w, id, _| w.order().last().is_some_and(|t| *t != id))
         .handler(|w, id, _, cx| w.move_by(id, 1, cx)),
     Command::new::<MoveTabToNewWindow>("Move Tab to New Window")
-        .enabled(|w, _, _| w.tabs.len() > 1)
+        .enabled(|w, _, _| w.tab_count() > 1)
         .handler(|w, id, _, cx| shell::move_tab(w, id, None, cx)),
     Command::new::<Back>("Back")
         .key("back")
@@ -373,7 +373,7 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<ClearBrowsingData>("Clear Browsing Data\u{2026}").key("clear-data").menu(MenuId::History),
     Command::new::<Print>("Print\u{2026}"),
     Command::new::<SelectLastTab>("Select Last Tab").handler(|w, _, _, cx| {
-        if let Some(last) = w.tabs.len().checked_sub(1) {
+        if let Some(last) = w.tab_count().checked_sub(1) {
             w.select_at(last, cx);
         }
     }),
@@ -457,9 +457,10 @@ fn tab_item(index: usize, count: usize, id: TabId, label: String) -> MenuItem {
 }
 
 fn tab_items(win: &BrowserWindow, _: &App) -> Vec<MenuItem> {
-    let count = win.tabs.len();
+    let tabs = win.tabs();
+    let count = tabs.len();
     let mut items = vec![MenuItem::separator()];
-    items.extend(win.tabs.iter().enumerate().map(|(i, t)| tab_item(i, count, t.id, t.label())));
+    items.extend(tabs.iter().enumerate().map(|(i, t)| tab_item(i, count, t.id, t.label())));
     items
 }
 

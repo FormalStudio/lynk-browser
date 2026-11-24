@@ -121,20 +121,25 @@ fn handle(event: Event, cx: &mut App) {
     }
 }
 
-/// A later launch's URLs, as tabs at the end of the window the menu bar acts on. With no window
-/// left open (the last one is closing) they get a window of their own.
+/// A later launch's URLs, as tabs at the end of the window the menu bar acts on, else the newest
+/// open one. A window waiting to close, or whose every tab is, would take them down with it, so
+/// with no other window they get one of their own.
 pub fn open_launch(cx: &mut App, urls: Vec<String>) {
-    let Some(id) = app::key_window(cx) else {
+    let open: Vec<_> = cx.window_ids().collect();
+    let target = app::key_window(cx)
+        .into_iter()
+        .chain(app::windows(cx).into_iter().rev().map(|(id, _)| id))
+        .filter(|id| open.contains(id))
+        .find_map(|id| app::window(cx, id).filter(|w| !w.read(cx).pending_close()).map(|w| (id, w)));
+    let Some((id, win)) = target else {
         let tabs = urls.into_iter().map(|url| crate::tab::Tab::new(app::next_tab_id(cx), url)).collect();
         app::open_window(cx, tabs, None);
         return;
     };
-    if let Some(win) = app::window(cx, id) {
-        win.update(cx, |win, cx| {
-            for url in urls {
-                win.open_tab(url, Open::End, cx);
-            }
-        });
-    }
+    win.update(cx, |win, cx| {
+        for url in urls {
+            win.open_tab(url, Open::End, cx);
+        }
+    });
     cx.activate_window(id);
 }

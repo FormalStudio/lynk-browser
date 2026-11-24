@@ -80,7 +80,7 @@ impl BrowserWindow {
         let mut held = div().id("held-pages").size_0().overflow_hidden().absolute();
         let active = self.active;
         let mut cover = None;
-        for tab in &self.tabs {
+        for tab in self.tabs() {
             let Some(page) = tab.view() else { continue };
             let el = page::mount(tab, page, cx);
             if tab.id == active {
@@ -163,8 +163,8 @@ pub fn toggle_sidebar(win: &mut BrowserWindow, _: TabId, _: &mut Window, cx: &mu
 
 /// `view-source:` of the page, in a tab to the right of it.
 pub fn view_source(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut Context<BrowserWindow>) {
-    let Some(at) = win.tabs.iter().position(|t| t.id == id && t.is_web_page()) else { return };
-    let url = format!("view-source:{}", win.tabs[at].url);
+    let (Some(at), Some(tab)) = (win.index_of(id), win.tab(id).filter(|t| t.is_web_page())) else { return };
+    let url = format!("view-source:{}", tab.url);
     win.open_tab(url, Open::At { index: at + 1, foreground: true }, cx);
 }
 

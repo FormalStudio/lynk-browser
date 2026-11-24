@@ -13,8 +13,7 @@ use nd::core::WindowId;
 use crate::tab::{Tab, TabId};
 use crate::window::{BrowserWindow, TabEvent};
 
-/// The windows with the popover up. shortcut: a closed window's entry stays until the popover is
-/// dismissed, which it cannot be; drop it once windows report their close to the modules.
+/// The windows with the popover up.
 #[derive(Default)]
 struct Open(HashSet<WindowId>);
 
@@ -32,6 +31,11 @@ fn set_open(cx: &mut App, win: WindowId, open: bool) {
     } else {
         windows.remove(&win);
     }
+}
+
+/// A window listener: the window's popover goes with it.
+pub fn forget(cx: &mut App, win: WindowId) {
+    set_open(cx, win, false);
 }
 
 /// A tab listener: the popover closes when another tab is shown.
@@ -127,5 +131,17 @@ mod tests {
         app::window(&cx, w).unwrap().update(&mut cx, |win, cx| win.select(2, cx));
         cx.run_until_idle();
         assert!(!is_open(&cx, w));
+    }
+
+    #[test]
+    fn a_closed_window_keeps_no_popover() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = app::open_window(&mut cx, Vec::new(), None);
+        let _b = app::open_window(&mut cx, Vec::new(), None);
+        cx.run_until_idle();
+        set_open(&mut cx, a, true);
+        assert!(cx.request_close(a));
+        assert!(cx.global::<Open>().0.is_empty());
     }
 }

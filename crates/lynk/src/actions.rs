@@ -281,7 +281,10 @@ pub const COMMANDS: &[Command] = &[
         app::open_window(cx, Vec::new(), None);
     }),
     Command::new::<NewPrivateWindow>("New Private Window").key("private").menu(MenuId::File),
-    Command::new::<OpenAddress>("Open Address Bar").key("address").menu(MenuId::File).handler(crate::omnibox::open_address),
+    Command::new::<OpenAddress>("Open Address Bar")
+        .key("address")
+        .menu(MenuId::File)
+        .handler(crate::omnibox::open_address),
     Command::new::<OpenSwitcher>("Switch Tabs").key("switcher").menu(MenuId::File).handler(crate::omnibox::switcher),
     Command::new::<CloseTab>("Close Tab")
         .key("close-tab")

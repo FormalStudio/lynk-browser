@@ -30,6 +30,9 @@ const ALPHA: &str = r#"<!doctype html><title>Alpha</title>
 <a href="/beta" target="_blank" style="display:block;height:100px;background:#edc">Beta in a new tab</a>
 </body>"#;
 const BETA: &str = "<!doctype html><title>Beta</title><body><p>The second page.</p></body>";
+/// Goes to the address after `?` eight seconds after it loads, by itself.
+const LATER: &str = "<!doctype html><title>Later</title><script>\
+setTimeout(() => location.replace(decodeURIComponent(location.search.slice(1))), 8000)</script>";
 const LEAVE: &str = r#"<!doctype html><title>Leave</title>
 <body style="margin:0"><div style="height:400px;background:#fdd">Click me first</div>
 <script>addEventListener("beforeunload", e => { e.preventDefault(); e.returnValue = ""; });</script></body>"#;
@@ -92,6 +95,7 @@ fn respond(mut stream: std::net::TcpStream) {
     let (status, extra, body) = match path {
         "/alpha" => page(ALPHA),
         "/beta" => page(BETA),
+        "/later" => page(LATER),
         "/leave" => page(LEAVE),
         "/full" => page(FULL),
         "/long" => page(LONG),
@@ -131,12 +135,10 @@ fn launch(url: &str) -> AppHandle {
 
 /// Launches on `urls`, a tab each, as a launch from the command line does.
 fn launch_with(urls: &[String]) -> AppHandle {
-    let options = urls
-        .iter()
-        .fold(
-            LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("ND_CEF_STYLE", "chrome").env("LYNK_SEARCHENGINE", "google"),
-            |o, url| o.arg(url),
-        );
+    let options = urls.iter().fold(
+        LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("ND_CEF_STYLE", "chrome").env("LYNK_SEARCHENGINE", "google"),
+        |o, url| o.arg(url),
+    );
     let app = launch_app(options).unwrap();
     activate(app.pid());
     app
@@ -557,6 +559,9 @@ mod key {
     pub const T: u16 = 17;
     pub const V: u16 = 9;
     pub const RETURN: u16 = 36;
+    pub const TAB: u16 = 48;
+    pub const BACKSPACE: u16 = 51;
+    pub const DOWN: u16 = 125;
     pub const F: u16 = 3;
     pub const I: u16 = 34;
     pub const ESCAPE: u16 = 53;
@@ -1509,7 +1514,6 @@ fn sidebar_geometry_holds(app: &AppHandle) {
     assert!(title.x + title.width <= close.x, "the title stops before the close button: {title:?}, {close:?}");
 }
 
-
 /// The command bar's field as its search box reads, `None` while the bar is closed. A completion
 /// it shows follows a `|`.
 fn bar_field(app: &AppHandle) -> Option<String> {
@@ -1540,7 +1544,10 @@ fn bar_wait(app: &AppHandle, open: bool) {
         if Instant::now() > deadline {
             shot(app, "bar-timeout");
             let windows = ndshell::window_list::of_pid(app.pid());
-            let front = std::process::Command::new("sh").args(["-c", "lsappinfo info -only name $(lsappinfo front)"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+            let front = std::process::Command::new("sh")
+                .args(["-c", "lsappinfo info -only name $(lsappinfo front)"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
             panic!(
                 "the bar never {}: windows {windows:?}, keys {:?}, front app {front:?}, app said {:#?}",
                 if open { "opened" } else { "closed" },
@@ -1721,7 +1728,9 @@ fn real_command_bar_survives_an_app_switch() {
     let finder = std::process::Command::new("pgrep").args(["-x", "Finder"]).output().unwrap();
     let finder: u32 = String::from_utf8_lossy(&finder.stdout).trim().parse().expect("Finder runs");
     ndshell::input::activate(finder);
-    let away = |a: &AppHandle| a.windows().ok().is_some_and(|w| w.as_array().is_some_and(|ws| ws.iter().all(|w| w["key"] != true)));
+    let away = |a: &AppHandle| {
+        a.windows().ok().is_some_and(|w| w.as_array().is_some_and(|ws| ws.iter().all(|w| w["key"] != true)))
+    };
     until(&app, "another app in front", 10, away);
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(bar_field(&app).as_deref(), Some("lynk-"), "the bar stays open while away");
@@ -1733,6 +1742,126 @@ fn real_command_bar_survives_an_app_switch() {
     hid(key::ESCAPE, &[]);
     bar_closed(&app);
     assert_eq!(titles(&app), ["Alpha"]);
+}
+
+/// A page in a window behind loads a site of its own while the command bar of the window in
+/// front has the keyboard: Chromium takes key for the page's widget, and it goes back to the bar
+/// in front, not to the window behind.
+#[test]
+fn real_command_bar_keeps_the_keys_while_a_window_behind_loads() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let port = base.rsplit(':').next().unwrap().to_owned();
+    let app = launch(&format!("{base}/later?http%3A%2F%2Flocalhost%3A{port}%2Fbeta"));
+    until(&app, "the page", 30, |a| titles(a) == ["Later"]);
+    press(&app, "cmd-n");
+    until(&app, "a second window", 10, |a| window_count(a) == 2);
+    open_bar(&app, key::T);
+    type_real("lynk-");
+    let behind_loaded =
+        |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Beta"]));
+    until(&app, "the window behind on its new site", 20, behind_loaded);
+    std::thread::sleep(Duration::from_secs(1));
+    type_real("back");
+    assert_eq!(bar_field(&app).as_deref(), Some("lynk-back"), "the bar in front kept the keys");
+    hid(key::ESCAPE, &[]);
+    bar_closed(&app);
+}
+
+/// The bar's rows as assistive tech reads them ("title, subtitle, hint"), top first.
+fn bar_rows(app: &AppHandle) -> Vec<String> {
+    let Ok(tree) = app.tree(None) else { return Vec::new() };
+    // The rows are parts of the palette that share its bounds, so the tree's order is theirs.
+    tree.windows
+        .iter()
+        .find(|w| w.root.iter().any(|n| format!("{:?}", n.role) == "SearchBox"))
+        .map(|w| w.root.iter().filter(|n| format!("{:?}", n.role) == "ListItem").map(|n| n.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// History, open tabs and commands come up as you type: the address completes inline from the
+/// places you have been, the keys and the pointer pick rows, and an open tab is switched to rather
+/// than opened twice.
+#[test]
+fn real_command_bar_suggests() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let host = base.trim_start_matches("http://").to_owned();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    // Two places in history, and Beta open in a second tab.
+    go_to(&app, &format!("{base}/plain"));
+    until(&app, "Plain", 15, |a| titles(a) == ["Plain"]);
+    open_in_new_tab(&app, &format!("{base}/beta"));
+    until(&app, "Beta", 15, |a| titles(a) == ["Plain", "Beta"]);
+
+    // Inline completion from history: the host and its port, shown selected after what was typed.
+    let port = base.rsplit(':').next().unwrap().to_owned();
+    open_bar(&app, key::T);
+    type_real("127.0.0");
+    until(&app, "the completed host", 5, |a| bar_field(a) == Some(format!("127.0.0|.1:{port}")));
+    // Backspace takes the completion away, and it stays away until the next letter.
+    hid(key::BACKSPACE, &[]);
+    until(&app, "the completion gone", 5, |a| bar_field(a).as_deref() == Some("127.0.0"));
+    type_real(".");
+    until(&app, "completing again", 5, |a| bar_field(a) == Some(format!("127.0.0.|1:{port}")));
+    // Tab takes it; then a path finishes from history.
+    hid(key::TAB, &[]);
+    until(&app, "the host taken", 5, |a| bar_field(a).as_deref() == Some(host.as_str()));
+    type_real("/pl");
+    until(&app, "the path completed", 5, |a| bar_field(a) == Some(format!("{host}/pl|ain")));
+    let rows = bar_rows(&app);
+    assert!(rows.first().is_some_and(|r| r.starts_with(&format!("{host}/plain"))), "{rows:?}");
+    hid(key::RETURN, &[]);
+    bar_closed(&app);
+    until(&app, "the completed address in a new tab", 15, |a| titles(a) == ["Plain", "Beta", "Plain"]);
+
+    // An open tab is offered as a switch: Down, then Return, shows it instead of opening it again.
+    open_bar(&app, key::L);
+    type_real("Bet");
+    until(&app, "the open tab offered", 5, |a| {
+        bar_rows(a).iter().any(|r| r.starts_with("Beta") && r.ends_with("Switch to Tab"))
+    });
+    let rows = bar_rows(&app);
+    let at = rows.iter().position(|r| r.ends_with("Switch to Tab")).unwrap();
+    for _ in 0..at {
+        hid(key::DOWN, &[]);
+    }
+    hid(key::RETURN, &[]);
+    bar_closed(&app);
+    until(&app, "Beta shown", 10, |a| shown_title(a) == "Beta");
+    assert_eq!(titles(&app), ["Plain", "Beta", "Plain"], "switched, not opened again");
+
+    // Cmd+K with nothing typed: the first row is the tab shown before, and Return goes back.
+    open_bar(&app, key::K);
+    let rows = bar_rows(&app);
+    assert!(rows.first().is_some_and(|r| r.starts_with("Plain") && r.ends_with("Switch to Tab")), "{rows:?}");
+    hid(key::RETURN, &[]);
+    bar_closed(&app);
+    until(&app, "back to the tab before", 10, |a| shown_title(a) == "Plain");
+
+    // A click on a row runs it.
+    open_bar(&app, key::K);
+    let rows = bar_rows(&app);
+    let at = rows.iter().position(|r| r.starts_with("Beta") && r.ends_with("Switch to Tab")).expect("Beta offered");
+    // The card sits at 18% of the window; under it the field (about 26 pt), the gaps and the
+    // separator (37 pt), then 40 pt rows. Not `real_click`: the bar's panel has key, not the
+    // window it waits for.
+    let (wx, wy, _, wh) = front_window(&app).bounds;
+    ndshell::input::click((wx + 600., wy + (wh * 0.18).round() + 26. + 37. + 40. * at as f64 + 20.));
+    bar_closed(&app);
+    until(&app, "Beta by the pointer", 10, |a| shown_title(a) == "Beta");
+
+    // Typing fast while the rows come back from history keeps every letter, in order.
+    open_bar(&app, key::T);
+    type_real(&format!("{host}/beta?fast-typing"));
+    assert_eq!(bar_field(&app), Some(format!("{host}/beta?fast-typing")));
+    hid(key::ESCAPE, &[]);
+    bar_closed(&app);
 }
 
 /// A capture for the report, under the worktree's `target/report-shots`, at the display's scale.

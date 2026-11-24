@@ -11,6 +11,7 @@
 pub mod actions;
 pub mod app;
 pub mod find;
+pub mod history;
 pub mod omnibox;
 pub mod page;
 pub mod process;

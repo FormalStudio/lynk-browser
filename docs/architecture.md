@@ -232,7 +232,11 @@ whose `COMMANDS` row has no handler or is disabled; a row's id names what Return
 `go:`, `hist:`, `tab:`, `cmd:`). Typed text becomes an address through `lynk_core::url::to_url`
 with the engine from `cx.settings::<LynkSettings>()`. Highlight, inline completion and the keys
 are nd's `PaletteModel`; the shell feeds back every reported query, which the model tells apart
-from a reseed even when the echo trails the typing.
+from a reseed even when the echo trails the typing. History comes from `history.rs`, which
+records every committed page through `page::OBSERVERS` into `history.sqlite` and answers the
+bar's searches off the main thread; each search is numbered and an answer to an older one is
+dropped, so rows never go back to a query already typed past. Open tabs are offered most
+recently shown first, an order the bar keeps through `TAB_EVENTS`.
 
 ### `BrowserWindow::open_tab`
 
@@ -348,6 +352,7 @@ Shell, `crates/lynk/src`:
 | `actions.rs` | actions, `COMMANDS`, `MENU_ITEMS`, `CONTEXT_KEYS`, bindings, menu bar | run a command's logic |
 | `find.rs` | find in page | touch another tab |
 | `omnibox.rs` | the command bar: its state per window, running the picked row | rank rows or parse typed text (core does) |
+| `history.rs` | recording visits and titles, searching them for the bar | rank matches (core does) |
 | `zoom.rs` | zoom steps, the foot glyph and popover | store levels outside `app` |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |
 | `main.rs` | calls `lynk::run` | anything else |

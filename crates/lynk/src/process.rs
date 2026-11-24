@@ -17,6 +17,11 @@ enum Event {
     Terminate,
 }
 
+/// Runs `future` to its end on the app's runtime, blocking the caller.
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    runtime().block_on(future)
+}
+
 fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {

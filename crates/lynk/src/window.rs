@@ -48,13 +48,15 @@ pub enum TabEvent {
 pub type TabListener = fn(&mut BrowserWindow, TabId, TabEvent, &mut Context<BrowserWindow>);
 
 /// The tab event listeners, called in order after the window's own change.
-pub const TAB_EVENTS: &[TabListener] = &[crate::zoom::tab_event, crate::site_info::tab_event];
+pub const TAB_EVENTS: &[TabListener] =
+    &[crate::zoom::tab_event, crate::site_info::tab_event, crate::omnibox::tab_event];
 
 /// Drops what a module keeps for a window that has gone.
 pub type WindowListener = fn(&mut App, WindowId);
 
 /// Called as a window goes, so no module keeps state for it.
-pub const WINDOW_CLOSED: &[WindowListener] = &[crate::zoom::forget, crate::site_info::forget, crate::sidebar::forget];
+pub const WINDOW_CLOSED: &[WindowListener] =
+    &[crate::zoom::forget, crate::site_info::forget, crate::sidebar::forget, crate::omnibox::forget];
 
 /// Closes waiting on pages' `beforeunload`. `settle` is the one place a close goes ahead, and
 /// `changed` reaches it after every change to the window's tabs or pages, so a path that drops,

@@ -8,7 +8,7 @@ use nd::platform::{Target, target};
 use nd::prelude::*;
 use nd::virtual_list::{SelectEvent, Selection, list};
 
-use crate::actions::{self, MoveTabToWindow};
+use crate::actions;
 use crate::app;
 use crate::tab::TabId;
 use crate::window::{BrowserWindow, Open};
@@ -59,34 +59,34 @@ fn window_menu(win: &BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWind
     }
     let me = win.id;
     let button = menu_button("window-menu", Icon::Menu, move |menu, _, cx| {
+        use actions::*;
         let Some(win) = app::window(cx, me) else { return menu };
         let win = win.read(cx);
-        let at = win.tabs.iter().position(|t| t.id == win.active).unwrap_or(0);
-        let count = win.tabs.len();
         let others: Vec<(WindowId, String)> = app::windows(cx)
             .into_iter()
             .filter(|(id, _)| *id != me)
             .map(|(id, w)| (id, w.read(cx).window_label()))
             .collect();
+        let item = |command| menu_item(command, win, cx);
         let mut menu = menu
-            .item("New Tab", actions::NewTab)
-            .item("New Window", actions::NewWindow)
-            .item("Close Tab", actions::CloseTab)
-            .entry(MenuItem::action("Put Tab to Sleep", actions::SleepTab).enabled(win.can_sleep(win.active)))
+            .entry(item(command_for::<NewTab>()))
+            .entry(item(command_for::<NewWindow>()))
+            .entry(item(command_for::<CloseTab>()))
+            .entry(item(command_for::<SleepTab>()))
             .separator()
-            .entry(MenuItem::action("Move Tab Left", actions::MoveTabLeft).enabled(at > 0))
-            .entry(MenuItem::action("Move Tab Right", actions::MoveTabRight).enabled(at + 1 < count))
-            .entry(MenuItem::action("Move Tab to New Window", actions::MoveTabToNewWindow).enabled(count > 1));
+            .entry(item(command_for::<MoveTabLeft>()))
+            .entry(item(command_for::<MoveTabRight>()))
+            .entry(item(command_for::<MoveTabToNewWindow>()));
         if !others.is_empty() {
             let targets = others.into_iter().map(|(id, label)| MenuItem::action(label, MoveTabToWindow(id)));
             menu = menu.submenu(Menu::new("Move Tab to Window").items(targets));
         }
         menu.separator()
-            .item("Find in Page", actions::FindInPage)
-            .item("History", actions::ShowHistory)
-            .item("Downloads", actions::ShowDownloads)
-            .item("Bookmarks", actions::ShowBookmarks)
-            .item("Settings", actions::OpenSettings)
+            .entry(item(command_for::<FindInPage>()))
+            .entry(item(command_for::<ShowHistory>()))
+            .entry(item(command_for::<ShowDownloads>()))
+            .entry(item(command_for::<ShowBookmarks>()))
+            .entry(item(command_for::<OpenSettings>()))
     })
     .tooltip("Main Menu");
     Some(button.into_any_element())

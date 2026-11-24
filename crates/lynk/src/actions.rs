@@ -463,7 +463,8 @@ fn tab_items(win: &BrowserWindow, _: &App) -> Vec<MenuItem> {
     items
 }
 
-fn command_item(command: &Command, win: &BrowserWindow, cx: &App) -> MenuItem {
+/// `command` as the menu bar shows it, for the shown tab of `win`.
+pub fn menu_item(command: &Command, win: &BrowserWindow, cx: &App) -> MenuItem {
     let item = MenuItem::Action {
         label: command.label_for(win, win.active, cx).into(),
         action: command.action(),
@@ -497,7 +498,7 @@ pub fn menus(win: &BrowserWindow, cx: &App) -> Vec<Menu> {
             if command.separator_before && !items.is_empty() {
                 items.push(MenuItem::separator());
             }
-            items.push(command_item(command, win, cx));
+            items.push(menu_item(command, win, cx));
         }
         for (_, extra) in MENU_ITEMS.iter().filter(|(menu, _)| *menu == id) {
             items.extend(extra(win, cx));

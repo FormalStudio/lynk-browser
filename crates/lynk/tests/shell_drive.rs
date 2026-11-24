@@ -52,6 +52,9 @@ const PRESS: &str = r#"<!doctype html><title>Press</title>
 const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
+/// No colours of its own: Chromium's default white is what it sits on.
+const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own.";
+
 /// Opens pop-ups as fast as it can, never from a click.
 const POPUPS: &str = r#"<!doctype html><title>Popups</title>
 <body><script>setInterval(() => window.open("/beta?" + Math.random()), 20);</script></body>"#;
@@ -84,6 +87,7 @@ fn respond(mut stream: std::net::TcpStream) {
         "/busy" => page(BUSY),
         "/press" => page(PRESS),
         "/popups" => page(POPUPS),
+        "/plain" => page(PLAIN),
         "/many" => page(&format!("<!doctype html><title>Many</title><p>{}", "needle ".repeat(10_000))),
         // 50 MB of text under a title.
         "/big" => page(&format!("<!doctype html><title>Big</title><pre>{}", "x".repeat(50 << 20))),
@@ -1267,3 +1271,32 @@ fn real_tab_moves_between_windows_without_a_reload() {
     until(&app, "the other tab left behind", 5, left);
 }
 
+/// The colour the page shows near its bottom right corner, where nothing of its own is drawn,
+/// read from a capture of the window.
+fn page_backdrop(app: &AppHandle, name: &str) -> [u8; 3] {
+    let path = shot(app, name);
+    let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()));
+    let mut reader = decoder.read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    let scale = f64::from(info.width) / front_window(app).bounds.2;
+    let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+    let x = ((f64::from(b.x + b.width) - 40.) * scale) as usize;
+    let y = ((f64::from(b.y + b.height) - 40.) * scale) as usize;
+    let channels = info.color_type.samples();
+    let at = y * info.line_size + x * channels;
+    [buf[at], buf[at + 1], buf[at + 2]]
+}
+
+#[test]
+fn real_a_page_without_colours_sits_on_white() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/plain"));
+    until(&app, "the plain page", 30, |a| titles(a) == ["Plain"]);
+    std::thread::sleep(Duration::from_secs(1));
+    let plain = page_backdrop(&app, "page-plain");
+    assert!(plain.iter().all(|c| *c >= 250), "a page with no colours of its own is white, got {plain:?}");
+}

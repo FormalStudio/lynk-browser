@@ -3673,6 +3673,7 @@ dependencies = [
  "nd-ipc",
  "nd-test",
  "ndshell",
+ "png 0.18.1",
  "serde_json",
  "tokio",
 ]

@@ -66,8 +66,7 @@ pub fn due(
         .collect()
 }
 
-/// An archived tab and where it sat: the rows above and below it in its space's list (empty at
-/// either end) and its index there, for when both are gone.
+/// An archived tab and where it sat: the rows above it in its space's list, nearest first.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ArchivedTab {
@@ -77,12 +76,10 @@ pub struct ArchivedTab {
     pub window_id: String,
     #[serde(deserialize_with = "null_default")]
     pub space_id: String,
-    #[serde(deserialize_with = "null_default")]
-    pub after: String,
-    #[serde(deserialize_with = "null_default")]
-    pub before: String,
-    #[serde(deserialize_with = "null_default")]
-    pub index: usize,
+    // shortcut: every row above is kept, so an entry grows with the list; keep only the nearest
+    // few if archive entries for lists of thousands of rows show up in session.json size.
+    #[serde(deserialize_with = "crate::lenient_items")]
+    pub above: Vec<String>,
     #[serde(deserialize_with = "null_default")]
     pub archived_at: i64,
 }
@@ -104,9 +101,7 @@ pub fn archive_tabs(state: &mut SessionState, ids: &[String], now: i64) -> usize
             tab: w.tab(id).cloned().unwrap_or_default(),
             window_id: w.id.clone(),
             space_id: space.to_owned(),
-            after: tree.row_above(id).unwrap_or_default().to_owned(),
-            before: tree.items.get(index + 1).map(|i| i.id().to_owned()).unwrap_or_default(),
-            index,
+            above: tree.items[..index].iter().rev().map(|i| i.id().to_owned()).collect(),
             archived_at: now,
         });
     }
@@ -119,9 +114,10 @@ pub fn archive_tabs(state: &mut SessionState, ids: &[String], now: i64) -> usize
     moved
 }
 
-/// Puts archive entry `at` back as a loose tab: under the row it followed, else over the row
-/// that followed it, else at its old index, in its window and space when they still exist, else in the space the first window
-/// shows. Returns the window it went to and the tab's id, which is new if its old one is taken.
+/// Puts archive entry `at` back as a loose tab: under the nearest row that was above it and is
+/// still there, else at the top. Tabs archived together therefore come back in their order
+/// whatever order they are restored in. It goes in its window and space when they still exist,
+/// else in the space the first window shows. Returns the window it went to and the tab's id, which is new if its old one is taken.
 pub fn restore(state: &mut SessionState, at: usize) -> Option<(String, TabId)> {
     if at >= state.archive.len() || state.windows.is_empty() {
         return None;
@@ -137,15 +133,9 @@ pub fn restore(state: &mut SessionState, at: usize) -> Option<(String, TabId)> {
     };
     let space = if space_known { entry.space_id.clone() } else { w.spaces.shown.clone() };
     let tree = w.spaces.sidebars.get(&space);
-    let index = match tree {
-        _ if entry.after.is_empty() => 0,
-        Some(tree) => match (tree.row_index(&entry.after), tree.row_index(&entry.before)) {
-            (Some(above), _) => above + 1,
-            (None, Some(below)) => below,
-            (None, None) => entry.index,
-        },
-        None => 0,
-    };
+    let index = tree
+        .and_then(|tree| entry.above.iter().find_map(|row| tree.row_index(row)))
+        .map_or(0, |above| above + 1);
     let id = entry.tab.id.clone();
     w.insert_tab(entry.tab, &space, Dest::Root(index)).ok()?;
     Some((w.id.clone(), id))
@@ -193,7 +183,7 @@ mod tests {
         let mut s = state();
         let before = s.windows[0].spaces.tree().unwrap().items.clone();
         assert_eq!(archive_tabs(&mut s, &["c".into(), "a".into(), "e".into()], 7), 1);
-        assert_eq!(s.archive[0].after, "b");
+        assert_eq!(s.archive[0].above, ["b", "t1"]);
         assert!(!s.windows[0].tabs.iter().any(|t| t.id == "c"));
         assert_eq!(restore(&mut s, 0), Some(("w1".into(), "c".into())));
         assert_eq!(s.windows[0].spaces.tree().unwrap().items, before);
@@ -203,17 +193,17 @@ mod tests {
         let rows = |s: &SessionState| -> Vec<String> {
             s.windows[0].spaces.tree().unwrap().items.iter().map(|i| i.id().to_owned()).collect()
         };
-        // The row it followed is gone: it goes back over the row that followed it.
+        // The row it followed is gone: it goes under the next one up.
         archive_tabs(&mut s, &["c".into()], 8);
         s.close_tab("b");
         restore(&mut s, 0).unwrap();
         assert_eq!(rows(&s), ["t1", "c", "d", "f"]);
-        // Both are gone: back to its index.
+        // Every row above is gone: it goes to the top.
         archive_tabs(&mut s, &["c".into()], 9);
         s.close_tab("t1");
         s.close_tab("d");
         restore(&mut s, 0).unwrap();
-        assert_eq!(rows(&s), ["f", "c"]);
+        assert_eq!(rows(&s), ["c", "f"]);
         assert!(restore(&mut s, 0).is_none());
     }
 
@@ -257,5 +247,45 @@ mod tests {
         let i = at(&s, "a");
         restore(&mut s, i).unwrap();
         assert_eq!(s.windows[0].spaces.tab_ids(), [first.as_str(), "x", "a", "b", "y"]);
+    }
+
+    /// Every order of restoring b, c, d, e archived together from a b c d e f.
+    fn restore_orders() -> Vec<Vec<&'static str>> {
+        let mut out = Vec::new();
+        let items = ["b", "c", "d", "e"];
+        for a in 0..4 {
+            for b in 0..4 {
+                for c in 0..4 {
+                    for d in 0..4 {
+                        let order = [a, b, c, d];
+                        if (0..4).all(|i| order.contains(&i)) {
+                            out.push(order.iter().map(|i| items[*i]).collect());
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn a_batch_comes_back_in_order_whatever_order_it_is_restored_in() {
+        let orders = restore_orders();
+        assert_eq!(orders.len(), 24);
+        assert!(orders.contains(&vec!["c", "e", "d", "b"]));
+        for order in orders {
+            let mut s = normalize(&SessionState::default());
+            let blank = s.windows[0].active_id.clone();
+            s.close_tab(&blank);
+            for id in ["a", "b", "c", "d", "e", "f"] {
+                s.windows[0].add_tab(blank_tab(id), None, 99).unwrap();
+            }
+            archive_tabs(&mut s, &["b", "c", "d", "e"].map(String::from), 0);
+            for id in &order {
+                let i = s.archive.iter().position(|e| e.tab.id == *id).unwrap();
+                restore(&mut s, i).unwrap();
+            }
+            assert_eq!(s.windows[0].spaces.tab_ids(), ["a", "b", "c", "d", "e", "f"], "restored as {order:?}");
+        }
     }
 }

@@ -362,7 +362,8 @@ pub fn normalize(state: &SessionState) -> SessionState {
     out
 }
 
-fn row_ids(item: &Item) -> Vec<&str> {
+/// The ids of a row and the splits in it that are not tabs: separators, folders and splits.
+pub(crate) fn row_ids(item: &Item) -> Vec<&str> {
     match item {
         Item::Tab { .. } => Vec::new(),
         Item::Folder(f) => std::iter::once(f.id.as_str())
@@ -407,20 +408,14 @@ pub fn place_opened_tab(
     disposition: Option<OpenDisposition>,
 ) -> Placement {
     let foreground = disposition != Some(OpenDisposition::BackgroundTab);
-    let index = if tree.is_pinned(opener_id) {
-        0
-    } else if let Some(from) = tree.root_row_of(opener_id) {
-        let mut index = from + 1;
-        while !foreground
-            && let Some(Item::Tab { id }) = tree.items.get(index)
-            && openers.get(id).is_some_and(|o| o == opener_id)
-        {
-            index += 1;
-        }
-        index
-    } else {
-        tree.items.len()
-    };
+    let start = if tree.is_pinned(opener_id) { Some(0) } else { tree.root_row_of(opener_id).map(|from| from + 1) };
+    let Some(mut index) = start else { return Placement { index: tree.items.len(), foreground } };
+    while !foreground
+        && let Some(Item::Tab { id }) = tree.items.get(index)
+        && openers.get(id).is_some_and(|o| o == opener_id)
+    {
+        index += 1;
+    }
     Placement { index, foreground }
 }
 
@@ -544,6 +539,34 @@ mod tests {
         assert!(tree.contains_tab("t1"), "page t1 has a row");
         assert_eq!(tree.items.iter().filter(|i| i.id() == "t1").count(), 1);
         check_all(&out);
+    }
+
+    #[test]
+    fn a_separator_named_t1_in_a_window_with_no_tabs_gives_way_to_the_blank_tab() {
+        let (s, _) = load(r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[],"activeId":"",
+            "spaces":{"shown":"s1","sidebars":{"s1":{"items":[{"type":"separator","id":"t1","name":"Later"}]}}}}],
+            "spaces":[{"id":"s1","name":"Personal"}],"nextTabId":1}}"#);
+        let w = &s.windows[0];
+        assert_eq!(w.tabs.len(), 1);
+        let tree = w.spaces.tree().unwrap();
+        assert!(tree.contains_tab(&w.tabs[0].id));
+        let separators: Vec<&Item> = tree.items.iter().filter(|i| matches!(i, Item::Separator { .. })).collect();
+        assert_eq!(separators.len(), 1);
+        assert_eq!(separators[0], &Item::Separator { id: separators[0].id().to_owned(), name: "Later".into() });
+        assert_ne!(separators[0].id(), w.tabs[0].id);
+        check_all(&s);
+    }
+
+    #[test]
+    fn background_tabs_from_the_only_pinned_tab_keep_click_order() {
+        let mut tree = SidebarTree { pins: vec!["p".into()], ..SidebarTree::default() };
+        let mut openers = HashMap::new();
+        for id in ["x1", "x2", "x3"] {
+            let at = place_opened_tab(&tree, "p", &openers, Some(OpenDisposition::BackgroundTab));
+            tree.add_tab(id, Some("p"), at.index).unwrap();
+            openers.insert(id.to_owned(), "p".to_owned());
+        }
+        assert_eq!(tree.tab_ids(), ["p", "x1", "x2", "x3"]);
     }
 
     #[test]

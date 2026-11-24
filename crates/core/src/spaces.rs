@@ -162,7 +162,8 @@ impl WindowSpaces {
     }
 
     /// Moves a tab to another space's sidebar in this window, as a loose tab at the top of its
-    /// list. A tab that was on show hands over to its neighbour in the space it left.
+    /// list. A tab that was on show hands over to its neighbour in the space it left; one that
+    /// arrives in the space on show while it shows nothing comes on show.
     pub fn move_tab(
         &mut self,
         spaces: &[Space],
@@ -189,6 +190,9 @@ impl WindowSpaces {
         }
         let target = self.sidebars.entry(to_space.to_owned()).or_default();
         target.add_tab(tab, None, 0).map_err(|_| SpaceError::UnknownTab)?;
+        if active.is_empty() && to_space == self.shown {
+            *active = tab.to_owned();
+        }
         Ok(())
     }
 }
@@ -304,5 +308,15 @@ mod tests {
         let s: Space = serde_json::from_str(r#"{"id":"s1","name":null,"theme":null}"#).unwrap();
         assert_eq!(s.theme, Theme::default());
         assert_eq!(s.name, "");
+    }
+
+    #[test]
+    fn a_tab_moved_into_an_empty_space_on_show_comes_on_show() {
+        let spaces = [space("s1", "A"), space("s2", "B")];
+        let mut w = WindowSpaces::single("s1", tree(&[], &[]));
+        w.sidebars.insert("s2".into(), tree(&[], &["b"]));
+        let mut active = String::new();
+        w.move_tab(&spaces, "b", "s1", true, &mut active).unwrap();
+        assert_eq!(active, "b");
     }
 }

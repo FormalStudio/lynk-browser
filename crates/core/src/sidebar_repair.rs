@@ -3,12 +3,14 @@
 
 use std::collections::HashSet;
 
+use crate::session::tab_number;
 use crate::sidebar_tree::{Child, Item, SidebarTree, Split};
 
 impl SidebarTree {
     /// Tabs `keep` rejects and repeats go, and a split left with one tab becomes that tab. A
-    /// separator, folder or split whose id is a tab's (one of `tab_ids`) or an earlier row's gets
-    /// a fresh one from `new_id`, so every tab can still have a row.
+    /// separator, folder or split whose id is a tab's (one of `tab_ids`, or any id the session
+    /// hands tabs out under) or an earlier row's gets a fresh one from `new_id`, so every tab,
+    /// present or still to be made, can have a row.
     pub(crate) fn repair(
         &mut self,
         mut keep: impl FnMut(&str) -> bool,
@@ -20,7 +22,8 @@ impl SidebarTree {
         self.pins.retain(|id| take(id));
         let mut rows: HashSet<String> = HashSet::new();
         let mut row_id = |id: String| {
-            let id = if tab_ids.contains(&id) || rows.contains(&id) { new_id() } else { id };
+            let clashes = tab_ids.contains(&id) || tab_number(&id).is_some() || rows.contains(&id);
+            let id = if clashes { new_id() } else { id };
             rows.insert(id.clone());
             id
         };

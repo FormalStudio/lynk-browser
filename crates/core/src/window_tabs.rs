@@ -124,10 +124,12 @@ pub fn fresh_start(stored: &SessionState, homepage: &str) -> SessionState {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
     use crate::Lcg;
     use crate::mru::Mru;
-    use crate::session::open;
+    use crate::session::{open, row_ids, tab_number};
     use crate::sidebar_tree::{FolderKind, SidebarTree};
     use crate::spaces::Space;
 
@@ -284,28 +286,70 @@ mod tests {
         check_window(&s.windows[0]).unwrap();
     }
 
-    #[test]
-    fn no_walk_of_window_operations_strands_the_tab_on_show() {
-        let mut s = two_spaces();
-        let mut second = s.windows[0].clone();
-        second.id = "w2".into();
-        second.tabs.clear();
-        second.active_id.clear();
-        second.mru = Mru::default();
-        second.spaces.sidebars.values_mut().for_each(|t| *t = SidebarTree::default());
-        s.windows.push(second);
-        s.next_tab_id = 1;
+    /// Every window's rules, and across the session: no two rows share an id, and no row id is
+    /// a tab's id, now or one the session could hand out later.
+    fn check_session(s: &SessionState) -> Result<(), String> {
+        for w in &s.windows {
+            check_window(w).map_err(|e| format!("in {}: {e}", w.id))?;
+        }
+        let tabs: HashSet<&str> = s.windows.iter().flat_map(|w| w.tabs.iter().map(|t| t.id.as_str())).collect();
+        let mut rows = HashSet::new();
+        let trees = s.windows.iter().flat_map(|w| w.spaces.sidebars.values());
+        for id in trees.flat_map(|t| t.items.iter().flat_map(row_ids)) {
+            if !rows.insert(id) {
+                return Err(format!("row id {id} twice"));
+            }
+            if tabs.contains(id) || tab_number(id).is_some() {
+                return Err(format!("row id {id} is a tab's"));
+            }
+        }
+        Ok(())
+    }
+
+    fn loaded(text: &str) -> SessionState {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("session.json"), text).unwrap();
+        open(dir.path()).get().as_ref().clone()
+    }
+
+    /// Two windows and two spaces from a file with clashing ids: a separator and a folder named
+    /// like tabs, a split id twice, a page in two windows, a null pin and null counters.
+    const MALFORMED: &str = r#"{"version":3,"data":{
+        "windows":[
+            {"id":"w1","tabs":[{"id":"t1","url":"https://a.test/"},{"id":"t2","url":"https://b.test/"},
+                {"id":"t3","url":"https://c.test/"},{"id":"t4","url":"https://d.test/"}],
+             "activeId":"t3","mru":["t9",null,"t2"],
+             "spaces":{"shown":"s2","sidebars":{
+                "s1":{"pins":[null,"t1"],"items":[{"type":"separator","id":"t2","name":"Odd"},
+                    {"type":"split","id":"i1","tabs":["t3","t4"],"focus":"second"}]},
+                "s2":{"items":[{"type":"folder","id":"t7","kind":"plain","name":"F","children":[]},
+                    {"type":"split","id":"i1","tabs":["t2","t9"]}]}}}},
+            {"id":"w2","tabs":[{"id":"t3","url":"https://c.test/"},{"id":"t5","url":"https://e.test/"}],
+             "activeId":"t5","spaces":{"shown":"s1","sidebars":{"s1":{"items":[
+                {"type":"separator","id":"t5","name":""},{"type":"tab","id":"t5"}]}}}}],
+        "spaces":[{"id":"s1","name":"Personal"},{"id":"s2","name":"Work"}],
+        "nextTabId":null,"nextItemId":null}}"#;
+
+    /// Sol's: a window with no tabs and a separator named `t1`.
+    const SEPARATOR_T1: &str = r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[],"activeId":"",
+        "spaces":{"shown":"s1","sidebars":{"s1":{"items":[{"type":"separator","id":"t1","name":"Later"}]}}}}],
+        "spaces":[{"id":"s1","name":"Personal"},{"id":"s2","name":"Work"}],"nextTabId":1}}"#;
+
+    /// Random operations as the shell makes them, with every rule checked after each.
+    fn walk(mut s: SessionState, seed: u64, steps: usize) {
+        check_session(&s).unwrap_or_else(|e| panic!("seed {seed} at the start: {e}"));
         let spaces = s.spaces.clone();
-        let mut rng = Lcg(0x5eed);
-        for step in 0..5000 {
-            let wi = rng.below(2);
+        let mut rng = Lcg(seed);
+        for step in 0..steps {
+            let wi = rng.below(s.windows.len());
             let all: Vec<String> = s.windows[wi].tabs.iter().map(|t| t.id.clone()).collect();
-            let shown: Vec<String> = s.windows[wi].spaces.tree().map(|t| t.tab_ids()).unwrap_or_default().into_iter().map(String::from).collect();
+            let shown: Vec<String> =
+                s.windows[wi].spaces.tree().map(|t| t.tab_ids()).unwrap_or_default().into_iter().map(String::from).collect();
             let any = all.get(rng.below(all.len())).cloned().unwrap_or_default();
             let on_show = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
             let other = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
             let n = rng.below(8);
-            let op = rng.below(7);
+            let op = rng.below(9);
             match op {
                 0 | 1 => {
                     let id = s.alloc_tab_id();
@@ -319,7 +363,7 @@ mod tests {
                     s.close_tab(&any);
                 }
                 3 => {
-                    let to = s.windows[rng.below(2)].id.clone();
+                    let to = s.windows[rng.below(s.windows.len())].id.clone();
                     let _ = move_tab_in(&mut s, &any, &to, Dest::Root(n));
                 }
                 4 => {
@@ -333,18 +377,54 @@ mod tests {
                 5 => {
                     s.windows[wi].show_tab(&on_show);
                 }
+                6 => {
+                    // A split away from the tab on show keeps the focus it was left with, so a
+                    // later hand-off can land on its other half.
+                    let w = &mut s.windows[wi];
+                    let tree = w.spaces.tree_mut();
+                    if tree.split_of(&on_show).is_some_and(|sp| !sp.tabs.contains(&w.active_id)) {
+                        tree.focus_tab(&on_show);
+                    }
+                }
+                7 => {
+                    let w = &mut s.windows[wi];
+                    let to = &spaces[n % spaces.len()].id;
+                    let mut active = w.active_id.clone();
+                    if w.spaces.move_tab(&spaces, &any, to, true, &mut active).is_ok() {
+                        w.show_tab(&active);
+                    }
+                }
                 _ => {
                     let w = &mut s.windows[wi];
                     let mut active = w.active_id.clone();
-                    if w.spaces.switch(&spaces, 1 + n % 2, true, &mut active) == Ok(true) {
+                    if w.spaces.switch(&spaces, 1 + n % spaces.len(), true, &mut active) == Ok(true) {
                         w.show_tab(&active);
                     }
                 }
             }
-            for w in &s.windows {
-                check_window(w).unwrap_or_else(|e| panic!("step {step} op {op} in {}: {e}", w.id));
-            }
+            check_session(&s).unwrap_or_else(|e| panic!("seed {seed} step {step} op {op}: {e}"));
         }
-        assert!(s.windows.iter().map(|w| w.tabs.len()).sum::<usize>() > 10);
+        assert!(s.windows.iter().map(|w| w.tabs.len()).sum::<usize>() > 5, "seed {seed}: the walk built up tabs");
+    }
+
+    #[test]
+    fn no_walk_of_window_operations_strands_the_tab_on_show() {
+        let mut s = two_spaces();
+        let mut second = s.windows[0].clone();
+        second.id = "w2".into();
+        second.tabs.clear();
+        second.active_id.clear();
+        second.mru = Mru::default();
+        second.spaces.sidebars.values_mut().for_each(|t| *t = SidebarTree::default());
+        s.windows.push(second);
+        walk(s, 0x5eed, 5000);
+    }
+
+    #[test]
+    fn walks_from_malformed_files_keep_every_rule() {
+        for seed in 1..=8 {
+            walk(loaded(MALFORMED), seed, 1500);
+            walk(loaded(SEPARATOR_T1), seed, 1500);
+        }
     }
 }

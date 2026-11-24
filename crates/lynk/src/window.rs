@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn a_launch_after_the_last_window_closed_finds_no_window() {
+    fn a_launch_after_the_last_window_closed_gets_a_window() {
         let mut cx = TestApp::new();
         app::install(&mut cx);
         let a = app::open_window(&mut cx, Vec::new(), None);
@@ -619,5 +619,12 @@ mod tests {
         assert!(cx.request_close(a));
         cx.run_until_idle();
         assert_eq!(app::key_window(&cx), None);
+
+        crate::process::open_launch(&mut cx, vec!["https://example.com/".into()]);
+        cx.run_until_idle();
+        let b = app::key_window(&cx).expect("the launch opens a window");
+        assert_ne!(b, a);
+        let urls: Vec<String> = app::window(&cx, b).unwrap().read(&cx).tabs.iter().map(|t| t.url.clone()).collect();
+        assert_eq!(urls, ["https://example.com/"]);
     }
 }

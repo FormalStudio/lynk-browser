@@ -117,20 +117,24 @@ fn next(mut rx: UnboundedReceiver<Event>) {
 fn handle(event: Event, cx: &mut App) {
     match event {
         Event::Terminate => cx.quit(),
-        Event::Launch(launch) => {
-            let Some(id) = app::key_window(cx) else {
-                let tabs = launch.urls.into_iter().map(|url| crate::tab::Tab::new(app::next_tab_id(cx), url)).collect();
-                app::open_window(cx, tabs, None);
-                return;
-            };
-            if let Some(win) = app::window(cx, id) {
-                win.update(cx, |win, cx| {
-                    for url in launch.urls {
-                        win.open_tab(url, Open::End, cx);
-                    }
-                });
-            }
-            cx.activate_window(id);
-        }
+        Event::Launch(launch) => open_launch(cx, launch.urls),
     }
+}
+
+/// A later launch's URLs, as tabs at the end of the window the menu bar acts on. With no window
+/// left open (the last one is closing) they get a window of their own.
+pub fn open_launch(cx: &mut App, urls: Vec<String>) {
+    let Some(id) = app::key_window(cx) else {
+        let tabs = urls.into_iter().map(|url| crate::tab::Tab::new(app::next_tab_id(cx), url)).collect();
+        app::open_window(cx, tabs, None);
+        return;
+    };
+    if let Some(win) = app::window(cx, id) {
+        win.update(cx, |win, cx| {
+            for url in urls {
+                win.open_tab(url, Open::End, cx);
+            }
+        });
+    }
+    cx.activate_window(id);
 }

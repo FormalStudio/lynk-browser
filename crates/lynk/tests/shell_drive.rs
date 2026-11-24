@@ -120,7 +120,10 @@ fn respond(mut stream: std::net::TcpStream) {
 }
 
 fn launch(url: &str) -> AppHandle {
-    let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("LYNK_URL", url).env("ND_CEF_STYLE", "chrome");
+    let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+        .env("LYNK_URL", url)
+        .env("ND_CEF_STYLE", "chrome")
+        .env("LYNK_SEARCHENGINE", "google");
     let app = launch_app(options).unwrap();
     activate(app.pid());
     app
@@ -130,7 +133,10 @@ fn launch(url: &str) -> AppHandle {
 fn launch_with(urls: &[String]) -> AppHandle {
     let options = urls
         .iter()
-        .fold(LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("ND_CEF_STYLE", "chrome"), |o, url| o.arg(url));
+        .fold(
+            LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("ND_CEF_STYLE", "chrome").env("LYNK_SEARCHENGINE", "google"),
+            |o, url| o.arg(url),
+        );
     let app = launch_app(options).unwrap();
     activate(app.pid());
     app
@@ -302,30 +308,29 @@ fn real_tabs_navigation_and_layout() {
     press(&app, "cmd-[");
     until(&app, "back to Alpha again", 15, |a| titles(a) == ["Alpha"]);
 
-    // Cmd+T opens the new tab page; Cmd+1 and Cmd+9 select by place.
-    press(&app, "cmd-t");
-    until(&app, "the new tab page", 10, |a| has(a, "new-tab-page"));
-    assert_eq!(titles(&app), ["Alpha", "New Tab"]);
+    // Cmd+T opens a tab through the command bar; Cmd+1 and Cmd+9 select by place.
+    open_in_new_tab(&app, &format!("{base}/long"));
+    until(&app, "the second tab", 15, |a| titles(a) == ["Alpha", "Long"]);
     press(&app, "cmd-1");
-    until(&app, "Alpha shown", 10, |a| lacks(a, "new-tab-page"));
+    until(&app, "Alpha shown", 10, |a| shown_title(a) == "Alpha");
     press(&app, "cmd-9");
-    until(&app, "the last tab shown", 10, |a| has(a, "new-tab-page"));
+    until(&app, "the last tab shown", 10, |a| shown_title(a) == "Long");
     press(&app, "cmd-1");
-    until(&app, "Alpha shown again", 10, |a| lacks(a, "new-tab-page"));
+    until(&app, "Alpha shown again", 10, |a| shown_title(a) == "Alpha");
 
     // A target=_blank link opens a tab right after its opener, in front, not at the end.
     click_page(&app, 300.);
-    until(&app, "the page-opened tab", 15, |a| titles(a) == ["Alpha", "Beta", "New Tab"]);
+    until(&app, "the page-opened tab", 15, |a| titles(a) == ["Alpha", "Beta", "Long"]);
     press(&app, "cmd-9");
-    until(&app, "the last tab shown", 10, |a| has(a, "new-tab-page"));
+    until(&app, "the last tab shown", 10, |a| shown_title(a) == "Long");
     press(&app, "cmd-shift-[");
-    until(&app, "previous tab", 10, |a| lacks(a, "new-tab-page"));
+    until(&app, "previous tab", 10, |a| shown_title(a) == "Beta");
 
     // Cmd+W closes the shown tab; Shift+Cmd+T brings it back from the stack.
     press(&app, "cmd-w");
-    until(&app, "Beta closed", 10, |a| titles(a) == ["Alpha", "New Tab"]);
+    until(&app, "Beta closed", 10, |a| titles(a) == ["Alpha", "Long"]);
     press(&app, "cmd-shift-t");
-    until(&app, "Beta reopened", 15, |a| titles(a) == ["Alpha", "New Tab", "Beta"]);
+    until(&app, "Beta reopened", 15, |a| titles(a) == ["Alpha", "Long", "Beta"]);
 
     // Shift+Cmd+B hides the sidebar and shows it again.
     press(&app, "cmd-shift-b");
@@ -415,26 +420,25 @@ fn real_beforeunload_holds_the_close() {
     until(&app, "the page", 30, |a| titles(a) == ["Leave"]);
     // A page earns its beforeunload prompt only once the user touched it.
     click_page(&app, 100.);
-    press(&app, "cmd-t");
-    until(&app, "a second tab", 10, |a| titles(a).len() == 2);
+    open_in_new_tab(&app, &format!("{base}/beta"));
     press(&app, "cmd-1");
     press(&app, "cmd-w");
     std::thread::sleep(Duration::from_secs(1));
     shot(&app, "leave-site");
-    assert_eq!(titles(&app), ["Leave", "New Tab"], "the tab waits on its page's answer");
+    until(&app, "Beta's title", 10, |a| titles(a) == ["Leave", "Beta"]);
     // Esc takes Cancel, which keeps the tab.
     press(&app, "escape");
     std::thread::sleep(Duration::from_secs(1));
-    assert_eq!(titles(&app), ["Leave", "New Tab"], "Cancel keeps the tab");
+    assert_eq!(titles(&app), ["Leave", "Beta"], "Cancel keeps the tab");
     // Enter takes Chrome's dialog's default, Leave.
     press(&app, "cmd-w");
     std::thread::sleep(Duration::from_secs(1));
     press(&app, "enter");
-    until(&app, "the tab gone once the page agreed", 10, |a| titles(a) == ["New Tab"]);
+    until(&app, "the tab gone once the page agreed", 10, |a| titles(a) == ["Beta"]);
 
     // The window's close button asks the page too, and Cancel keeps the window.
     press(&app, "cmd-shift-t");
-    until(&app, "the page back", 15, |a| titles(a) == ["New Tab", "Leave"]);
+    until(&app, "the page back", 15, |a| titles(a) == ["Beta", "Leave"]);
     click_page(&app, 100.);
     let close = CLOSE_LIGHT;
     real_click(&app, close.0, close.1);
@@ -445,7 +449,7 @@ fn real_beforeunload_holds_the_close() {
     );
     press(&app, "escape");
     std::thread::sleep(Duration::from_secs(1));
-    assert_eq!(titles(&app), ["New Tab", "Leave"], "Cancel keeps the window");
+    assert_eq!(titles(&app), ["Beta", "Leave"], "Cancel keeps the window");
     // The last window going quits the app.
     real_click(&app, close.0, close.1);
     std::thread::sleep(Duration::from_secs(1));
@@ -548,6 +552,11 @@ fn real_one_instance_per_profile() {
 
 /// macOS virtual key codes for the keys the cases post through the HID system.
 mod key {
+    pub const K: u16 = 40;
+    pub const L: u16 = 37;
+    pub const T: u16 = 17;
+    pub const V: u16 = 9;
+    pub const RETURN: u16 = 36;
     pub const F: u16 = 3;
     pub const I: u16 = 34;
     pub const ESCAPE: u16 = 53;
@@ -896,11 +905,10 @@ fn real_sleep_keeps_the_scroll() {
     click_page(&app, 100.);
     until(&app, "the page scrolled", 15, |a| titles(a).first().is_some_and(|t| t.starts_with("At 600 ")));
     let before = titles(&app)[0].clone();
-    press(&app, "cmd-t");
-    until(&app, "a second tab", 10, |a| titles(a).len() == 2);
+    open_in_new_tab(&app, &format!("{base}/beta"));
     press(&app, "cmd-1");
     menu(&app, "Tabs", "Put Tab to Sleep");
-    until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(0));
+    until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(1));
     // Woken, it loads again and goes back to where it was scrolled.
     press(&app, "cmd-1");
     until(&app, "the scroll back in a new load", 15, |a| {
@@ -917,13 +925,12 @@ fn real_busy_page_still_sleeps() {
     let app = launch(&format!("{base}/busy"));
     until(&app, "the page", 30, |a| titles(a) == ["Busy"]);
     click_page(&app, 100.);
-    press(&app, "cmd-t");
-    until(&app, "a second tab", 10, |a| titles(a).len() == 2);
+    open_in_new_tab(&app, &format!("{base}/beta"));
     // A renderer that never answers where it is scrolled does not keep its tab awake.
     std::thread::sleep(Duration::from_secs(1));
     let at = row_at(&app, 0);
     pick_menu(&app, at, "Put Tab");
-    until(&app, "the busy tab asleep", 5, |a| live_pages(a) == Some(0));
+    until(&app, "the busy tab asleep", 5, |a| live_pages(a) == Some(1));
 }
 
 #[test]
@@ -1046,15 +1053,14 @@ fn real_tab_row_menu() {
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     pick_menu(&app, row_at(&app, 0), "Duplicate");
     until(&app, "the duplicate", 15, |a| titles(a) == ["Alpha", "Alpha"]);
-    press(&app, "cmd-t");
-    until(&app, "a third tab", 10, |a| titles(a).len() == 3);
+    open_in_new_tab(&app, &format!("{base}/beta"));
     // A right click on another tab's row opens its menu and leaves the shown tab alone.
     let (wx, wy, _, _) = front_window(&app).bounds;
     let at = row_at(&app, 0);
     ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
     std::thread::sleep(Duration::from_millis(600));
     hid(key::ESCAPE, &[]);
-    assert_eq!(shown_title(&app), "New Tab", "the shown tab after a menu on another row");
+    assert_eq!(shown_title(&app), "Beta", "the shown tab after a menu on another row");
     // The row's menu acts on its own tab, not the one on show.
     let duplicate = rows(&app)[1].0.clone();
     pick_menu(&app, row_at(&app, 1), "Close Other");
@@ -1063,6 +1069,9 @@ fn real_tab_row_menu() {
     // Off any tab: the column's menu.
     let n = app.get_by_test_id("new-tab-row").bounding_box().unwrap().unwrap();
     pick_menu(&app, (n.x + n.width / 2., n.y + n.height + 120.), "New Tab");
+    until(&app, "the bar from the column menu", 10, |a| bar_field(a).is_some());
+    type_real(&format!("{base}/beta"));
+    hid(key::RETURN, &[]);
     until(&app, "a tab from the column menu", 10, |a| titles(a).len() == 2);
 }
 
@@ -1096,11 +1105,13 @@ fn real_fifty_tabs_opened_and_closed_at_speed() {
     let base = serve();
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
-    let keys = app.keyboard();
-    for _ in 0..50 {
-        keys.press("cmd-t").unwrap();
+    // Each through the command bar, typed as soon as the bar shows.
+    for n in 0..50 {
+        open_bar(&app, key::T);
+        ndshell::input::type_text(&format!("{base}/beta?{n}\n"));
     }
-    until(&app, "the last new tab shown", 30, |a| has(a, "new-tab-page"));
+    until(&app, "the fifty tabs", 60, |a| live_pages(a) == Some(51));
+    let keys = app.keyboard();
     // Fifty closes leave exactly the first tab only if all fifty opened: one too few would take
     // the window, and the app with it.
     for _ in 0..50 {
@@ -1150,7 +1161,7 @@ fn real_renderer_crash_shows_aw_snap() {
     until(&app, "Aw, Snap!", 30, |a| has(a, "crash-page"));
     shot(&app, "crashed");
     // The app itself carries on.
-    press(&app, "cmd-t");
+    open_in_new_tab(&app, "data:text/html,<title>After</title>");
     until(&app, "a new tab", 10, |a| titles(a).len() == 2);
 }
 
@@ -1496,4 +1507,293 @@ fn sidebar_geometry_holds(app: &AppHandle) {
     let (gap_right, gap_top) = (row.x + row.width - (close.x + close.width), close.y - row.y);
     assert!(gap_right >= 4. && gap_top >= 4., "the close button keeps clear of the row's edges: {close:?} in {row:?}");
     assert!(title.x + title.width <= close.x, "the title stops before the close button: {title:?}, {close:?}");
+}
+
+
+/// The command bar's field as its search box reads, `None` while the bar is closed. A completion
+/// it shows follows a `|`.
+fn bar_field(app: &AppHandle) -> Option<String> {
+    let tree = app.tree(None).ok()?;
+    tree.windows.iter().find_map(|w| {
+        w.root.iter().find(|n| format!("{:?}", n.role) == "SearchBox").map(|n| n.value.clone().unwrap_or_default())
+    })
+}
+
+/// Opens the bar with Cmd and `code` (T, L, K) through the HID system and waits for it.
+#[track_caller]
+fn open_bar(app: &AppHandle, code: u16) {
+    in_front(app);
+    hid(code, &[Modifier::Command]);
+    bar_wait(app, true);
+}
+
+#[track_caller]
+fn bar_closed(app: &AppHandle) {
+    bar_wait(app, false);
+}
+
+/// Waits for the bar to be open or closed, with a capture and the app's windows when it is not.
+#[track_caller]
+fn bar_wait(app: &AppHandle, open: bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while bar_field(app).is_some() != open {
+        if Instant::now() > deadline {
+            shot(app, "bar-timeout");
+            let windows = ndshell::window_list::of_pid(app.pid());
+            let front = std::process::Command::new("sh").args(["-c", "lsappinfo info -only name $(lsappinfo front)"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+            panic!(
+                "the bar never {}: windows {windows:?}, keys {:?}, front app {front:?}, app said {:#?}",
+                if open { "opened" } else { "closed" },
+                app.windows(),
+                app.stderr_tail(25)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// Types at the HID tap, character by character, as a keyboard would.
+fn type_real(text: &str) {
+    ndshell::input::type_text(text);
+    std::thread::sleep(Duration::from_millis(400));
+}
+
+/// Pastes `text` with Cmd+V, from the real pasteboard.
+fn paste(text: &str) {
+    let mut copy = std::process::Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn().unwrap();
+    copy.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+    assert!(copy.wait().unwrap().success());
+    hid(key::V, &[Modifier::Command]);
+}
+
+/// Opens `url` in a new tab through the bar, as typed.
+#[track_caller]
+fn open_in_new_tab(app: &AppHandle, url: &str) {
+    let before = titles(app).len();
+    open_bar(app, key::T);
+    type_real(url);
+    hid(key::RETURN, &[]);
+    bar_closed(app);
+    until(app, "the new tab", 15, |a| titles(a).len() == before + 1);
+}
+
+/// The shown tab's address, as the bar Cmd+L opens on it holds it.
+#[track_caller]
+fn address(app: &AppHandle) -> String {
+    open_bar(app, key::L);
+    let field = bar_field(app).unwrap_or_default();
+    hid(key::ESCAPE, &[]);
+    bar_closed(app);
+    field
+}
+
+/// Types `text` over a Cmd+L selection and goes there with Return.
+#[track_caller]
+fn go_to(app: &AppHandle, text: &str) {
+    open_bar(app, key::L);
+    type_real(text);
+    hid(key::RETURN, &[]);
+    bar_closed(app);
+}
+
+#[test]
+fn real_command_bar_opens_sites() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let port = base.rsplit(':').next().unwrap().to_owned();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    let google = |q: &str| lynk_core::url::to_url(q, "https://www.google.com/search?q=").unwrap();
+
+    // Cmd+T is a bar, not a tab: Escape mid-typing leaves no blank tab behind, and neither does
+    // Return on an empty field.
+    open_bar(&app, key::T);
+    type_real("half typ");
+    shot(&app, "bar-typing");
+    assert_eq!(bar_field(&app).as_deref(), Some("half typ"));
+    hid(key::ESCAPE, &[]);
+    bar_closed(&app);
+    open_bar(&app, key::T);
+    hid(key::RETURN, &[]);
+    bar_closed(&app);
+    assert_eq!(titles(&app), ["Alpha"], "no dead blank tab");
+
+    // An IP with a port opens in a new tab; Cmd+L shows its address, all of it.
+    open_in_new_tab(&app, &format!("127.0.0.1:{port}/beta"));
+    until(&app, "Beta in its own tab", 15, |a| titles(a) == ["Alpha", "Beta"]);
+    assert_eq!(address(&app), format!("{base}/beta"));
+
+    // Cmd+L, typing over the selection: localhost with a port loads in the same tab.
+    go_to(&app, &format!("localhost:{port}/alpha"));
+    until(&app, "Alpha over Beta", 15, |a| titles(a) == ["Alpha", "Alpha"]);
+    assert_eq!(address(&app), format!("http://localhost:{port}/alpha"));
+
+    // A full address with its scheme.
+    go_to(&app, &format!("{base}/beta"));
+    until(&app, "Beta again", 15, |a| titles(a) == ["Alpha", "Beta"]);
+
+    // A search with spaces and punctuation goes to the configured engine, as one query. The engine
+    // rewrites its own address once it answers, so the tab is read as it leaves.
+    let query = "rust lang: what's new? & why/how #2";
+    go_to(&app, query);
+    let searched = address(&app);
+    assert!(searched == google(query) || searched.starts_with("https://www.google.com/"), "{searched}");
+    until(&app, "the search results", 30, |a| titles(a).get(1).is_some_and(|t| t.starts_with(query)));
+
+    // A bare domain and an internationalised one are addresses, not searches.
+    go_to(&app, "example.com");
+    until(&app, "the bare domain", 15, |a| address(a).starts_with("https://example.com"));
+    go_to(&app, "b\u{fc}cher.de");
+    until(&app, "the IDN host's page", 30, |a| titles(a).get(1).is_some_and(|t| t.contains("b\u{fc}cher.de")));
+
+    // data: and file: addresses load as typed.
+    go_to(&app, "data:text/html,<title>Typed data</title>hi");
+    until(&app, "the data page", 15, |a| titles(a) == ["Alpha", "Typed data"]);
+    let file = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lynk-typed-file.html");
+    std::fs::write(&file, "<!doctype html><title>Typed file</title>on disk").unwrap();
+    go_to(&app, &format!("file://{}", file.display()));
+    until(&app, "the file page", 15, |a| titles(a) == ["Alpha", "Typed file"]);
+
+    // Pasted text keeps no trailing newline, and a 2000 character address goes in whole.
+    open_bar(&app, key::L);
+    paste(&format!("{base}/beta?pasted\n"));
+    hid(key::RETURN, &[]);
+    bar_closed(&app);
+    until(&app, "the pasted address", 15, |a| address(a) == format!("{base}/beta?pasted"));
+    let long = format!("{base}/beta?{}", "q".repeat(2000 - base.len() - 6));
+    assert_eq!(long.len(), 2000);
+    open_bar(&app, key::L);
+    paste(&long);
+    shot(&app, "bar-long-url");
+    hid(key::RETURN, &[]);
+    bar_closed(&app);
+    until(&app, "the long address", 15, |a| address(a) == long);
+
+    // Typing while the page is still loading takes over from the load.
+    go_to(&app, &format!("{base}/slow"));
+    until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
+    go_to(&app, &format!("{base}/alpha"));
+    until(&app, "Alpha over the slow load", 15, |a| titles(a) == ["Alpha", "Alpha"]);
+
+    // A host that does not resolve shows the error page, and the bar still works over it.
+    go_to(&app, "http://lynk-drive.invalid/");
+    until(&app, "the error page", 30, |a| has(a, "error-page"));
+    go_to(&app, &format!("{base}/beta"));
+    until(&app, "Beta after the error", 15, |a| titles(a) == ["Alpha", "Beta"] && !has(a, "error-page"));
+
+    // A click on the shown tab's row opens the bar on its address.
+    let (x, y) = row_at(&app, 1);
+    real_click(&app, x, y);
+    bar_wait(&app, true);
+    assert_eq!(bar_field(&app), Some(format!("{base}/beta")));
+    hid(key::ESCAPE, &[]);
+    bar_closed(&app);
+
+    // A second Cmd+L puts the bar away.
+    open_bar(&app, key::L);
+    hid(key::L, &[Modifier::Command]);
+    bar_closed(&app);
+    drop(app);
+
+    // On the new tab page, Cmd+T loads in place: a blank tab has nothing to keep.
+    let app = launch("");
+    until(&app, "the new tab page", 30, |a| has(a, "new-tab-page"));
+    open_bar(&app, key::T);
+    type_real(&format!("{base}/beta"));
+    hid(key::RETURN, &[]);
+    until(&app, "Beta in the blank tab", 15, |a| titles(a) == ["Beta"]);
+}
+
+/// Another app taking focus leaves the bar open, and coming back gives its field the keys again,
+/// as it had them.
+#[test]
+fn real_command_bar_survives_an_app_switch() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    open_bar(&app, key::T);
+    type_real("lynk-");
+    let finder = std::process::Command::new("pgrep").args(["-x", "Finder"]).output().unwrap();
+    let finder: u32 = String::from_utf8_lossy(&finder.stdout).trim().parse().expect("Finder runs");
+    ndshell::input::activate(finder);
+    let away = |a: &AppHandle| a.windows().ok().is_some_and(|w| w.as_array().is_some_and(|ws| ws.iter().all(|w| w["key"] != true)));
+    until(&app, "another app in front", 10, away);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(bar_field(&app).as_deref(), Some("lynk-"), "the bar stays open while away");
+    // The bar's panel takes key back, not the window under it.
+    ndshell::input::activate(app.pid());
+    std::thread::sleep(Duration::from_millis(600));
+    type_real("back");
+    assert_eq!(bar_field(&app).as_deref(), Some("lynk-back"), "the field has the keys again");
+    hid(key::ESCAPE, &[]);
+    bar_closed(&app);
+    assert_eq!(titles(&app), ["Alpha"]);
+}
+
+/// A capture for the report, under the worktree's `target/report-shots`, at the display's scale.
+fn report_shot(app: &AppHandle, name: &str) {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/report-shots");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.png"));
+    ndshell::window_list::capture(front_window(app).number, &path).unwrap();
+    println!("screenshot {}", path.display());
+}
+
+#[test]
+fn real_command_bar_looks() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let long = format!("{base}/beta?{}", "segment/".repeat(240));
+    for appearance in ["light", "dark"] {
+        let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-theme-{appearance}.toml"));
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let urls = [format!("{base}/alpha"), format!("{base}/beta"), long.clone()];
+        let options = urls.iter().fold(
+            LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+                .env("ND_CEF_STYLE", "chrome")
+                .env("LYNK_SEARCHENGINE", "google")
+                .env("ND_THEME_TOML", theme.to_str().unwrap()),
+            |o, url| o.arg(url),
+        );
+        let app = launch_app(options).unwrap();
+        activate(app.pid());
+        until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
+        for width in [1200, 720] {
+            resize(&app, width);
+            let name = |what: &str| format!("bar-{appearance}-{width}-{what}");
+            open_bar(&app, key::T);
+            report_shot(&app, &name("empty"));
+            type_real("bet");
+            report_shot(&app, &name("few"));
+            hid(key::ESCAPE, &[]);
+            bar_closed(&app);
+            open_bar(&app, key::K);
+            report_shot(&app, &name("many"));
+            hid(key::ESCAPE, &[]);
+            bar_closed(&app);
+            press(&app, "cmd-3");
+            open_bar(&app, key::L);
+            report_shot(&app, &name("long-url"));
+            hid(key::ESCAPE, &[]);
+            bar_closed(&app);
+            press(&app, "cmd-1");
+            open_bar(&app, key::T);
+            type_real("\u{645}\u{631}\u{62d}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}");
+            report_shot(&app, &name("rtl"));
+            hid(key::ESCAPE, &[]);
+            bar_closed(&app);
+            open_bar(&app, key::T);
+            type_real("\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{691c}\u{7d22} \u{30c6}\u{30b9}\u{30c8}");
+            report_shot(&app, &name("cjk"));
+            hid(key::ESCAPE, &[]);
+            bar_closed(&app);
+        }
+    }
 }

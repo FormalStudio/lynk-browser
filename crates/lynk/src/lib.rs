@@ -11,6 +11,7 @@
 pub mod actions;
 pub mod app;
 pub mod find;
+pub mod omnibox;
 pub mod page;
 pub mod process;
 pub mod shell;
@@ -24,7 +25,7 @@ use nd::prelude::*;
 use nd_ipc::instance::Launch;
 
 pub fn app() -> Application {
-    Application::new(nd::manifest!())
+    Application::new(nd::manifest!()).settings::<lynk_core::settings::LynkSettings>()
 }
 
 /// Runs the browser, unless another instance holds this profile, which then gets this launch.

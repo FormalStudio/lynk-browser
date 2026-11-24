@@ -42,8 +42,10 @@ impl History {
         self.record_visit_at(url, title, now_ms()).await
     }
 
+    /// Only pages a person can go back to are kept: no `data:`, `chrome:`, `about:` or
+    /// extension pages.
     pub async fn record_visit_at(&self, url: &str, title: &str, ts: i64) -> nd_data::Result<()> {
-        if url.is_empty() {
+        if !["http://", "https://", "file://"].iter().any(|s| url.starts_with(s)) {
             return Ok(());
         }
         self.db
@@ -164,6 +166,8 @@ mod tests {
             h.record_visit_at("https://b.test/", "B", 2).await.unwrap();
             h.record_visit_at("https://a.test/", "", 3).await.unwrap();
             h.record_visit_at("", "nothing", 4).await.unwrap();
+            h.record_visit_at("data:text/html,x", "", 5).await.unwrap();
+            h.record_visit_at("chrome://settings/", "", 6).await.unwrap();
             h.record_title("https://a.test/", "A").await.unwrap();
             let recent = h.recent(10).await.unwrap();
             let urls: Vec<&str> = recent.iter().map(|v| v.url.as_str()).collect();

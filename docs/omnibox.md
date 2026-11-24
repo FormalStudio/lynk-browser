@@ -12,7 +12,8 @@ does everything: every button and menu item is also a command in the bar.
 | ⌘L, or a click on the sidebar address | address | the current URL, all selected | loads it in this tab |
 | ⌘K | switcher | nothing | loads it in this tab |
 
-Opening the bar while it is open reseeds it. It never stacks a second bar.
+Opening the bar while it is open reseeds it, except ⌘L, which puts it away. It never stacks a
+second bar. ⌘T makes no tab until Return, so a bar put away leaves no blank tab behind.
 
 ## Rows
 
@@ -22,7 +23,8 @@ switches tabs. A tab that matches by title, host or address is the row
 below, hint "Switch to Tab", and is only switched to when you arrow down to
 it.
 
-Address mode (⌘T, ⌘L), in this order:
+Address mode (⌘T, ⌘L) lists nothing while nothing is typed, so Return on an empty field does
+nothing. With text, in this order:
 
 1. The completed address, when history has one for what was typed. It is
    what the field shows, so Enter opens it, even when a tab already has it

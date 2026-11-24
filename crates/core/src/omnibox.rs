@@ -247,10 +247,14 @@ pub fn omni_rows(input: &OmniInput<'_>) -> Vec<OmniRow> {
 }
 
 /// Cmd+T and Cmd+L: what Enter does with the typed text (the completed address first when there
-/// is one), open tabs, history, then commands.
+/// is one), open tabs, history, then commands. Nothing typed lists nothing, so Return on an empty
+/// field runs no row.
 fn address_rows(input: &OmniInput<'_>) -> Vec<OmniRow> {
     let query = typed_text(input.query);
     let query = query.as_str();
+    if query.is_empty() {
+        return Vec::new();
+    }
     let lowered = query.to_lowercase();
     let mut rows = Vec::new();
     let mut seen: Vec<String> = Vec::new();
@@ -526,6 +530,15 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_address_field_lists_nothing() {
+        let tabs = [tab("t2", "GitHub", "https://github.com/")];
+        let history = [visit("https://github.com/pulls", "Pull requests")];
+        for query in ["", "  ", "\n"] {
+            assert!(omni_rows(&OmniInput { query, tabs: &tabs, history: &history, ..base() }).is_empty());
+        }
+    }
+
+    #[test]
     fn a_page_open_as_a_pinned_tile_and_as_a_tab_is_listed_once_as_the_one_shown_last() {
         let url = "https://github.com/FormalSnake";
         let tabs = [
@@ -534,11 +547,9 @@ mod tests {
             tab("a", "New Tab", ""),
             tab("b", "New Tab", ""),
         ];
-        for mode in [OmniMode::Address, OmniMode::Switcher] {
-            let rows = omni_rows(&OmniInput { mode, tabs: &tabs, ..base() });
-            let tab_ids: Vec<&str> = ids(&rows).into_iter().filter(|id| id.starts_with("tab:")).collect();
-            assert_eq!(tab_ids, ["tab:row", "tab:a", "tab:b"]);
-        }
+        let rows = omni_rows(&OmniInput { mode: OmniMode::Switcher, tabs: &tabs, ..base() });
+        let tab_ids: Vec<&str> = ids(&rows).into_iter().filter(|id| id.starts_with("tab:")).collect();
+        assert_eq!(tab_ids, ["tab:row", "tab:a", "tab:b"]);
     }
 
     #[test]
@@ -558,9 +569,10 @@ mod tests {
     #[test]
     fn an_untitled_page_names_its_address_once() {
         let history = [visit("https://example.com/a", "")];
-        let rows = omni_rows(&OmniInput { history: &history, ..base() });
-        assert_eq!(rows[0].title, "example.com/a");
-        assert_eq!(rows[0].subtitle, None);
+        let rows = omni_rows(&OmniInput { query: "ex", history: &history, ..base() });
+        let row = find(&rows, "hist:https://example.com/a").unwrap();
+        assert_eq!(row.title, "example.com/a");
+        assert_eq!(row.subtitle, None);
     }
 
     #[test]

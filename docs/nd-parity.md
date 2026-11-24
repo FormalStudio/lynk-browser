@@ -97,7 +97,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Menu on the column off any tab: New Tab, Hide Sidebar, Use Compact Layout
 
 ## Command bar
-- [ ] Cmd+T: address mode, empty field, Enter opens a new tab; on a blank tab it loads in place
+- [x] Cmd+T: address mode, empty field, Enter opens a new tab; on a blank tab it loads in place; drive `real_command_bar_opens_sites` (macOS)
 - [ ] Cmd+L (or a click on the active row or compact tab): the current address, all selected, Enter loads in this tab; a second Cmd+L closes it
 - [ ] Cmd+K: switcher mode, empty field, Enter loads in this tab; with nothing typed the first row is the page you were on last
 - [ ] Opening while open reseeds it, never a second bar
@@ -112,7 +112,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Every command in `COMMANDS` is a row, with labels that flip (Pin or Unpin Tab, Reading Mode or Leave Reading Mode, Allow or Block Ads on This Site)
 - [ ] Hints spelled per OS ("⇧⌘T" on macOS, "Ctrl+Shift+T" on Linux)
 - [ ] Search engines DuckDuckGo (default), Google, Bing
-- [ ] Address parsing: a scheme is kept, `host.tld` or `localhost:port` becomes `https://`, anything else searches; resubmitting an unchanged `http:` address keeps `http:` (unit: port of `url.test.ts`)
+- [x] Address parsing: a scheme is kept, `host.tld` becomes `https://`, `localhost:port`, an IP or a local name `http://`, anything else searches; resubmitting an unchanged `http:` address keeps `http:` (unit: port of `url.test.ts`); unit `hosts_people_type`, `an_untouched_address_keeps_the_pages_own_scheme`
 - [ ] Context menu "Search with <engine>" on a selection opens a foreground tab (old drive `mac-context-menu`)
 
 ## Tabs and navigation

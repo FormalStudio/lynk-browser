@@ -39,8 +39,9 @@ pub fn is_search(url: &str, search_prefix: &str) -> bool {
 
 /// Omnibox text to a loadable address. Text names a site when its host is `localhost`, an IP
 /// address or a name under a known suffix, so `localhost:8080`, `bücher.de` and `[::1]:3000`
-/// navigate while `node.js` and `native desktop` search. A `javascript:` address searches:
-/// the field never runs script on the page behind it.
+/// navigate while `node.js` and `native desktop` search. A public name loads over https; an IP
+/// address, `localhost` and a local suffix over http, as development servers and routers answer.
+/// A `javascript:` address searches: the field never runs script on the page behind it.
 pub fn to_url(raw: &str, search_prefix: &str) -> Option<String> {
     let q = typed_text(raw);
     if q.is_empty() {
@@ -54,7 +55,7 @@ pub fn to_url(raw: &str, search_prefix: &str) -> Option<String> {
     }
     let address = format!("https://{q}");
     if names_a_site(&q, &address) {
-        return Some(address);
+        return Some(if is_local(&address) { format!("http://{q}") } else { address });
     }
     Some(format!("{search_prefix}{}", encode_component(&q)))
 }
@@ -84,6 +85,14 @@ fn names_a_site(q: &str, address: &str) -> bool {
                     || (d.contains('.')
                         && (LOCAL_SUFFIXES.contains(&last) || psl::suffix(d.as_bytes()).is_some_and(|s| s.is_known()))))
         }
+        None => false,
+    }
+}
+
+fn is_local(address: &str) -> bool {
+    match Url::parse(address).ok().as_ref().and_then(Url::host) {
+        Some(url::Host::Domain(d)) => LOCAL_SUFFIXES.contains(&d.rsplit('.').next().unwrap_or(d)),
+        Some(_) => true,
         None => false,
     }
 }
@@ -212,7 +221,7 @@ mod tests {
     fn typed_text_becomes_an_address_or_a_search() {
         assert_eq!(to_url("  ", PREFIX), None);
         assert_eq!(to_url("example.com", PREFIX).as_deref(), Some("https://example.com"));
-        assert_eq!(to_url("localhost:8080/x", PREFIX).as_deref(), Some("https://localhost:8080/x"));
+        assert_eq!(to_url("localhost:8080/x", PREFIX).as_deref(), Some("http://localhost:8080/x"));
         assert_eq!(to_url("mailto:a@b.c", PREFIX).as_deref(), Some("mailto:a@b.c"));
         assert_eq!(to_url("native desktop", PREFIX).as_deref(), Some("https://search.test/?q=native%20desktop"));
         assert_eq!(to_url("a.b", PREFIX).as_deref(), Some("https://search.test/?q=a.b"));
@@ -240,12 +249,12 @@ mod tests {
         assert_eq!(go("bücher.de"), "https://bücher.de");
         assert_eq!(go("xn--bcher-kva.de"), "https://xn--bcher-kva.de");
         assert_eq!(display_url(&go("аpple.com")), "xn--pple-43d.com");
-        assert_eq!(go("localhost"), "https://localhost");
-        assert_eq!(go("app.localhost:5173/x"), "https://app.localhost:5173/x");
-        assert_eq!(go("printer.local"), "https://printer.local");
-        assert_eq!(go("192.168.1.1:8080/admin"), "https://192.168.1.1:8080/admin");
-        assert_eq!(go("[::1]:3000"), "https://[::1]:3000");
-        assert_eq!(go("[2001:db8::1]"), "https://[2001:db8::1]");
+        assert_eq!(go("localhost"), "http://localhost");
+        assert_eq!(go("app.localhost:5173/x"), "http://app.localhost:5173/x");
+        assert_eq!(go("printer.local"), "http://printer.local");
+        assert_eq!(go("192.168.1.1:8080/admin"), "http://192.168.1.1:8080/admin");
+        assert_eq!(go("[::1]:3000"), "http://[::1]:3000");
+        assert_eq!(go("[2001:db8::1]"), "http://[2001:db8::1]");
         assert_eq!(go("user:pass@example.com"), "https://user:pass@example.com");
         assert!(searched("1.5"), "a number is not an address");
         assert!(searched("node.js"), "js is no suffix");

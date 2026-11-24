@@ -16,7 +16,7 @@ use crate::window::{BrowserWindow, Open};
 pub type Overlay = fn(&BrowserWindow, &mut Window, &mut Context<BrowserWindow>) -> Option<AnyElement>;
 
 /// The window's overlays, back to front.
-pub const OVERLAYS: &[Overlay] = &[];
+pub const OVERLAYS: &[Overlay] = &[crate::omnibox::overlay];
 
 /// The load bar's sliver while a load has made no progress yet.
 const LOAD_SLIVER: f32 = 0.08;

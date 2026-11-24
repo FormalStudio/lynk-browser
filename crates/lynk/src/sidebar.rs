@@ -12,7 +12,7 @@ use nd::virtual_list::{SelectEvent, Selection, list};
 use crate::actions;
 use crate::app;
 use crate::tab::TabId;
-use crate::window::{BrowserWindow, Open};
+use crate::window::BrowserWindow;
 
 // The column's numbers (docs/sidebar.md, and the 0.5.11 app's `Sidebar.tsx` where it is
 // silent). Every backend draws these; nothing below takes a size from the theme.
@@ -281,6 +281,12 @@ impl BrowserWindow {
                     cx.notify();
                 }
             }))
+            // The list keeps the shown row selected, so a click on it selects nothing new.
+            .when(active, |row| {
+                row.on_tap(cx.listener(|_, _: &TapEvent, window, cx| {
+                    cx.dispatch_action(window.id(), &actions::OpenAddress);
+                }))
+            })
             .context_menu(move |menu, _, cx| row_menu(menu, me, id, cx))
             .child(
                 h_flex()
@@ -355,8 +361,8 @@ fn new_tab_row(cx: &mut Context<BrowserWindow>) -> AnyElement {
         .opacity(QUIET)
         .hover(|s| s.bg(ink.opacity(HOVER_FILL)).opacity(1.))
         .active(|pose| pose.scale(PRESSED_SCALE))
-        .on_tap(cx.listener(|win, _: &TapEvent, _, cx| {
-            win.open_tab("", Open::End, cx);
+        .on_tap(cx.listener(|_, _: &TapEvent, window, cx| {
+            cx.dispatch_action(window.id(), &actions::NewTab);
         }))
         .child(icon(Icon::Plus, FAVICON))
         .child(label("New tab").secondary())

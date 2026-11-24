@@ -22,6 +22,7 @@ pub mod permissions;
 pub mod session;
 pub mod settings;
 pub mod settings_registry;
+mod sidebar_repair;
 pub mod sidebar_tree;
 pub mod spaces;
 pub mod tabstate;
@@ -29,6 +30,7 @@ pub mod tidy;
 pub mod ublock;
 pub mod url;
 pub mod webstore;
+pub mod window_tabs;
 pub mod zoom;
 
 /// Milliseconds since the Unix epoch, JavaScript's `Date.now()`, which every file the 0.5.11 app

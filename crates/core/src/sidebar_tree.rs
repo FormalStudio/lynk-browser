@@ -4,11 +4,11 @@
 //! keeps each tab id in the tree once.
 //!
 //! Rows are addressed by id: tab ids and the ids of separators, folders and splits share one
-//! namespace, which the session hands out.
+//! namespace, which the session hands out. This module owns the tree and every change to it;
+//! bringing a tree read from disk back within the rules is `sidebar_repair`'s. It knows nothing
+//! of pages, windows or spaces.
 
-use std::collections::HashSet;
-
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{lenient_items, null_default};
 
@@ -30,18 +30,46 @@ impl Half {
     }
 }
 
-pub const SPLIT_RATIO_MIN: f64 = 0.2;
-pub const SPLIT_RATIO_MAX: f64 = 0.8;
+/// The first card's share of a split's width, always within 0.2 to 0.8.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Ratio(f64);
 
-/// Two tabs shown side by side. `ratio` is the first card's share of the width.
+impl Ratio {
+    pub const MIN: f64 = 0.2;
+    pub const MAX: f64 = 0.8;
+    pub const EVEN: Self = Self(0.5);
+
+    /// Clamped into range; anything that is not a number is an even split.
+    pub fn new(value: f64) -> Self {
+        if value.is_finite() { Self(value.clamp(Self::MIN, Self::MAX)) } else { Self::EVEN }
+    }
+
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Ratio {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Option::<f64>::deserialize(d)?.map_or(Self::EVEN, Self::new))
+    }
+}
+
+/// Two tabs shown side by side.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Split {
     pub id: String,
     pub tabs: [String; 2],
-    pub ratio: f64,
+    #[serde(default = "even")]
+    pub ratio: Ratio,
     #[serde(default, deserialize_with = "null_default")]
     pub focus: Half,
+}
+
+fn even() -> Ratio {
+    Ratio::EVEN
 }
 
 impl Split {
@@ -125,7 +153,7 @@ impl Child {
         }
     }
 
-    fn into_item(self) -> Item {
+    pub(crate) fn into_item(self) -> Item {
         match self {
             Self::Tab { id } => Item::Tab { id },
             Self::Split(s) => Item::Split(s),
@@ -155,8 +183,6 @@ pub enum TreeError {
     AlreadyPresent,
     /// The tab sits inside a folder or split where the operation does not apply.
     NotLoose,
-    /// A split ratio outside [`SPLIT_RATIO_MIN`] to [`SPLIT_RATIO_MAX`].
-    BadRatio,
 }
 
 /// Where a row goes. The index counts the destination as it is once the row has left its old
@@ -280,92 +306,6 @@ impl SidebarTree {
             },
             (Container::Pins, _) => None,
         }
-    }
-
-    /// Fails on the first broken rule: a tab or row id seen twice, a split whose two halves are
-    /// one tab, a ratio outside the allowed range.
-    pub fn check(&self) -> Result<(), TreeError> {
-        let mut seen = HashSet::new();
-        for id in self.tab_ids() {
-            if !seen.insert(id) {
-                return Err(TreeError::AlreadyPresent);
-            }
-        }
-        let mut splits = Vec::new();
-        for item in &self.items {
-            if !matches!(item, Item::Tab { .. }) && !seen.insert(item.id()) {
-                return Err(TreeError::AlreadyPresent);
-            }
-            match item {
-                Item::Split(s) => splits.push(s),
-                Item::Folder(f) => {
-                    for c in &f.children {
-                        if let Child::Split(s) = c {
-                            if !seen.insert(&s.id) {
-                                return Err(TreeError::AlreadyPresent);
-                            }
-                            splits.push(s);
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        for s in splits {
-            if s.tabs[0] == s.tabs[1] {
-                return Err(TreeError::SameTab);
-            }
-            if !(SPLIT_RATIO_MIN..=SPLIT_RATIO_MAX).contains(&s.ratio) {
-                return Err(TreeError::BadRatio);
-            }
-        }
-        Ok(())
-    }
-
-    /// Brings a tree read from disk back within the rules: tabs `keep` rejects and repeats go,
-    /// a split left with one tab becomes that tab, a ratio out of range is clamped.
-    pub fn repair(&mut self, mut keep: impl FnMut(&str) -> bool) {
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut take = |id: &str| keep(id) && seen.insert(id.to_owned());
-        self.pins.retain(|id| take(id));
-        let mut rows = HashSet::new();
-        let mut items = Vec::new();
-        for item in std::mem::take(&mut self.items) {
-            match item {
-                Item::Tab { id } => {
-                    if take(&id) {
-                        items.push(Item::Tab { id });
-                    }
-                }
-                Item::Separator { id, name } => {
-                    if rows.insert(id.clone()) {
-                        items.push(Item::Separator { id, name });
-                    }
-                }
-                Item::Split(s) => {
-                    items.extend(repair_split(s, &mut take, &mut rows).into_iter().map(Child::into_item));
-                }
-                Item::Folder(mut f) => {
-                    if !rows.insert(f.id.clone()) {
-                        continue;
-                    }
-                    let mut children = Vec::new();
-                    for child in std::mem::take(&mut f.children) {
-                        match child {
-                            Child::Tab { id } => {
-                                if take(&id) {
-                                    children.push(Child::Tab { id });
-                                }
-                            }
-                            Child::Split(s) => children.extend(repair_split(s, &mut take, &mut rows)),
-                        }
-                    }
-                    f.children = children;
-                    items.push(Item::Folder(f));
-                }
-            }
-        }
-        self.items = items;
     }
 
     fn locate(&self, tab: &str) -> Option<TabLoc> {
@@ -647,7 +587,7 @@ impl SidebarTree {
         }
         self.take_tab(b);
         let loc = self.locate(a).expect("a is still in the tree");
-        let split = Split { id: id.into(), tabs: [a.into(), b.into()], ratio: 0.5, focus: Half::First };
+        let split = Split { id: id.into(), tabs: [a.into(), b.into()], ratio: Ratio::EVEN, focus: Half::First };
         match loc.container {
             Container::Root => self.items[loc.index] = Item::Split(split),
             Container::Folder(at) => {
@@ -662,26 +602,25 @@ impl SidebarTree {
     /// Breaks a split into its two tabs, in order, where it was.
     pub fn dissolve_split(&mut self, id: &str) -> Result<(), TreeError> {
         let (container, index) = self.locate_row(id).ok_or(TreeError::UnknownRow)?;
-        match container {
-            Container::Root => {
-                let Item::Split(s) = self.items.remove(index) else { return Err(TreeError::UnknownRow) };
-                let [x, y] = s.tabs;
-                self.items.splice(index..index, [Item::tab(x), Item::tab(y)]);
-            }
+        let row = match container {
+            Container::Root => &mut self.items,
             Container::Folder(at) => {
                 let Item::Folder(f) = &mut self.items[at] else { unreachable!() };
-                let Child::Split(s) = f.children.remove(index) else { unreachable!() };
-                let [x, y] = s.tabs;
-                f.children.splice(index..index, [Child::Tab { id: x }, Child::Tab { id: y }]);
+                let Some(Child::Split(s)) = f.children.get(index) else { return Err(TreeError::UnknownRow) };
+                let [x, y] = s.tabs.clone();
+                f.children.splice(index..=index, [Child::Tab { id: x }, Child::Tab { id: y }]);
+                return Ok(());
             }
-            Container::Pins => unreachable!(),
-        }
+            Container::Pins => return Err(TreeError::UnknownRow),
+        };
+        let Some(Item::Split(s)) = row.get(index) else { return Err(TreeError::UnknownRow) };
+        let [x, y] = s.tabs.clone();
+        row.splice(index..=index, [Item::tab(x), Item::tab(y)]);
         Ok(())
     }
 
     pub fn set_split_ratio(&mut self, id: &str, ratio: f64) -> Result<(), TreeError> {
-        let ratio = if ratio.is_finite() { ratio.clamp(SPLIT_RATIO_MIN, SPLIT_RATIO_MAX) } else { 0.5 };
-        self.split_mut(id).ok_or(TreeError::UnknownRow)?.ratio = ratio;
+        self.split_mut(id).ok_or(TreeError::UnknownRow)?.ratio = Ratio::new(ratio);
         Ok(())
     }
 
@@ -752,6 +691,65 @@ impl SidebarTree {
         Ok(())
     }
 
+    /// Puts a tab that is not in the tree yet at `dest`.
+    pub fn insert_tab(&mut self, id: &str, dest: Dest) -> Result<(), TreeError> {
+        self.ensure_new_row(id)?;
+        if let Dest::Folder { id: folder, .. } = &dest
+            && self.folder(folder).is_none()
+        {
+            return Err(TreeError::UnknownRow);
+        }
+        self.insert(Item::tab(id), &dest)
+    }
+
+    /// The index in the list of a row sitting directly in it.
+    pub fn row_index(&self, id: &str) -> Option<usize> {
+        self.items.iter().position(|i| i.id() == id)
+    }
+
+    /// The row directly above a row in the list, `None` at the top.
+    pub fn row_above(&self, id: &str) -> Option<&str> {
+        let at = self.row_index(id)?;
+        at.checked_sub(1).map(|i| self.items[i].id())
+    }
+
+    /// What outlives a fresh start: the pins and the folders.
+    pub fn saved_part(&self) -> SidebarTree {
+        SidebarTree {
+            pins: self.pins.clone(),
+            items: self.items.iter().filter(|i| matches!(i, Item::Folder(_))).cloned().collect(),
+            last_active: String::new(),
+        }
+    }
+
+    /// Appends another tree's pins and rows, whose tabs and rows must not be in this one.
+    pub fn absorb(&mut self, other: SidebarTree) {
+        self.pins.extend(other.pins);
+        self.items.extend(other.items);
+    }
+
+    /// Rewrites the list as `groups`, each a separator `(id, name)` over its tabs, followed by
+    /// the folders and splits in their order; the old separators go. The groups must name every
+    /// loose tab once and nothing else. Returns the list as it was.
+    pub fn regroup_loose(&mut self, groups: Vec<((String, String), Vec<String>)>) -> Vec<Item> {
+        let mut items = Vec::new();
+        for ((id, name), tabs) in groups {
+            items.push(Item::Separator { id, name });
+            items.extend(tabs.into_iter().map(Item::tab));
+        }
+        items.extend(self.items.iter().filter(|i| matches!(i, Item::Folder(_) | Item::Split(_))).cloned());
+        std::mem::replace(&mut self.items, items)
+    }
+
+    /// Puts back a list `regroup_loose` returned, only while the list is still `now`.
+    pub fn restore_rows(&mut self, rows: Vec<Item>, now: &[Item]) -> bool {
+        if self.items != now {
+            return false;
+        }
+        self.items = rows;
+        true
+    }
+
     /// What a collapsed folder's row shows.
     pub fn folder_summary(&self, id: &str) -> Option<FolderSummary> {
         let f = self.folder(id)?;
@@ -768,16 +766,6 @@ fn half_of(s: &Split, tab: &str) -> Option<Half> {
     } else {
         None
     }
-}
-
-fn repair_split(mut s: Split, take: &mut impl FnMut(&str) -> bool, rows: &mut HashSet<String>) -> Vec<Child> {
-    let kept: Vec<String> = s.tabs.iter().filter(|t| take(t)).cloned().collect();
-    if kept.len() == 2 && rows.insert(s.id.clone()) {
-        s.ratio = if s.ratio.is_finite() { s.ratio.clamp(SPLIT_RATIO_MIN, SPLIT_RATIO_MAX) } else { 0.5 };
-        return vec![Child::Split(s)];
-    }
-    // One tab left, or a repeated split id: the tabs stay as plain rows.
-    kept.into_iter().map(|id| Child::Tab { id }).collect()
 }
 
 #[cfg(test)]
@@ -813,7 +801,7 @@ mod tests {
     }
 
     fn split(id: &str, a: &str, b: &str) -> Split {
-        Split { id: id.into(), tabs: [a.into(), b.into()], ratio: 0.5, focus: Half::First }
+        Split { id: id.into(), tabs: [a.into(), b.into()], ratio: Ratio::EVEN, focus: Half::First }
     }
 
     fn rows(t: &SidebarTree) -> Vec<&str> {
@@ -955,9 +943,9 @@ mod tests {
     fn split_ratio_and_focus() {
         let mut t = sample();
         t.set_split_ratio("x1", 0.95).unwrap();
-        assert_eq!(t.split_of("e").unwrap().ratio, SPLIT_RATIO_MAX);
+        assert_eq!(t.split_of("e").unwrap().ratio.get(), Ratio::MAX);
         t.set_split_ratio("x1", f64::NAN).unwrap();
-        assert_eq!(t.split_of("e").unwrap().ratio, 0.5);
+        assert_eq!(t.split_of("e").unwrap().ratio, Ratio::EVEN);
         t.focus_tab("f");
         assert_eq!(t.split_of("e").unwrap().focused(), "f");
         assert_eq!(t.set_split_ratio("f1", 0.5), Err(TreeError::UnknownRow));
@@ -1009,37 +997,6 @@ mod tests {
     }
 
     #[test]
-    fn repair_drops_repeats_and_unknown_tabs_and_heals_splits() {
-        let mut t = tree(
-            &["a", "a"],
-            vec![
-                tab("a"),
-                tab("b"),
-                Item::Split(Split { id: "x1".into(), tabs: ["b".into(), "c".into()], ratio: 3.0, focus: Half::Second }),
-                folder("f1", FolderKind::Plain, vec![Child::Split(split("x2", "gone", "d")), ctab("e")]),
-                folder("f1", FolderKind::Plain, vec![ctab("z")]),
-            ],
-        );
-        t.repair(|id| id != "gone");
-        assert_eq!(t.pins, ["a"]);
-        assert_eq!(rows(&t), ["b", "c", "f1"]);
-        assert_eq!(t.folder("f1").unwrap().children, vec![ctab("d"), ctab("e")]);
-        assert_eq!(t.check(), Ok(()));
-        let mut ok = tree(&[], vec![Item::Split(Split { ratio: 3.0, ..split("x1", "a", "b") })]);
-        ok.repair(|_| true);
-        assert_eq!(ok.split_of("a").unwrap().ratio, SPLIT_RATIO_MAX);
-    }
-
-    #[test]
-    fn check_catches_broken_trees() {
-        assert_eq!(tree(&["a"], vec![tab("a")]).check(), Err(TreeError::AlreadyPresent));
-        assert_eq!(tree(&[], vec![Item::Split(split("x", "a", "a"))]).check(), Err(TreeError::AlreadyPresent));
-        assert_eq!(tree(&[], vec![sep("s", ""), sep("s", "")]).check(), Err(TreeError::AlreadyPresent));
-        let wide = Split { ratio: 0.99, ..split("x", "a", "b") };
-        assert_eq!(tree(&[], vec![Item::Split(wide)]).check(), Err(TreeError::BadRatio));
-    }
-
-    #[test]
     fn a_tree_round_trips_through_json_and_skips_bad_rows() {
         let t = sample();
         let text = serde_json::to_string(&t).unwrap();
@@ -1049,6 +1006,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rows(&odd), ["a", "s", "f"]);
+        let wide: Split = serde_json::from_str(r#"{"id":"x","tabs":["a","b"],"ratio":3.0}"#).unwrap();
+        assert_eq!(wide.ratio.get(), Ratio::MAX);
+        let none: Split = serde_json::from_str(r#"{"id":"x","tabs":["a","b"],"ratio":null,"focus":null}"#).unwrap();
+        assert_eq!((none.ratio, none.focus), (Ratio::EVEN, Half::First));
         assert!(odd.pins.is_empty() && odd.folder("f").unwrap().children.is_empty());
     }
 }

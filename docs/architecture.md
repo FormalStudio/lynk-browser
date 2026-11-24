@@ -83,8 +83,8 @@ window is what a relaunch will restore.
 ## Tab and page lifecycle
 
 A `Tab` (`tab.rs`) is an address, a title, a `Page` and `rt`, the last facts its page reported.
-`Page` is `Waiting` (no page yet), `Live` (the `WebView`) or `Asleep { scroll }`, so a sleeping tab with a page or a scroll to restore on a
-live one cannot be written. The page is Chromium's. `rt` is only a cache of what it said.
+`Page` is `Waiting` (no page yet), `Live` (the `WebView`) or `Asleep { scroll }`, so a sleeping
+tab with a page or a scroll to restore on a live one cannot be written. The page is Chromium's. `rt` is only a cache of what it said.
 
 ```mermaid
 stateDiagram-v2

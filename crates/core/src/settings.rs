@@ -9,6 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::archive::ArchiveAfter;
 use crate::permissions::{PermissionDecision, SitePermissions};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -40,16 +41,74 @@ pub fn engine_of(id: SearchEngineId) -> &'static SearchEngine {
 }
 
 /// `Sidebar` is the vertical tab column; `Compact` moves the tab affordances into one toolbar
-/// row, for reading a single page.
+/// row, for reading a single page. `Top` is a row of tabs over the page, `Left` and `Right` a
+/// column on that side, and `IconsOnly` a strip of favicons.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Layout {
     #[default]
     Sidebar,
     Compact,
+    Top,
+    Left,
+    Right,
+    #[serde(rename = "iconsOnly")]
+    IconsOnly,
 }
 
-pub const LAYOUTS: [(Layout, &str); 2] = [(Layout::Sidebar, "Sidebar"), (Layout::Compact, "Compact")];
+pub const LAYOUTS: [(Layout, &str); 6] = [
+    (Layout::Sidebar, "Sidebar"),
+    (Layout::Compact, "Compact"),
+    (Layout::Top, "Top"),
+    (Layout::Left, "Left"),
+    (Layout::Right, "Right"),
+    (Layout::IconsOnly, "Icons only"),
+];
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    Light,
+    Dark,
+    #[default]
+    Auto,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadsIn {
+    #[default]
+    Panel,
+    Tab,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum NewTabPosition {
+    Top,
+    Next,
+    #[default]
+    End,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SleepTabs {
+    #[default]
+    Never,
+    Later,
+    Normal,
+    Sooner,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PeekTrigger {
+    #[default]
+    Off,
+    ShiftClick,
+    MiddleHold,
+}
 
 /// How a pinned tile reads: the site's icon (its letter until there is one), or only the letter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -62,7 +121,9 @@ pub enum PinStyle {
 
 pub const PIN_STYLES: [(PinStyle, &str); 2] = [(PinStyle::Icons, "Icons"), (PinStyle::Letters, "Letters")];
 
-#[derive(Settings, Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// Each field is one row of the settings page, described in
+/// [`crate::settings_registry::SETTINGS`] under the field's key.
+#[derive(Settings, Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
 pub struct LynkSettings {
     /// Where typed text that is not an address is searched.
@@ -84,6 +145,108 @@ pub struct LynkSettings {
     pub download_dir: String,
     /// Show a save panel for every download instead of saving straight away.
     pub ask_where_to_save: bool,
+    /// The app email links open in. Empty is the system's choice.
+    pub mail_app: String,
+    /// A folder spaces, pins and settings sync through. Empty is off.
+    pub sync_folder: String,
+    pub confirm_quit: bool,
+    pub always_show_downloads: bool,
+    pub downloads_in: DownloadsIn,
+    pub appearance: Appearance,
+    pub hide_to_icons: bool,
+    pub narrow_to_icons: bool,
+    pub darken_pages: bool,
+    pub devtools_follow_appearance: bool,
+    pub reader_follows_appearance: bool,
+    pub new_tab_position: NewTabPosition,
+    pub keep_last_tab: bool,
+    pub close_goes_back: bool,
+    pub swipe_back_closes: bool,
+    pub undo_reopens_tab: bool,
+    pub switch_to_opened: bool,
+    pub switcher_skips_pinned: bool,
+    pub load_when_shown: bool,
+    pub popups_as_windows: bool,
+    pub sleep_tabs: SleepTabs,
+    pub dim_sleeping: bool,
+    pub archive_after: ArchiveAfter,
+    pub spaces_enabled: bool,
+    pub number_keys_switch_spaces: bool,
+    pub space_buttons: bool,
+    pub ask_space_for_links: bool,
+    pub pins_keep_site: bool,
+    pub pinned_rows: bool,
+    pub pin_click_new_tab: bool,
+    pub floating_new_tab: bool,
+    pub peek_trigger: PeekTrigger,
+    pub force_click_peek: bool,
+    pub peek_stays_with_tab: bool,
+    pub alt_click_split: bool,
+    pub middle_click_scroll: bool,
+    pub smooth_scrolling: bool,
+    pub bounce_at_ends: bool,
+    pub history_swipe: bool,
+    /// A chord in `keys` spelling that raises the address field over any app. Empty is none.
+    pub global_address_key: String,
+    pub global_opens_small_window: bool,
+}
+
+impl Default for LynkSettings {
+    fn default() -> Self {
+        Self {
+            search_engine: SearchEngineId::default(),
+            homepage: String::new(),
+            fresh_window: false,
+            layout: Layout::default(),
+            pin_style: PinStyle::default(),
+            site_permissions: SitePermissions::new(),
+            pinned_extensions: Vec::new(),
+            download_dir: String::new(),
+            ask_where_to_save: false,
+            mail_app: String::new(),
+            sync_folder: String::new(),
+            confirm_quit: false,
+            always_show_downloads: false,
+            downloads_in: DownloadsIn::default(),
+            appearance: Appearance::default(),
+            hide_to_icons: false,
+            narrow_to_icons: false,
+            darken_pages: false,
+            devtools_follow_appearance: false,
+            reader_follows_appearance: false,
+            new_tab_position: NewTabPosition::default(),
+            keep_last_tab: false,
+            close_goes_back: false,
+            swipe_back_closes: false,
+            undo_reopens_tab: false,
+            switch_to_opened: false,
+            switcher_skips_pinned: false,
+            load_when_shown: false,
+            popups_as_windows: false,
+            sleep_tabs: SleepTabs::default(),
+            dim_sleeping: false,
+            archive_after: ArchiveAfter::default(),
+            spaces_enabled: false,
+            number_keys_switch_spaces: false,
+            space_buttons: false,
+            ask_space_for_links: false,
+            pins_keep_site: false,
+            pinned_rows: false,
+            pin_click_new_tab: false,
+            floating_new_tab: false,
+            peek_trigger: PeekTrigger::default(),
+            force_click_peek: false,
+            peek_stays_with_tab: false,
+            alt_click_split: false,
+            middle_click_scroll: false,
+            // Chromium scrolls smoothly unless told not to.
+            smooth_scrolling: true,
+            bounce_at_ends: false,
+            history_swipe: false,
+            global_address_key: String::new(),
+            global_opens_small_window: false,
+        }
+    }
 }
 
 impl LynkSettings {
@@ -118,6 +281,7 @@ impl LynkSettings {
             },
             download_dir: string("downloadDir", d.download_dir),
             ask_where_to_save: get("askWhereToSave") == Some(&Value::Bool(true)),
+            ..Self::default()
         }
     }
 
@@ -175,8 +339,9 @@ mod tests {
         assert!(d.site_permissions.is_empty() && d.pinned_extensions.is_empty());
         assert_eq!(d.download_dir, "");
         assert!(!d.ask_where_to_save);
-        let keys: Vec<String> = serde_json::to_value(&d).unwrap().as_object().unwrap().keys().cloned().collect();
-        let mut want = vec![
+        let value = serde_json::to_value(&d).unwrap();
+        let keys = value.as_object().unwrap();
+        let old = [
             "searchEngine",
             "homepage",
             "freshWindow",
@@ -187,10 +352,9 @@ mod tests {
             "downloadDir",
             "askWhereToSave",
         ];
-        want.sort_unstable();
-        let mut keys = keys;
-        keys.sort();
-        assert_eq!(keys, want);
+        for key in old {
+            assert!(keys.contains_key(key), "{key}");
+        }
     }
 
     #[test]

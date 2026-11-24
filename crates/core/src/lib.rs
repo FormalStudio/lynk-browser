@@ -21,6 +21,7 @@ pub mod pages;
 pub mod permissions;
 pub mod session;
 pub mod settings;
+pub mod settings_registry;
 pub mod sidebar_tree;
 pub mod spaces;
 pub mod tabstate;

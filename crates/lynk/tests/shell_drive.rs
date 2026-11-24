@@ -1371,7 +1371,8 @@ fn real_a_page_with_a_colour_scheme_keeps_its_canvas() {
 
 /// The sidebar's rows in every state at once, in each appearance and at the minimum width:
 /// shown, under the pointer, loading, asleep, a long title, no favicon, the New Tab row and the
-/// foot. Captures land as `shell-sidebar-states-<appearance>[-720].png`.
+/// foot, then a row held down. Captures land as `shell-sidebar-states-<appearance>[-720].png`
+/// and `shell-sidebar-pressed-<appearance>.png`.
 #[test]
 fn real_sidebar_draws_every_row_state() {
     if !real_allowed() {
@@ -1412,6 +1413,14 @@ fn real_sidebar_draws_every_row_state() {
             shot(&app, &format!("sidebar-states-{appearance}{suffix}"));
             sidebar_geometry_holds(&app);
         }
+        // A row held down gives a little.
+        let (wx, wy, _, _) = front_window(&app).bounds;
+        let at = row_at(&app, 1);
+        let at = (wx + f64::from(at.0), wy + f64::from(at.1));
+        ndshell::input::hold(at);
+        std::thread::sleep(Duration::from_millis(400));
+        shot(&app, &format!("sidebar-pressed-{appearance}"));
+        ndshell::input::release(at);
     }
 }
 

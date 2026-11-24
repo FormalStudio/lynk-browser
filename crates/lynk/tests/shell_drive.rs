@@ -49,38 +49,67 @@ const PRESS: &str = r#"<!doctype html><title>Press</title>
 const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
-/// Serves the fixture pages on a free local port for the rest of the test process.
+/// Opens pop-ups as fast as it can, never from a click.
+const POPUPS: &str = r#"<!doctype html><title>Popups</title>
+<body><script>setInterval(() => window.open("/beta?" + Math.random()), 20);</script></body>"#;
+
+/// Serves the fixture pages on a free local port for the rest of the test process, each request
+/// on its own thread, since `/slow` never answers.
 fn serve() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
         for stream in listener.incoming().map_while(Result::ok) {
-            let mut stream = stream;
-            let mut line = String::new();
-            let _ = BufReader::new(&stream).read_line(&mut line);
-            let path = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
-            let (status, body) = match path.as_str() {
-                "/alpha" => ("200 OK", ALPHA),
-                "/beta" => ("200 OK", BETA),
-                "/leave" => ("200 OK", LEAVE),
-                "/full" => ("200 OK", FULL),
-                "/long" => ("200 OK", LONG),
-                "/busy" => ("200 OK", BUSY),
-                "/press" => ("200 OK", PRESS),
-                _ => ("404 Not Found", "<!doctype html><title>Missing</title>"),
-            };
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
+            std::thread::spawn(move || respond(stream));
         }
     });
     base
 }
 
+fn respond(mut stream: std::net::TcpStream) {
+    let mut line = String::new();
+    let _ = BufReader::new(&stream).read_line(&mut line);
+    let target = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
+    let path = target.split('?').next().unwrap_or("/");
+    let page = |body: &str| ("200 OK", String::new(), body.to_owned());
+    let (status, extra, body) = match path {
+        "/alpha" => page(ALPHA),
+        "/beta" => page(BETA),
+        "/leave" => page(LEAVE),
+        "/full" => page(FULL),
+        "/long" => page(LONG),
+        "/busy" => page(BUSY),
+        "/press" => page(PRESS),
+        "/popups" => page(POPUPS),
+        "/many" => page(&format!("<!doctype html><title>Many</title><p>{}", "needle ".repeat(10_000))),
+        // 50 MB of text under a title.
+        "/big" => page(&format!("<!doctype html><title>Big</title><pre>{}", "x".repeat(50 << 20))),
+        "/loop" => ("302 Found", "Location: /loop\r\n".to_owned(), String::new()),
+        "/slow" => {
+            std::thread::sleep(Duration::from_secs(600));
+            return;
+        }
+        _ => ("404 Not Found", String::new(), "<!doctype html><title>Missing</title>".to_owned()),
+    };
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status}\r\nContent-Type: text/html\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+}
+
 fn launch(url: &str) -> AppHandle {
     let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("LYNK_URL", url).env("ND_CEF_STYLE", "chrome");
+    let app = launch_app(options).unwrap();
+    activate(app.pid());
+    app
+}
+
+/// Launches on `urls`, a tab each, as a launch from the command line does.
+fn launch_with(urls: &[String]) -> AppHandle {
+    let options = urls
+        .iter()
+        .fold(LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("ND_CEF_STYLE", "chrome"), |o, url| o.arg(url));
     let app = launch_app(options).unwrap();
     activate(app.pid());
     app
@@ -113,7 +142,10 @@ fn width_of(app: &AppHandle) -> Option<f64> {
 
 /// Resizes the front window to `width` points, keeping its height, as a drag of its edge would.
 fn resize(app: &AppHandle, width: u32) {
-    let height = front_window(app).bounds.3 as u32;
+    resize_to(app, width, front_window(app).bounds.3 as u32);
+}
+
+fn resize_to(app: &AppHandle, width: u32, height: u32) {
     let pid = app.pid();
     let script = format!(
         "tell application \"System Events\" to set size of front window of (first process whose unix id is {pid}) to {{{width}, {height}}}"
@@ -129,9 +161,25 @@ fn resize(app: &AppHandle, width: u32) {
 /// child window, which events posted to the app's window never reach; `launch_app` holds the
 /// machine's real-input lock for the run.
 fn real_click(app: &AppHandle, x: f32, y: f32) {
+    in_front(app);
     let (wx, wy, _, _) = front_window(app).bounds;
     ndshell::input::click((wx + f64::from(x), wy + f64::from(y)));
     std::thread::sleep(Duration::from_millis(400));
+}
+
+/// Waits until one of the app's windows is key, bringing the app forward again meanwhile. A click
+/// on a window of an app that is not active only activates it, and an app the test quit a moment
+/// earlier hands activation to the next app in line after the new one came forward.
+fn in_front(app: &AppHandle) {
+    let key = |a: &AppHandle| {
+        a.windows().ok().is_some_and(|w| w.as_array().is_some_and(|ws| ws.iter().any(|w| w["key"] == true)))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !key(app) {
+        assert!(Instant::now() < deadline, "no window of the app became key");
+        ndshell::input::activate(app.pid());
+        std::thread::sleep(Duration::from_millis(200));
+    }
 }
 
 /// A composited capture of the window, glass and pages included, which the automation
@@ -385,7 +433,12 @@ fn exited(app: &AppHandle, secs: u64) {
     };
     let deadline = Instant::now() + Duration::from_secs(secs);
     while !gone() {
-        assert!(Instant::now() < deadline, "the app is still running: {:?}", app.stderr_tail(30));
+        assert!(
+            Instant::now() < deadline,
+            "the app is still running with {} windows: {:?}",
+            window_count(app),
+            app.stderr_tail(30)
+        );
         std::thread::sleep(Duration::from_millis(150));
     }
 }
@@ -876,6 +929,7 @@ fn key_of(c: char) -> u16 {
 /// Right-clicks `at` (window points) and picks the item whose title starts with `item`, typed
 /// into the menu as a user selects by typing.
 fn pick_menu(app: &AppHandle, at: (f32, f32), item: &str) {
+    in_front(app);
     let (wx, wy, _, _) = front_window(app).bounds;
     ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
     std::thread::sleep(Duration::from_millis(600));
@@ -932,4 +986,258 @@ fn real_tab_row_menu() {
     let n = app.get_by_test_id("new-tab-row").bounding_box().unwrap().unwrap();
     pick_menu(&app, (n.x + n.width / 2., n.y + n.height + 120.), "New Tab");
     until(&app, "a tab from the column menu", 10, |a| titles(a).len() == 2);
+}
+
+#[test]
+fn real_close_others_over_every_page_state() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    // Shown and live, asleep, loading and never finishing, never loaded.
+    let app = launch_with(&[format!("{base}/alpha"), format!("{base}/long"), format!("{base}/slow"), format!("{base}/beta")]);
+    until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
+    press(&app, "cmd-2");
+    until(&app, "the second page", 15, |a| titles(a).get(1).is_some_and(|t| t.starts_with("Long")));
+    press(&app, "cmd-3");
+    until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
+    press(&app, "cmd-1");
+    pick_menu(&app, row_at(&app, 1), "Put Tab");
+    until(&app, "the second tab asleep", 15, |a| live_pages(a) == 2);
+    pick_menu(&app, row_at(&app, 0), "Close Other");
+    until(&app, "only the shown tab", 15, |a| titles(a) == ["Alpha"]);
+    assert_eq!(live_pages(&app), 1);
+}
+
+#[test]
+fn real_fifty_tabs_opened_and_closed_at_speed() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    let keys = app.keyboard();
+    for _ in 0..50 {
+        keys.press("cmd-t").unwrap();
+    }
+    until(&app, "the last new tab shown", 30, |a| has(a, "new-tab-page"));
+    // Fifty closes leave exactly the first tab only if all fifty opened: one too few would take
+    // the window, and the app with it.
+    for _ in 0..50 {
+        keys.press("cmd-w").unwrap();
+    }
+    until(&app, "back to the first tab", 30, |a| titles(a) == ["Alpha"]);
+}
+
+#[test]
+fn real_window_of_thirty_live_tabs_closes() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let urls: Vec<String> = (0..30).map(|n| format!("{base}/beta?{n}")).collect();
+    let app = launch_with(&urls);
+    // The list is virtual, so its rows' order in the tree is not the tabs' order.
+    until(&app, "the first page", 30, |a| titles(a).iter().any(|t| t == "Beta"));
+    shot(&app, "thirty");
+    // Next Tab through all of them gives each its page.
+    for _ in 0..29 {
+        app.keyboard().press("cmd-shift-]").unwrap();
+    }
+    until(&app, "thirty live pages", 60, |a| live_pages(a) == 30);
+    // The last window closing quits.
+    real_click(&app, 19., 19.);
+    exited(&app, 30);
+}
+
+#[test]
+fn real_sigterm_during_a_load_still_flushes_the_profile() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/slow"));
+    until(&app, "the load under way", 30, |a| has(a, "load-bar"));
+    assert_eq!(terminate(&app)["profile"]["exit_type"], "Normal");
+}
+
+#[test]
+fn real_renderer_crash_shows_aw_snap() {
+    if !real_allowed() {
+        return;
+    }
+    let app = launch("chrome://crash");
+    until(&app, "Aw, Snap!", 30, |a| has(a, "crash-page"));
+    shot(&app, "crashed");
+    // The app itself carries on.
+    press(&app, "cmd-t");
+    until(&app, "a new tab", 10, |a| titles(a).len() == 2);
+}
+
+#[test]
+fn real_unreachable_addresses_show_the_error_page() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    // A DNS failure, a refused connection (as offline), a redirect loop, an IDN host that does
+    // not resolve.
+    let urls = [
+        "http://lynk-drive.invalid/".to_owned(),
+        "http://127.0.0.1:1/".to_owned(),
+        format!("{base}/loop"),
+        "http://\u{4f8b}\u{3048}.\u{30c6}\u{30b9}\u{30c8}/".to_owned(),
+    ];
+    let app = launch_with(&urls);
+    for n in 1..=urls.len() {
+        press(&app, &format!("cmd-{n}"));
+        until(&app, &format!("the error page for {}", urls[n - 1]), 30, |a| has(a, "error-page"));
+    }
+    shot(&app, "error-page");
+}
+
+#[test]
+fn real_odd_but_valid_pages_load() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let file = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lynk-file-page.html");
+    std::fs::write(&file, "<!doctype html><title>File</title>on disk").unwrap();
+    let long_query = "a".repeat(4000);
+    let urls = [
+        format!("{base}/missing"),
+        "data:text/html,<title>Data</title>inline".to_owned(),
+        format!("file://{}", file.display()),
+        format!("{base}/beta?{long_query}"),
+        format!("{base}/\u{fc}n\u{ef}c\u{f6}d\u{e9}?q=\u{65e5}\u{672c}"),
+        format!("{base}/big"),
+    ];
+    let app = launch_with(&urls);
+    // A 404 is the site's own page, not the app's error.
+    let expect = ["Missing", "Data", "File", "Beta", "Missing", "Big"];
+    for (n, title) in expect.iter().enumerate() {
+        press(&app, &format!("cmd-{}", n + 1));
+        until(&app, &format!("{title} loaded"), 60, |a| titles(a).get(n).is_some_and(|t| t == title));
+        assert!(!has(&app, "error-page"), "{title} is no error");
+    }
+}
+
+#[test]
+fn real_popup_loop_is_held_off() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/popups"));
+    until(&app, "the page", 30, |a| titles(a) == ["Popups"]);
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(titles(&app), ["Popups"], "pop-ups without a click open nothing");
+    assert_eq!(window_count(&app), 1);
+}
+
+#[test]
+fn real_find_with_ten_thousand_matches_and_none() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/many"));
+    until(&app, "the page", 30, |a| titles(a) == ["Many"]);
+    press(&app, "cmd-f");
+    until(&app, "the find bar", 10, |a| has(a, "find-bar"));
+    app.get_by_test_id("find-field").type_text("needle").unwrap();
+    until(&app, "every match counted", 30, |a| text_of(a, "find-count").as_deref() == Some("10000 matches"));
+    app.get_by_test_id("find-field").fill("nothing like it").unwrap();
+    until(&app, "no matches", 10, |a| text_of(a, "find-count").as_deref() == Some("No matches"));
+}
+
+#[test]
+fn real_zoom_stops_at_both_limits() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    for _ in 0..15 {
+        press(&app, "cmd-=");
+    }
+    until(&app, "500%", 10, |a| text_of(a, "zoom-value").as_deref() == Some("500%"));
+    for _ in 0..25 {
+        press(&app, "cmd--");
+    }
+    until(&app, "25%", 10, |a| text_of(a, "zoom-value").as_deref() == Some("25%"));
+}
+
+#[test]
+fn real_back_and_forward_spammed_during_loads() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    click_page(&app, 100.);
+    until(&app, "Beta", 15, |a| titles(a) == ["Beta"]);
+    let keys = app.keyboard();
+    for _ in 0..20 {
+        keys.press("cmd-[").unwrap();
+        keys.press("cmd-]").unwrap();
+    }
+    keys.press("cmd-[").unwrap();
+    until(&app, "settled on Alpha", 15, |a| titles(a) == ["Alpha"]);
+}
+
+#[test]
+fn real_resize_to_the_minimum_during_a_load() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/slow"));
+    until(&app, "the load under way", 30, |a| has(a, "load-bar"));
+    resize_to(&app, 600, 400);
+    let (_, _, w, h) = front_window(&app).bounds;
+    assert_eq!((w, h), (720., 480.), "the window stops at its minimum size");
+    assert!(has(&app, "controls-row") && has(&app, "load-bar"));
+    shot(&app, "minimum");
+}
+
+#[test]
+fn real_closing_a_fullscreen_page_leaves_fullscreen() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/full"), format!("{base}/beta")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t == "Full"));
+    let width = front_window(&app).bounds.2;
+    click_page(&app, 100.);
+    until(&app, "page fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width));
+    std::thread::sleep(Duration::from_millis(1500));
+    press(&app, "cmd-w");
+    until(&app, "the tab gone and the window back", 15, |a| titles(a).len() == 1 && width_of(a) == Some(width));
+    assert!(has(&app, "controls-row"));
+}
+
+#[test]
+fn real_tab_moves_between_windows_without_a_reload() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/long"), format!("{base}/alpha")]);
+    until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Long"));
+    click_page(&app, 100.);
+    until(&app, "the page scrolled", 15, |a| titles(a).first().is_some_and(|t| t.starts_with("At 600 ")));
+    let stamped = titles(&app)[0].clone();
+    pick_menu(&app, row_at(&app, 0), "Move Tab to New");
+    until(&app, "a second window", 10, |a| window_count(a) == 2);
+    let moved = |a: &AppHandle| {
+        a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == stamped)))
+    };
+    until(&app, "the moved page as it was", 10, moved);
+    assert_eq!(titles(&app), ["Alpha"]);
 }

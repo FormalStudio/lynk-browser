@@ -217,7 +217,7 @@ impl Command {
     }
 
     fn here(&self) -> bool {
-        self.on_mac || !mac()
+        self.on_mac || target() != Target::MacOs
     }
 
     /// The label as the window `win` makes it read.
@@ -338,10 +338,6 @@ pub type Items = fn(&BrowserWindow, &App) -> Vec<MenuItem>;
 
 pub const MENU_ITEMS: &[(MenuId, Items)] = &[(MenuId::Tabs, tab_items)];
 
-fn mac() -> bool {
-    target() == Target::MacOs
-}
-
 /// `primary+shift+bracketright` as a key binding spells it: `secondary-shift-]`.
 fn binding_keys(chord: &str) -> String {
     chord
@@ -368,7 +364,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         for keys in command.extra_keys {
             bindings.push((command.bind)(keys));
         }
-        if let Some(chord) = command.key.and_then(|id| keys::chord(id, mac())) {
+        if let Some(chord) = command.key.and_then(|id| keys::chord(id, target() == Target::MacOs)) {
             // Bindings live for the whole run; the spelling is made once at startup.
             bindings.push((command.bind)(binding_keys(chord).leak()));
         }

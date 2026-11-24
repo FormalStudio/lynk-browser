@@ -4,6 +4,7 @@
 use std::hash::{Hash, Hasher};
 
 use nd::core::WindowId;
+use nd::platform::{Target, target};
 use nd::prelude::*;
 use nd::virtual_list::{SelectEvent, Selection, list};
 
@@ -103,14 +104,14 @@ impl BrowserWindow {
                     .hash(&mut h);
                 (SidebarRow::Tab(t.id), h.finish())
             })
-            .chain((!linux()).then_some((SidebarRow::NewTab, 0)))
+            .chain((target() != Target::Linux).then_some((SidebarRow::NewTab, 0)))
             .collect();
         self.rows.set_items_versioned(rows, cx);
         self.rows.set_selected(vec![SidebarRow::Tab(self.active)], cx);
     }
 
     pub fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let mac = nd::platform::target() == nd::platform::Target::MacOs;
+        let mac = target() == Target::MacOs;
         let gap = cx.theme().spacing.xs;
         // On macOS the close button's centre sits MAC_MARGIN from the window's left and top
         // edges, as the system places it in a window with a title bar.
@@ -158,7 +159,7 @@ impl BrowserWindow {
                 foot = foot.child(el);
             }
         }
-        if linux() {
+        if target() == Target::Linux {
             let plus =
                 icon_button("sidebar-new-tab", Icon::Plus).tooltip("New Tab").on_click(|_: &ClickEvent, window, cx| {
                     cx.dispatch_action(window.id(), &actions::NewTab);
@@ -260,10 +261,6 @@ fn column_menu(menu: ContextMenu) -> ContextMenu {
     menu.item("New Tab", actions::NewTab)
         .item("Hide Sidebar", actions::ToggleSidebar)
         .entry(MenuItem::action("Use Compact Layout", actions::SwitchLayout).enabled(false))
-}
-
-fn linux() -> bool {
-    nd::platform::target() == nd::platform::Target::Linux
 }
 
 fn new_tab_row(cx: &mut Context<BrowserWindow>) -> AnyElement {

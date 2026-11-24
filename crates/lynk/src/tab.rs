@@ -64,8 +64,6 @@ pub struct Live {
     pub view: WebView,
     /// Where to scroll once the load that woke the page ends.
     pub scroll_back: Option<(f64, f64)>,
-    /// The page was asked whether it may go (`beforeunload`) and has not answered.
-    pub asked: bool,
 }
 
 pub struct Tab {
@@ -102,7 +100,7 @@ impl Tab {
 
     /// A tab around a page that already exists: a popup a page opened and holds.
     pub fn with_page(id: TabId, url: impl Into<String>, view: WebView) -> Self {
-        Self { page: Page::Live(Live { view, scroll_back: None, asked: false }), ..Self::new(id, url) }
+        Self { page: Page::Live(Live { view, scroll_back: None }), ..Self::new(id, url) }
     }
 
     pub fn label(&self) -> String {
@@ -151,7 +149,7 @@ impl Tab {
         };
         let view = WebView::with_options(page_options());
         view.load(self.url.clone());
-        self.page = Page::Live(Live { view, scroll_back, asked: false });
+        self.page = Page::Live(Live { view, scroll_back });
     }
 
     /// Drops the page for `page` with everything it reported.
@@ -202,7 +200,7 @@ mod tests {
         assert!(tab.is_asleep());
         assert!(!tab.rt.loading);
         tab.wake();
-        assert!(tab.live_mut().is_some_and(|live| live.scroll_back == Some((0., 600.)) && !live.asked));
+        assert!(tab.live_mut().is_some_and(|live| live.scroll_back == Some((0., 600.))));
     }
 
     #[test]

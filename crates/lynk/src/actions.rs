@@ -155,6 +155,12 @@ fn listen<A: Action>(root: Scaffold, handler: Handler, cx: &mut Context<BrowserW
     root.on_action(cx.listener(move |this, _: &A, window, cx| handler(this, this.active, window, cx)))
 }
 
+/// Close Tab from a key, the menu bar or the page means the shown tab and moves on while it
+/// waits on its page; a row's Close Tab means that row, however often it is picked.
+fn listen_close_shown(root: Scaffold, _: Handler, cx: &mut Context<BrowserWindow>) -> Scaffold {
+    root.on_action(cx.listener(|this, _: &CloseTab, _, cx| this.close_shown(cx)))
+}
+
 impl Command {
     const fn new<A: Action + Default>(label: &'static str) -> Self {
         Self {
@@ -171,6 +177,10 @@ impl Command {
             bind: bind::<A>,
             listen: listen::<A>,
         }
+    }
+    const fn listens(mut self, listen: Listen) -> Self {
+        self.listen = listen;
+        self
     }
     const fn key(mut self, id: &'static str) -> Self {
         self.key = Some(id);
@@ -269,7 +279,11 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<NewPrivateWindow>("New Private Window").key("private").menu(MenuId::File),
     Command::new::<OpenAddress>("Open Address Bar").key("address").menu(MenuId::File),
     Command::new::<OpenSwitcher>("Switch Tabs").key("switcher").menu(MenuId::File),
-    Command::new::<CloseTab>("Close Tab").key("close-tab").menu(MenuId::File).handler(|w, id, _, cx| w.close_tab(id, cx)),
+    Command::new::<CloseTab>("Close Tab")
+        .key("close-tab")
+        .menu(MenuId::File)
+        .handler(|w, id, _, cx| w.close_tab(id, cx))
+        .listens(listen_close_shown),
     Command::new::<ReopenClosedTab>("Reopen Closed Tab").key("reopen-tab").menu(MenuId::File).handler(|w, _, _, cx| w.reopen(cx)),
     Command::new::<SavePage>("Save Page As\u{2026}").key("save-page").menu(MenuId::File).enabled(web_page),
     Command::new::<OpenSettings>("Settings").key("settings").menu(MenuId::File).after_separator(),

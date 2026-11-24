@@ -170,7 +170,8 @@ pub fn view_source(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut 
 
 pub(crate) fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
     let target = match target {
-        Some(id) => match app::window(cx, id) {
+        // A window on its way out would take the tab with it.
+        Some(id) => match app::window(cx, id).filter(|w| !w.read(cx).pending_close()) {
             Some(entity) => Some(entity),
             None => return,
         },

@@ -114,7 +114,9 @@ pub fn mount(tab: &Tab, page: &WebView, cx: &mut Context<BrowserWindow>) -> AnyE
             w.changed(cx);
         }))
         .on_new_window(cx.listener(move |w, e: &NewWindow, _, cx| new_window(w, id, e, cx)))
-        .on_window_closed(cx.listener(move |w, _: &WindowClosed, _, cx| w.remove(id, cx)))
+        .on_window_closed(cx.listener(move |w, _: &WindowClosed, _, cx| {
+            w.remove(id, cx);
+        }))
         .on_favicon_changed(cx.listener(move |w, e: &FaviconChanged, window, cx| {
             if let Some(tab) = w.tab_mut(id) {
                 tab.favicon = (!e.icon_url.is_empty()).then(|| e.icon_url.clone().into());

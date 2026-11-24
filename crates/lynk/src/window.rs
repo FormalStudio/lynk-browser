@@ -56,6 +56,21 @@ pub type WindowListener = fn(&mut App, WindowId);
 /// Called as a window goes, so no module keeps state for it.
 pub const WINDOW_CLOSED: &[WindowListener] = &[crate::zoom::forget, crate::site_info::forget, crate::sidebar::forget];
 
+/// Closes waiting on pages' `beforeunload`. `settle` is the one place a close goes ahead, and
+/// `changed` reaches it after every change to the window's tabs or pages, so a path that drops,
+/// replaces or moves a page cannot leave a close hanging. The states are in
+/// `docs/architecture.md` (Tab and page lifecycle).
+#[derive(Default)]
+struct Closing {
+    /// The window's own close.
+    window: bool,
+    /// Tabs to close once their page agrees.
+    tabs: Vec<TabId>,
+    /// Pages asked and not answered yet, with their tab. A page no longer in its tab has nothing
+    /// left to say.
+    asked: Vec<(TabId, WebView)>,
+}
+
 pub struct BrowserWindow {
     pub id: WindowId,
     /// In no order; `tree` holds the sidebar's.
@@ -70,10 +85,7 @@ pub struct BrowserWindow {
     /// Whether the window was already in fullscreen when the page or F11 took it there, which
     /// leaving keeps.
     fullscreen_before: Option<bool>,
-    /// The window's close is waiting on its pages' `beforeunload`.
-    closing: bool,
-    /// Tabs whose close waits on their page's `beforeunload`, apart from the window's close.
-    closing_tabs: Vec<TabId>,
+    closing: Closing,
     pub toasts: Vec<Toast>,
     pub(crate) rows: ListState<SidebarRow>,
     next_toast: u64,
@@ -96,8 +108,7 @@ impl BrowserWindow {
             page_fullscreen: None,
             browser_fullscreen: false,
             fullscreen_before: None,
-            closing: false,
-            closing_tabs: Vec::new(),
+            closing: Closing::default(),
             toasts: Vec::new(),
             rows: ListState::new(cx).estimated_row_height(px(crate::sidebar::ROW_HEIGHT)),
             next_toast: 0,
@@ -160,7 +171,11 @@ impl BrowserWindow {
 
     /// The window is closing, or every tab it has is: a launch must not land in it.
     pub fn pending_close(&self) -> bool {
-        self.closing || self.tabs.iter().all(|t| self.closing_tabs.contains(&t.id))
+        self.closing.window || self.tabs.iter().all(|t| self.closing.tabs.contains(&t.id))
+    }
+
+    fn asked(&self, id: TabId) -> bool {
+        self.closing.asked.iter().any(|(t, _)| *t == id)
     }
 
     fn tab_event(&mut self, id: TabId, event: TabEvent, cx: &mut Context<Self>) {
@@ -173,6 +188,9 @@ impl BrowserWindow {
 
     /// Re-renders the window and brings the menu bar up to date.
     pub fn changed(&mut self, cx: &mut Context<Self>) {
+        if self.settle(cx) {
+            return;
+        }
         self.sync_rows(cx);
         cx.notify();
         app::refresh_menus_for(self, cx);
@@ -275,81 +293,85 @@ impl BrowserWindow {
         }
     }
 
-    /// Asks `id`'s page whether it may go, unless it was asked already and has not answered.
-    /// `false` for a tab with nothing to ask: no page, or a crashed one.
+    /// Asks `id`'s page whether it may go, once until it answers. `false` for a tab with nothing
+    /// to ask: no page, or a crashed one.
     fn ask(&mut self, id: TabId) -> bool {
-        let Some(tab) = self.tab_mut(id).filter(|t| t.rt.crashed.is_none()) else { return false };
-        let Some(live) = tab.live_mut() else { return false };
-        if !live.asked {
-            live.asked = true;
-            live.view.request_close();
+        let Some(view) = self.tab(id).filter(|t| t.rt.crashed.is_none()).and_then(Tab::view).cloned() else { return false };
+        if !self.asked(id) {
+            view.request_close();
+            #[cfg(test)]
+            tests::probed(id);
+            self.closing.asked.push((id, view));
         }
         true
     }
 
-    fn waiting_on_pages(&self) -> bool {
-        self.tabs.iter().any(|t| matches!(&t.page, Page::Live(live) if live.asked))
-    }
-
-    /// Closes `id` once its page agrees (`beforeunload`, "Leave site?"). A tab with no page has
-    /// nothing to ask.
-    /// A second close of the shown tab while its page has not answered closes the next tab that
-    /// is not already closing, so Close Tab pressed at speed never drops a press.
+    /// Closes `id` once its page agrees (`beforeunload`, "Leave site?"). A tab already on its
+    /// way out stays the one closing: a second click never reaches another tab.
     pub fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
-        let id = if id == self.active && self.closing_tabs.contains(&id) {
-            let order = self.order();
-            let at = order.iter().position(|t| *t == id).unwrap_or(0);
-            let after = order[at..].iter().chain(order[..at].iter().rev());
-            let Some(&next) = after.into_iter().find(|t| !self.closing_tabs.contains(t)) else { return };
-            next
-        } else {
-            id
-        };
-        if !self.ask(id) {
-            self.remove(id, cx);
-        } else if !self.closing_tabs.contains(&id) {
-            self.closing_tabs.push(id);
-        }
-    }
-
-    /// The page answered whether it may go.
-    pub fn close_answered(&mut self, id: TabId, approved: bool, cx: &mut Context<Self>) {
-        let Some(live) = self.tab_mut(id).and_then(Tab::live_mut) else { return };
-        if !std::mem::take(&mut live.asked) {
+        if self.tab(id).is_none() || self.closing.tabs.contains(&id) {
             return;
         }
-        let closing_tab = self.closing_tabs.contains(&id);
-        self.closing_tabs.retain(|t| *t != id);
-        if !approved {
-            // A page that keeps itself open keeps its window open too.
-            self.closing = false;
-        } else if closing_tab {
-            self.remove(id, cx);
-        } else {
-            self.settle_close(cx);
+        self.closing.tabs.push(id);
+        self.ask(id);
+        self.changed(cx);
+    }
+
+    /// Close Tab from a key, the menu bar or the page: the shown tab, or while it waits on its
+    /// page the next tab not already closing, so presses at speed each close a tab.
+    pub fn close_shown(&mut self, cx: &mut Context<Self>) {
+        let order = self.order();
+        let at = order.iter().position(|t| *t == self.active).unwrap_or(0);
+        let mut from_here = order[at..].iter().chain(order[..at].iter().rev());
+        if let Some(&id) = from_here.find(|t| !self.closing.tabs.contains(t)) {
+            self.close_tab(id, cx);
         }
     }
 
-    /// Closes the window once a close it started has no page left to hear from.
-    fn settle_close(&mut self, cx: &mut Context<Self>) {
-        if self.closing && !self.waiting_on_pages() {
-            self.close_window(cx);
+    /// The page answered whether it may go. An answer from a page no longer asked is stale.
+    pub fn close_answered(&mut self, id: TabId, approved: bool, cx: &mut Context<Self>) {
+        let Some(view) = self.tab(id).and_then(Tab::view) else { return };
+        let Some(at) = self.closing.asked.iter().position(|(t, v)| *t == id && v == view) else { return };
+        self.closing.asked.remove(at);
+        if !approved {
+            // The page stays, and so does its window. Other tabs' closes go on.
+            self.closing.window = false;
+            self.closing.tabs.retain(|t| *t != id);
         }
+        self.changed(cx);
+    }
+
+    /// Carries out the closes no page holds back any more. `true` when the window went.
+    fn settle(&mut self, cx: &mut Context<Self>) -> bool {
+        let tabs = &self.tabs;
+        self.closing.asked.retain(|(id, view)| {
+            tabs.iter().any(|t| t.id == *id && t.rt.crashed.is_none() && t.view() == Some(view))
+        });
+        let ready = self.closing.tabs.iter().copied().find(|id| !self.closing.asked.iter().any(|(t, _)| t == id));
+        if let Some(id) = ready {
+            // `remove` comes back here through `changed` for the rest.
+            return self.remove(id, cx);
+        }
+        if self.closing.window && self.closing.asked.is_empty() {
+            self.close_window(cx);
+            return true;
+        }
+        false
     }
 
     /// Takes `id` out with no question asked: the page closed itself, or agreed to go. The last
     /// tab takes its window with it.
-    pub fn remove(&mut self, id: TabId, cx: &mut Context<Self>) {
-        let Some(at) = self.tabs.iter().position(|t| t.id == id) else { return };
+    pub fn remove(&mut self, id: TabId, cx: &mut Context<Self>) -> bool {
+        let Some(at) = self.tabs.iter().position(|t| t.id == id) else { return false };
         let next = self.neighbour(id);
         let tab = self.tabs.remove(at);
         self.tree.close_tab(&tab_id(id));
-        self.closing_tabs.retain(|t| *t != id);
+        self.closing.tabs.retain(|t| *t != id);
         app::remember_closed(cx, &tab);
         self.tab_event(id, TabEvent::Closed, cx);
         if self.tabs.is_empty() {
             self.close_window(cx);
-            return;
+            return true;
         }
         if let Some(next) = next.filter(|_| self.active == id) {
             self.show(next, cx);
@@ -358,14 +380,17 @@ impl BrowserWindow {
             self.page_fullscreen = None;
             self.sync_window_fullscreen(cx);
         }
-        self.changed(cx);
-        self.settle_close(cx);
+        let gone = self.settle(cx);
+        if !gone {
+            self.changed(cx);
+        }
+        gone
     }
 
     /// The window's close, from its close button or the last tab going. Every page that could
     /// object is asked first; the window goes once they all agree.
     pub fn should_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.closing {
+        if self.closing.window {
             return false;
         }
         let mut waiting = false;
@@ -376,7 +401,7 @@ impl BrowserWindow {
             self.let_go(cx);
             return true;
         }
-        self.closing = true;
+        self.closing.window = true;
         false
     }
 
@@ -389,6 +414,7 @@ impl BrowserWindow {
     /// registry. The last one keeps its tabs and its entry: the app is quitting, and it is what a
     /// relaunch restores.
     fn let_go(&mut self, cx: &mut Context<Self>) {
+        self.closing = Closing::default();
         for id in self.order() {
             self.tab_event(id, TabEvent::Closed, cx);
         }
@@ -442,8 +468,9 @@ impl BrowserWindow {
 
     /// Takes `id` out to move it to another window, its page still live. The last tab cannot
     /// leave: its window would close under it.
+    /// A tab on its way out stays: its page's answer settles that close here.
     pub fn take(&mut self, id: TabId, cx: &mut Context<Self>) -> Option<Tab> {
-        if self.tabs.len() < 2 {
+        if self.tabs.len() < 2 || self.closing.tabs.contains(&id) || self.asked(id) {
             return None;
         }
         let at = self.tabs.iter().position(|t| t.id == id)?;
@@ -457,14 +484,12 @@ impl BrowserWindow {
         let next = self.neighbour(id);
         let mut tab = self.tabs.remove(at);
         self.tree.close_tab(&tab_id(id));
-        self.closing_tabs.retain(|t| *t != id);
         tab.opener = None;
         self.tab_event(id, TabEvent::Moved, cx);
         if let Some(next) = next.filter(|_| self.active == id) {
             self.show(next, cx);
         }
         self.changed(cx);
-        self.settle_close(cx);
         Some(tab)
     }
 
@@ -477,8 +502,9 @@ impl BrowserWindow {
     /// show instead.
     /// A page waiting on a close is never put to sleep: its answer settles that close.
     pub fn can_sleep(&self, id: TabId) -> bool {
-        self.tab(id).is_some_and(|t| matches!(&t.page, Page::Live(live) if !live.asked) && !t.url.is_empty())
-            && !self.closing
+        self.tab(id).is_some_and(|t| t.is_live() && !t.url.is_empty())
+            && !self.asked(id)
+            && !self.closing.window
             && (self.active != id || self.tabs.len() > 1)
     }
 
@@ -607,6 +633,18 @@ mod tests {
 
     thread_local! {
         static HEARD: RefCell<Vec<(TabId, TabEvent)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    thread_local! {
+        static PROBED: RefCell<Vec<TabId>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn probed(id: TabId) {
+        PROBED.with(|p| p.borrow_mut().push(id));
+    }
+
+    fn probes() -> Vec<TabId> {
+        PROBED.with(|p| std::mem::take(&mut *p.borrow_mut()))
     }
 
     pub(super) fn record(id: TabId, event: TabEvent) {
@@ -762,14 +800,17 @@ mod tests {
         let mut cx = TestApp::new();
         let (a, _) = closing_pair(&mut cx);
         // The page closed itself instead of answering.
-        with(&mut cx, a, |w, cx| w.remove(1, cx));
+        with(&mut cx, a, |w, cx| {
+            w.remove(1, cx);
+        });
         assert!(gone(&cx, a));
 
         let mut cx = TestApp::new();
         let (a, b) = closing_pair(&mut cx);
         with(&mut cx, a, |w, cx| move_tab(w, 1, Some(b), cx));
-        assert!(gone(&cx, a), "moved out");
-        assert_eq!(tabs(&cx, b), [3, 1]);
+        assert_eq!(tabs(&cx, b), [3], "an awaited page waits where it was asked");
+        with(&mut cx, a, |w, cx| w.close_answered(1, true, cx));
+        assert!(gone(&cx, a));
     }
 
     #[test]
@@ -804,7 +845,7 @@ mod tests {
         assert!(!cx.request_close(a));
         cx.run_until_idle();
         let asked = |cx: &TestApp| {
-            app::window(cx, a).unwrap().read(cx).tabs().iter().filter(|t| matches!(&t.page, Page::Live(l) if l.asked)).count()
+            app::window(cx, a).unwrap().read(cx).closing.asked.len()
         };
         assert_eq!(asked(&cx), 2);
         // Tab 1's one answer closes its tab; tab 2's then closes the window.
@@ -821,16 +862,119 @@ mod tests {
         let first = vec![live(&mut cx), live(&mut cx), live(&mut cx), live(&mut cx)];
         let a = app::open_window(&mut cx, first, None);
         cx.run_until_idle();
-        let shown = app::window(&cx, a).unwrap().read(&cx).active;
         for _ in 0..3 {
-            with(&mut cx, a, |w, cx| w.close_tab(shown, cx));
+            with(&mut cx, a, |w, cx| w.close_shown(cx));
         }
-        let closing = app::window(&cx, a).unwrap().read(&cx).closing_tabs.clone();
+        let closing = app::window(&cx, a).unwrap().read(&cx).closing.tabs.clone();
         assert_eq!(closing.len(), 3);
         for id in closing {
             with(&mut cx, a, |w, cx| w.close_answered(id, true, cx));
         }
         assert_eq!(tabs(&cx, a).len(), 1);
+    }
+
+    /// The tabs whose page was asked and has not answered.
+    fn asked(cx: &TestApp, id: WindowId) -> Vec<TabId> {
+        app::window(cx, id).unwrap().read(cx).closing.asked.iter().map(|(t, _)| *t).collect()
+    }
+
+    fn approve_all(cx: &mut TestApp, id: WindowId) {
+        for tab in asked(cx, id) {
+            with(cx, id, |w, cx| w.close_answered(tab, true, cx));
+        }
+    }
+
+    fn three_live(cx: &mut TestApp) -> WindowId {
+        let first = vec![live(cx), live(cx), live(cx)];
+        let a = app::open_window(cx, first, Some(1));
+        let _other = app::open_window(cx, Vec::new(), None);
+        cx.run_until_idle();
+        a
+    }
+
+    #[test]
+    fn close_others_on_a_tab_never_closes_it_while_the_shown_tab_waits() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        with(&mut cx, a, |w, cx| w.close_tab(1, cx));
+        with(&mut cx, a, |w, cx| w.close_others(2, cx));
+        approve_all(&mut cx, a);
+        assert_eq!(tabs(&cx, a), [2]);
+    }
+
+    #[test]
+    fn a_tab_closed_twice_by_id_closes_only_that_tab() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        with(&mut cx, a, |w, cx| w.close_tab(1, cx));
+        with(&mut cx, a, |w, cx| w.close_tab(1, cx));
+        assert_eq!(asked(&cx, a), [1]);
+    }
+
+    #[test]
+    fn a_tab_waiting_on_its_close_stays_put() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        let b = app::windows(&cx).last().unwrap().0;
+        with(&mut cx, a, |w, cx| w.close_tab(2, cx));
+        with(&mut cx, a, |w, cx| move_tab(w, 2, Some(b), cx));
+        assert_eq!(tabs(&cx, a), [1, 2, 3], "the tab waits where its page was asked");
+        approve_all(&mut cx, a);
+        assert_eq!(tabs(&cx, a), [1, 3]);
+    }
+
+    #[test]
+    fn a_window_close_settles_when_the_page_it_waits_on_is_replaced() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        assert!(!cx.request_close(a));
+        cx.run_until_idle();
+        with(&mut cx, a, |w, cx| {
+            w.close_answered(1, true, cx);
+            w.close_answered(2, true, cx);
+        });
+        with(&mut cx, a, |w, cx| w.navigate(3, "chrome://version/".into(), cx));
+        assert!(app::window(&cx, a).is_none(), "nothing is left to answer the close");
+    }
+
+    #[test]
+    fn a_tab_never_moves_into_a_window_that_is_closing() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        let b = app::windows(&cx).last().unwrap().0;
+        let tab = live(&mut cx);
+        with(&mut cx, b, |w, cx| {
+            w.insert(tab, Open::End, cx);
+        });
+        assert!(!cx.request_close(b));
+        cx.run_until_idle();
+        with(&mut cx, a, |w, cx| move_tab(w, 3, Some(b), cx));
+        approve_all(&mut cx, b);
+        assert_eq!(tabs(&cx, a), [1, 2, 3], "the tab stayed out of the closing window");
+    }
+
+    #[test]
+    fn each_page_is_probed_once_however_often_it_is_closed() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        probes();
+        with(&mut cx, a, |w, cx| {
+            w.close_tab(1, cx);
+            w.close_tab(1, cx);
+        });
+        assert!(!cx.request_close(a));
+        cx.run_until_idle();
+        assert!(!cx.request_close(a));
+        cx.run_until_idle();
+        let mut probed = probes();
+        probed.sort();
+        assert_eq!(probed, [1, 2, 3]);
     }
 
     #[test]

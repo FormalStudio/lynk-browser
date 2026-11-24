@@ -83,8 +83,7 @@ window is what a relaunch will restore.
 ## Tab and page lifecycle
 
 A `Tab` (`tab.rs`) is an address, a title, a `Page` and `rt`, the last facts its page reported.
-`Page` is `Waiting` (no page yet), `Live` (the `WebView`, and `asked` while a close waits on its
-`beforeunload`) or `Asleep { scroll }`, so a sleeping tab with a page or a scroll to restore on a
+`Page` is `Waiting` (no page yet), `Live` (the `WebView`) or `Asleep { scroll }`, so a sleeping tab with a page or a scroll to restore on a
 live one cannot be written. The page is Chromium's. `rt` is only a cache of what it said.
 
 ```mermaid
@@ -113,15 +112,30 @@ stateDiagram-v2
 - **Sleep.** `BrowserWindow::sleep` reads the scroll position with a 500 ms limit, drops the page,
   and keeps the row, title, icon and address. If the sleeping tab was shown, the nearest awake tab
   takes over.
-- **Close.** `close_tab` asks a live page that has not crashed through `request_close`, once:
-  `Live::asked` holds until the answer, and the tab sits in `closing_tabs`. The answer arrives as
-  `on_close_approved` and goes to `close_answered`. `remove` puts the address on the closed stack
-  and fires `TabEvent::Closed`. The last tab takes its window with it. Close Tab on a shown tab
-  already waiting moves on to the next tab, so presses at speed are not lost.
-- **Window close.** `on_should_close` calls `should_close`, which asks every live page not already
-  asked. The window closes once all agree, or once the last awaited tab is removed or moved out
-  (`settle_close`). One refusal cancels the whole window close, not the tab closes beside it. A
-  window that is closing, or whose every tab is, takes no launch (`pending_close`).
+- **Close.** Every close that waits on a page's `beforeunload` is held in one place,
+  `BrowserWindow::closing`: the window's own close, the tabs to close, and the pages asked (each
+  with the `WebView` asked, so an answer from a page since replaced is stale). `settle` is the only
+  code that carries a close out, and `changed()` runs it after every change to the window's tabs
+  or pages, so a new path that drops, replaces or moves a page settles by calling `changed()` as
+  it already must. nd answers for a page that hangs or has no document after `BEFOREUNLOAD_WAIT`,
+  so the shell keeps no timer of its own. `remove` puts the address on the closed stack and fires
+  `TabEvent::Closed`; the last tab takes its window with it. A window that is closing, or whose
+  every tab is, takes no launch (`pending_close`).
+
+  | Event | Path | The pending close |
+  | --- | --- | --- |
+  | Tab close asked | `close_tab(id)` | `id` joins `tabs` and its page is asked once; the same id again does nothing; a tab with no page or a crashed one goes at once |
+  | Close Tab pressed | `close_shown` (key, menu bar, page command) | the shown tab, or while it waits the next tab not already closing |
+  | Window close asked | `should_close` | `window` is set and every page not already asked is asked; with nothing to ask the window goes at once |
+  | Approved | `close_answered(id, true)` | the page leaves `asked`; `settle` removes its tab if that tab's close was asked, and closes the window once nothing is asked |
+  | Cancelled | `close_answered(id, false)` | the page leaves `asked`, its tab leaves `tabs`, `window` is cleared; other tabs' closes go on |
+  | Timed out | nd | arrives as an approval |
+  | Page slept | `sleep` | refused while the page is asked or the window is closing |
+  | Page replaced or crashed | `navigate`, a native page in `page.rs`, a renderer gone | `settle` drops the stale ask; a tab close then goes ahead, a window close stops waiting on it |
+  | Page closed itself | `remove` (`WindowClosed`) | the tab and its ask go |
+  | Tab moved out | `take` | refused while the tab is closing or its page is asked |
+  | Tab moved in | `move_tab` | refused into a window that is closing or whose every tab is |
+
 - **Errors.** A failed load sets `rt.error` and a dead renderer sets `rt.crashed`; `page::cover`
   draws "Unable to load this page" or "Aw, Snap!" over the page with a retry button.
 

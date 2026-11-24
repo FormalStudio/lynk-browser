@@ -13,6 +13,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use crate::archive::ArchivedTab;
+use crate::mru::Mru;
 use crate::sidebar_tree::{Item, SidebarTree};
 use crate::spaces::{DEFAULT_SPACE_NAME, SiteRule, Space, WindowSpaces, neighbour};
 use crate::{lenient_items, null_default};
@@ -56,6 +57,8 @@ pub struct SessionWindow {
     pub height: f64,
     #[serde(deserialize_with = "null_default")]
     pub spaces: WindowSpaces,
+    #[serde(deserialize_with = "null_default")]
+    pub mru: Mru,
 }
 
 impl SessionWindow {
@@ -140,6 +143,7 @@ impl SessionState {
         let Some(w) = self.windows.iter_mut().find(|w| w.tabs.iter().any(|t| t.id == tab_id)) else { return false };
         let order: Vec<String> = w.spaces.tree().map(|t| t.tab_ids().iter().map(|s| (*s).to_owned()).collect()).unwrap_or_default();
         w.tabs.retain(|t| t.id != tab_id);
+        w.mru.closed(tab_id);
         for tree in w.spaces.sidebars.values_mut() {
             tree.close_tab(tab_id);
         }
@@ -301,6 +305,8 @@ pub fn normalize(state: &SessionState) -> SessionState {
             .find(|id| shown.contains_tab(id))
             .cloned()
             .unwrap_or_else(|| shown.tab_ids()[0].to_owned());
+        let mut mru = w.mru.clone();
+        mru.retain(|t| tabs.iter().any(|k| k.id == t));
         let mut window = SessionWindow {
             id: w.id.clone(),
             tabs,
@@ -308,6 +314,7 @@ pub fn normalize(state: &SessionState) -> SessionState {
             width: or_default(w.width, WINDOW_WIDTH),
             height: or_default(w.height, WINDOW_HEIGHT),
             spaces,
+            mru,
         };
         window.sync_tabs();
         out.windows.push(window);
@@ -330,6 +337,7 @@ pub fn normalize(state: &SessionState) -> SessionState {
             width: or_default(first.map_or(0.0, |w| w.width), WINDOW_WIDTH),
             height: or_default(first.map_or(0.0, |w| w.height), WINDOW_HEIGHT),
             spaces: WindowSpaces::single(&first_space, tree),
+            mru: Mru::default(),
         });
     }
     out
@@ -457,6 +465,7 @@ pub fn fresh_start(stored: &SessionState, homepage: &str) -> SessionState {
         width: first.width,
         height: first.height,
         spaces,
+        mru: Mru::default(),
     };
     window.sync_tabs();
     s.windows = vec![window];
@@ -725,6 +734,22 @@ mod tests {
         assert!(!s.windows[0].add_tab(blank_tab(id), None, 0));
         assert_eq!(ids(&s.windows[0]), ["t1", "t2", "t8", "t4", "t5"]);
         assert_eq!(normalize(&s), s);
+    }
+
+    #[test]
+    fn recency_survives_closing_and_reopening_the_app() {
+        let mut s = normalize(&fixture());
+        for id in ["t5", "t3", "t1"] {
+            s.windows[0].mru.shown(id);
+        }
+        s.windows[0].mru.shown("gone");
+        s.close_tab("t3");
+        let dir = tempfile::tempdir().unwrap();
+        let store = open(dir.path());
+        store.update(|state| *state = s.clone());
+        drop(store);
+        let back = normalize(&open(dir.path()).get());
+        assert_eq!(back.windows[0].mru.0, ["t1", "t5"]);
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub mod extensions;
 pub mod favicons;
 pub mod history;
 pub mod keys;
+pub mod mru;
 pub mod omnibox;
 pub mod pages;
 pub mod permissions;

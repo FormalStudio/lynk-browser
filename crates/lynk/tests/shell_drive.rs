@@ -1381,6 +1381,40 @@ fn real_a_page_with_a_colour_scheme_keeps_its_canvas() {
     }
 }
 
+/// A `light dark` page follows the appearance when it flips under the open page.
+#[test]
+fn real_a_light_dark_page_follows_an_appearance_flip() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lynk-theme-flip.toml");
+    std::fs::write(&theme, "appearance = \"light\"\n").unwrap();
+    let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+        .env("ND_CEF_STYLE", "chrome")
+        .env("ND_THEME_TOML", theme.display().to_string())
+        .arg(format!("{base}/both-schemes"));
+    let app = launch_app(options).unwrap();
+    activate(app.pid());
+    until(&app, "the page", 30, |a| titles(a) == ["Both"]);
+    std::thread::sleep(Duration::from_secs(1));
+    let light = page_backdrop(&app, "page-flip-light");
+    assert!(light.iter().all(|c| *c >= 250), "light first, got {light:?}");
+    for (appearance, dark) in [("dark", true), ("light", false)] {
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let canvas = page_backdrop(&app, &format!("page-flip-{appearance}"));
+            let ok = if dark { canvas.iter().all(|c| *c <= 40) } else { canvas.iter().all(|c| *c >= 250) };
+            if ok {
+                break;
+            }
+            assert!(Instant::now() < deadline, "after a flip to {appearance}, got {canvas:?}");
+        }
+    }
+}
+
 /// The sidebar's rows in every state at once, in each appearance and at the minimum width:
 /// shown, under the pointer, loading, asleep, a long title, no favicon, the New Tab row and the
 /// foot, then a row held down. Captures land as `shell-sidebar-states-<appearance>[-720].png`

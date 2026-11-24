@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Lynk's Linux gate, driven from the macbook. It reuses nd's scripts/linux-gate for the host, the
+# build lock, the quiet build settings and `fspec dev` (nd's dev.star, which carries GPUI's and
+# CEF's libraries); this script only adds the lynk checkout and its own target dir.
+#
+#   scripts/linux-gate sync              copy this checkout to ~/Developer/lynk-<branch> on the host
+#                                        and nd's checkout ($LYNK_ND) to nd's own place there
+#   scripts/linux-gate run '<command>'   any command in that copy, in nd's dev shell
+#   scripts/linux-gate drive [runs]      build lynk, then the shell drive `runs` times (default 3)
+#                                        with one test thread; each test starts its own headless
+#                                        Hyprland, so nothing shows in the user's session
+#   scripts/linux-gate shots             copy the drive's captures back to target/linux-shots
+#
+# LYNK_ND (default ~/Developer/ecosystem/nativedesktop) is the nd checkout whose gate runs the
+# command. With LYNK_LOCAL_ND=1 the build uses that checkout's crates instead of the pinned git
+# rev, through a `[patch]` written into the copy's .cargo/config.toml on each run. The target dir is
+# targets/lynk-<branch> under nd's build root, so nd's eviction and cap cover it.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+nd=${LYNK_ND:-$HOME/Developer/ecosystem/nativedesktop}
+host=${ND_LINUX_HOST:-g815}
+branch=$(git -C "$root" rev-parse --abbrev-ref HEAD)
+slug=${branch//\//-}
+dir="Developer/lynk-$slug"
+nd_dir="Developer/nativedesktop-$(git -C "$nd" rev-parse --abbrev-ref HEAD)"
+buildroot=${ND_LINUX_BUILD_ROOT:-/mnt/steamlib/nd-build}
+export ND_LINUX_TARGET=${ND_LINUX_TARGET:-"$buildroot/targets/lynk-$slug"}
+# A cold lynk build at two jobs compiles CEF's wrapper, GPUI and Chromium's glue.
+export ND_LINUX_GATE_TIMEOUT_MIN=${ND_LINUX_GATE_TIMEOUT_MIN:-150}
+
+# The copy's cargo config: the checkout's, plus the patch onto local nd when asked for. Patch
+# paths in a config file are relative to the directory holding `.cargo`.
+# nd's GPUI reaches lynk as a crates-io patch, and cargo doesn't follow a patch of a patch, so the
+# vendored GPUI crates take the crates-io table here, which wins over the manifest's.
+cargo_config() {
+  cat "$root/.cargo/config.toml"
+  [ "${LYNK_LOCAL_ND:-0}" = 1 ] || return 0
+  crates=$(sed -n '/^name = /{s/^name = "\(.*\)"/\1/;h;}; /^source = "git+https:\/\/github.com\/FormalStudio\/NativeDesktop/{x;p;}' "$root/Cargo.lock" | sort -u)
+  echo '[patch."https://github.com/FormalStudio/NativeDesktop"]'
+  for crate in $crates; do
+    for path in "crates/$crate" "vendor/$crate"; do
+      if [ -f "$nd/$path/Cargo.toml" ]; then
+        printf '%s = { path = "../%s/%s" }\n' "$crate" "${nd_dir#Developer/}" "$path"
+        break
+      fi
+    done
+  done
+  echo '[patch.crates-io]'
+  for crate in $crates; do
+    if [ -f "$nd/crates/nd-gpui/vendor/$crate/Cargo.toml" ]; then
+      printf '%s = { path = "../%s/crates/nd-gpui/vendor/%s" }\n' "$crate" "${nd_dir#Developer/}" "$crate"
+    fi
+  done
+}
+
+run() {
+  local config
+  config=$(cargo_config)
+  "$nd/scripts/linux-gate" run "cd ~/$dir && mkdir -p .cargo && printf '%s\n' $(printf %q "$config") > .cargo/config.toml && $1"
+}
+
+# Copies by checksum and leaves out mtimes, so a file edited while an earlier build ran gets a
+# fresh mtime there; with the macbook's mtime cargo would take it for unchanged.
+cmd_sync() {
+  ssh "$host" "mkdir -p ~/$dir ~/$nd_dir" 2>/dev/null
+  rsync -rlpDz --checksum --delete --exclude target --exclude .git --exclude node_modules --exclude dist "$root/" "$host:$dir/"
+  echo "linux-gate: synced $branch to $host:~/$dir"
+  rsync -rlpDz --checksum --delete --exclude target --exclude .git --exclude .direnv "$nd/" "$host:$nd_dir/"
+  echo "linux-gate: synced $nd to $host:~/$nd_dir"
+}
+
+cmd_drive() {
+  local runs=${1:-3}
+  run "cargo build -p lynk 2>&1 | grep -E '^(error|warning)' || true
+for i in \$(seq 1 $runs); do
+  echo \"drive run \$i\"
+  ND_REAL=1 cargo test -p lynk --test shell_drive -- --test-threads=1 2>&1 | tee \"\$CARGO_TARGET_DIR/shell-drive-\$i.log\" | grep -E '^test |panicked|test result'
+done"
+}
+
+cmd_shots() {
+  mkdir -p "$root/target/linux-shots"
+  rsync -az "$host:$ND_LINUX_TARGET/tmp/shell-*" "$root/target/linux-shots/"
+  echo "linux-gate: captures in $root/target/linux-shots"
+}
+
+case "${1:-}" in
+  sync) cmd_sync ;;
+  run) shift; run "$*" ;;
+  drive) shift; cmd_drive "$@" ;;
+  shots) cmd_shots ;;
+  *) sed -n '2,17p' "$0"; exit 2 ;;
+esac

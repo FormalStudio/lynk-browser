@@ -19,6 +19,7 @@ pub mod pages;
 pub mod permissions;
 pub mod session;
 pub mod settings;
+pub mod sidebar_tree;
 pub mod tabstate;
 pub mod ublock;
 pub mod url;

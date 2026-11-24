@@ -59,7 +59,8 @@ const BOTH_SCHEMES: &str =
     "<!doctype html><meta name=color-scheme content=\"light dark\"><title>Both</title><p>Either scheme.";
 
 /// A title no sidebar row has room for.
-const LONG_TITLE: &str = "<!doctype html><title>A page whose title runs on well past the width of any sidebar row</title>";
+const LONG_TITLE: &str =
+    "<!doctype html><title>A page whose title runs on well past the width of any sidebar row</title>";
 
 /// Opens pop-ups as fast as it can, never from a click.
 const POPUPS: &str = r#"<!doctype html><title>Popups</title>
@@ -1016,7 +1017,8 @@ fn real_sidebar_controls_answer_the_keyboard() {
     let (key, other) = ("down", "Beta");
     app.get_by_test_id("tabs").press(key).unwrap();
     until(&app, "the other tab, picked by key", 10, |a| shown_title(a) == other);
-    let shown = rows(&app).into_iter().map(|r| r.0).find(|id| has(&app, &id.replace("tab-row-", "tab-close-"))).unwrap();
+    let shown =
+        rows(&app).into_iter().map(|r| r.0).find(|id| has(&app, &id.replace("tab-row-", "tab-close-"))).unwrap();
     app.get_by_test_id(&shown.replace("tab-row-", "tab-close-")).press("space").unwrap();
     until(&app, "the shown tab, closed by key", 10, |a| titles(a).len() == 1);
 }
@@ -1058,7 +1060,8 @@ fn real_close_others_over_every_page_state() {
     }
     let base = serve();
     // Shown and live, asleep, loading and never finishing, never loaded.
-    let app = launch_with(&[format!("{base}/alpha"), format!("{base}/long"), format!("{base}/slow"), format!("{base}/beta")]);
+    let app =
+        launch_with(&[format!("{base}/alpha"), format!("{base}/long"), format!("{base}/slow"), format!("{base}/beta")]);
     until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
     press(&app, "cmd-2");
     until(&app, "the second page", 15, |a| titles(a).get(1).is_some_and(|t| t.starts_with("Long")));
@@ -1228,13 +1231,21 @@ fn real_zoom_stops_at_both_limits() {
         press(&app, "cmd-=");
     }
     until(&app, "500%", 10, |a| text_of(a, "zoom-value").as_deref() == Some("500%"));
+    // Every level seen on the way down, so a stop says where and what had key.
+    let mut seen: Vec<Option<String>> = Vec::new();
     for _ in 0..25 {
         press(&app, "cmd--");
+        let value = text_of(&app, "zoom-value");
+        if seen.last() != Some(&value) {
+            seen.push(value);
+        }
     }
     let deadline = Instant::now() + Duration::from_secs(10);
-    let mut value = None;
+    let mut value = seen.last().cloned().flatten();
     while value.as_deref() != Some("25%") {
-        assert!(Instant::now() < deadline, "the zoom stopped at {value:?}");
+        let windows = app.windows().ok().and_then(|w| w.as_array().cloned()).unwrap_or_default();
+        let key: Vec<_> = windows.iter().map(|w| (w["title"].clone(), w["key"].clone())).collect();
+        assert!(Instant::now() < deadline, "the zoom stopped at {value:?} after {seen:?}, windows {key:?}");
         std::thread::sleep(Duration::from_millis(150));
         value = text_of(&app, "zoom-value");
     }
@@ -1304,9 +1315,8 @@ fn real_tab_moves_between_windows_without_a_reload() {
     let stamped = titles(&app)[0].clone();
     pick_menu(&app, row_at(&app, 0), "Move Tab to New");
     until(&app, "a second window", 10, |a| window_count(a) == 2);
-    let moved = |a: &AppHandle| {
-        a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == stamped)))
-    };
+    let moved =
+        |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == stamped)));
     until(&app, "the moved page as it was", 10, moved);
     let left = |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Alpha"]));
     until(&app, "the other tab left behind", 5, left);
@@ -1350,9 +1360,11 @@ fn real_a_page_with_a_colour_scheme_keeps_its_canvas() {
         return;
     }
     let base = serve();
-    for (appearance, path, title, dark) in
-        [("dark", "/dark-scheme", "Dark", true), ("dark", "/both-schemes", "Both", true), ("light", "/both-schemes", "Both", false)]
-    {
+    for (appearance, path, title, dark) in [
+        ("dark", "/dark-scheme", "Dark", true),
+        ("dark", "/both-schemes", "Both", true),
+        ("light", "/both-schemes", "Both", false),
+    ] {
         let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-theme-{appearance}.toml"));
         std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
         let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
@@ -1428,7 +1440,8 @@ fn real_sidebar_draws_every_row_state() {
 /// the sidebar's trailing edge, the close button inside its trailing slot with air on every side,
 /// and the title ending before it.
 fn sidebar_geometry_holds(app: &AppHandle) {
-    let bounds = |id: &str| app.get_by_test_id(id).bounding_box().unwrap().unwrap_or_else(|| panic!("{id} is laid out"));
+    let bounds =
+        |id: &str| app.get_by_test_id(id).bounding_box().unwrap().unwrap_or_else(|| panic!("{id} is laid out"));
     let row_id = rows(app)[0].0.clone();
     let id = row_id.strip_prefix("tab-row-").unwrap();
     let (row, close, title) = (bounds(&row_id), bounds(&format!("tab-close-{id}")), bounds(&format!("tab-title-{id}")));

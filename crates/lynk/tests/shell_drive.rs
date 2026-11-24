@@ -35,9 +35,12 @@ const LEAVE: &str = r#"<!doctype html><title>Leave</title>
 <script>addEventListener("beforeunload", e => { e.preventDefault(); e.returnValue = ""; });</script></body>"#;
 
 /// Scrolls on a click and puts where it is in its title, with a stamp of the load.
-const LONG: &str = r#"<!doctype html><title>Long</title>
-<body style="margin:0;height:5000px" onclick="window.scrollTo(0, 600)">
-<script>onscroll = () => document.title = "At " + Math.round(scrollY) + " " + Math.round(performance.timeOrigin);</script></body>"#;
+/// Takes its title once it has painted: Chromium drops a press that reaches a page before its
+/// first paint (the release still arrives), and a cached load can name itself before that.
+const LONG: &str = r#"<!doctype html>
+<body style="margin:0;height:5000px;background:#fff" onclick="window.scrollTo(0, 600)">
+<script>new PerformanceObserver(() => document.title = "Long").observe({ type: "paint", buffered: true });
+onscroll = () => document.title = "At " + Math.round(scrollY) + " " + Math.round(performance.timeOrigin);</script></body>"#;
 /// Hangs its renderer on a click.
 const BUSY: &str = r#"<!doctype html><title>Busy</title>
 <body style="margin:0;height:400px" onclick="setTimeout(() => { for (;;) {} }, 0)"></body>"#;
@@ -219,7 +222,10 @@ fn has(app: &AppHandle, test_id: &str) -> bool {
 /// The tab rows' titles of the first window, in sidebar order.
 fn titles(app: &AppHandle) -> Vec<String> {
     let Ok(tree) = app.tree(None) else { return Vec::new() };
-    let Some(window) = tree.windows.first() else { return Vec::new() };
+    tree.windows.first().map(window_titles).unwrap_or_default()
+}
+
+fn window_titles(window: &nd_test::SemanticWindow) -> Vec<String> {
     let mut rows: Vec<(f32, String)> = window
         .root
         .iter()
@@ -1168,7 +1174,13 @@ fn real_zoom_stops_at_both_limits() {
     for _ in 0..25 {
         press(&app, "cmd--");
     }
-    until(&app, "25%", 10, |a| text_of(a, "zoom-value").as_deref() == Some("25%"));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut value = None;
+    while value.as_deref() != Some("25%") {
+        assert!(Instant::now() < deadline, "the zoom stopped at {value:?}");
+        std::thread::sleep(Duration::from_millis(150));
+        value = text_of(&app, "zoom-value");
+    }
 }
 
 #[test]
@@ -1239,5 +1251,7 @@ fn real_tab_moves_between_windows_without_a_reload() {
         a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == stamped)))
     };
     until(&app, "the moved page as it was", 10, moved);
-    assert_eq!(titles(&app), ["Alpha"]);
+    let left = |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Alpha"]));
+    until(&app, "the other tab left behind", 5, left);
 }
+

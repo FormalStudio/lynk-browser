@@ -231,6 +231,13 @@ fn text_of(app: &AppHandle, test_id: &str) -> Option<String> {
         .find_map(|w| w.root.iter().find(|n| n.test_id.as_deref() == Some(test_id)).map(|n| n.name.clone()))
 }
 
+/// The app answered and shows no visible `test_id`; an app that gave no tree lacks nothing.
+fn lacks(app: &AppHandle, test_id: &str) -> bool {
+    app.tree(None).is_ok_and(|t| {
+        !t.windows.iter().any(|w| w.root.iter().any(|n| n.test_id.as_deref() == Some(test_id) && n.visible))
+    })
+}
+
 fn has(app: &AppHandle, test_id: &str) -> bool {
     app.tree(None).is_ok_and(|t| {
         t.windows.iter().any(|w| w.root.iter().any(|n| n.test_id.as_deref() == Some(test_id) && n.visible))
@@ -300,11 +307,11 @@ fn real_tabs_navigation_and_layout() {
     until(&app, "the new tab page", 10, |a| has(a, "new-tab-page"));
     assert_eq!(titles(&app), ["Alpha", "New Tab"]);
     press(&app, "cmd-1");
-    until(&app, "Alpha shown", 10, |a| !has(a, "new-tab-page"));
+    until(&app, "Alpha shown", 10, |a| lacks(a, "new-tab-page"));
     press(&app, "cmd-9");
     until(&app, "the last tab shown", 10, |a| has(a, "new-tab-page"));
     press(&app, "cmd-1");
-    until(&app, "Alpha shown again", 10, |a| !has(a, "new-tab-page"));
+    until(&app, "Alpha shown again", 10, |a| lacks(a, "new-tab-page"));
 
     // A target=_blank link opens a tab right after its opener, in front, not at the end.
     click_page(&app, 300.);
@@ -312,7 +319,7 @@ fn real_tabs_navigation_and_layout() {
     press(&app, "cmd-9");
     until(&app, "the last tab shown", 10, |a| has(a, "new-tab-page"));
     press(&app, "cmd-shift-[");
-    until(&app, "previous tab", 10, |a| !has(a, "new-tab-page"));
+    until(&app, "previous tab", 10, |a| lacks(a, "new-tab-page"));
 
     // Cmd+W closes the shown tab; Shift+Cmd+T brings it back from the stack.
     press(&app, "cmd-w");
@@ -322,7 +329,7 @@ fn real_tabs_navigation_and_layout() {
 
     // Shift+Cmd+B hides the sidebar and shows it again.
     press(&app, "cmd-shift-b");
-    until(&app, "the sidebar hidden", 10, |a| !has(a, "controls-row"));
+    until(&app, "the sidebar hidden", 10, |a| lacks(a, "controls-row"));
     shot(&app, "sidebar-hidden");
     press(&app, "cmd-shift-b");
     until(&app, "the sidebar back", 10, |a| has(a, "controls-row"));
@@ -346,7 +353,7 @@ fn real_find_in_page() {
     app.get_by_test_id("find-field").fill("haystack").unwrap();
     until(&app, "no matches", 10, |a| text_of(a, "find-count").as_deref() == Some("No matches"));
     press(&app, "escape");
-    until(&app, "the bar closed", 10, |a| !has(a, "find-bar"));
+    until(&app, "the bar closed", 10, |a| lacks(a, "find-bar"));
 }
 
 #[test]
@@ -357,7 +364,7 @@ fn real_zoom_steps_and_glyph() {
     let base = serve();
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
-    assert!(!has(&app, "zoom"), "no glyph at 100%");
+    assert!(lacks(&app, "zoom"), "no glyph at 100%");
     press(&app, "cmd-=");
     until(&app, "the zoom popover", 10, |a| text_of(a, "zoom-value").as_deref() == Some("110%"));
     shot(&app, "zoom-popover");
@@ -365,10 +372,10 @@ fn real_zoom_steps_and_glyph() {
     press(&app, "cmd--");
     until(&app, "90%", 10, |a| text_of(a, "zoom-value").as_deref() == Some("90%"));
     // The notice goes after 1.5 s; the glyph stays while the page is not at 100%.
-    until(&app, "the popover gone", 10, |a| !has(a, "zoom-value"));
+    until(&app, "the popover gone", 10, |a| lacks(a, "zoom-value"));
     assert!(has(&app, "zoom"));
     press(&app, "cmd-0");
-    until(&app, "the glyph gone at 100%", 10, |a| !has(a, "zoom"));
+    until(&app, "the glyph gone at 100%", 10, |a| lacks(a, "zoom"));
 }
 
 #[test]
@@ -573,7 +580,7 @@ fn real_fullscreen_page_and_browser() {
     let width = front_window(&app).bounds.2;
     // The page's own fullscreen takes the window with it and hides the sidebar; Esc leaves.
     click_page(&app, 100.);
-    until(&app, "page fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width) && !has(a, "controls-row"));
+    until(&app, "page fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width) && lacks(a, "controls-row"));
     // The window server cannot capture a window while it moves into its fullscreen space.
     std::thread::sleep(Duration::from_millis(1500));
     shot(&app, "page-fullscreen");
@@ -594,7 +601,7 @@ fn real_fullscreen_page_and_browser() {
     assert!(has(&app, "controls-row"));
     // The page's fullscreen inside it, left with Esc, leaves the window as the user had it.
     click_page(&app, 100.);
-    until(&app, "page fullscreen in browser fullscreen", 10, |a| !has(a, "controls-row"));
+    until(&app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
     hid(key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
     std::thread::sleep(Duration::from_millis(1500));
@@ -818,10 +825,11 @@ fn real_identity_holds_together() {
     assert!(problems.is_empty(), "{}\n{report}", problems.join("; "));
 }
 
-/// The live pages of the first window, a sleeping tab having none.
-fn live_pages(app: &AppHandle) -> usize {
-    let Ok(tree) = app.tree(None) else { return 0 };
-    tree.windows.first().map_or(0, |w| {
+/// The live pages of the first window, a sleeping tab having none. `None` when the app gave no
+/// tree or has no window, so a wait for none never passes on a crash.
+fn live_pages(app: &AppHandle) -> Option<usize> {
+    let tree = app.tree(None).ok()?;
+    tree.windows.first().map(|w| {
         w.root
             .iter()
             .filter(|n| {
@@ -892,7 +900,7 @@ fn real_sleep_keeps_the_scroll() {
     until(&app, "a second tab", 10, |a| titles(a).len() == 2);
     press(&app, "cmd-1");
     menu(&app, "Tabs", "Put Tab to Sleep");
-    until(&app, "the tab asleep", 15, |a| live_pages(a) == 0);
+    until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(0));
     // Woken, it loads again and goes back to where it was scrolled.
     press(&app, "cmd-1");
     until(&app, "the scroll back in a new load", 15, |a| {
@@ -915,7 +923,7 @@ fn real_busy_page_still_sleeps() {
     std::thread::sleep(Duration::from_secs(1));
     let at = row_at(&app, 0);
     pick_menu(&app, at, "Put Tab");
-    until(&app, "the busy tab asleep", 5, |a| live_pages(a) == 0);
+    until(&app, "the busy tab asleep", 5, |a| live_pages(a) == Some(0));
 }
 
 #[test]
@@ -946,15 +954,15 @@ fn real_put_tab_to_sleep_and_wake() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     click_page(&app, 300.);
-    until(&app, "a second tab", 15, |a| titles(a) == ["Alpha", "Beta"] && live_pages(a) == 2);
+    until(&app, "a second tab", 15, |a| titles(a) == ["Alpha", "Beta"] && live_pages(a) == Some(2));
     // A sleeping tab keeps its row and gives its page back; selecting it wakes it.
     press(&app, "cmd-1");
     menu(&app, "Tabs", "Put Tab to Sleep");
-    until(&app, "the tab asleep", 15, |a| live_pages(a) == 1);
+    until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(1));
     assert_eq!(titles(&app), ["Alpha", "Beta"]);
     shot(&app, "tab-asleep");
     press(&app, "cmd-1");
-    until(&app, "the tab awake", 15, |a| live_pages(a) == 2);
+    until(&app, "the tab awake", 15, |a| live_pages(a) == Some(2));
 }
 
 /// The macOS key code of a lowercase letter or a space, for typing into an open menu.
@@ -1074,10 +1082,10 @@ fn real_close_others_over_every_page_state() {
     until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
     press(&app, "cmd-1");
     pick_menu(&app, row_at(&app, 1), "Put Tab");
-    until(&app, "the second tab asleep", 15, |a| live_pages(a) == 2);
+    until(&app, "the second tab asleep", 15, |a| live_pages(a) == Some(2));
     pick_menu(&app, row_at(&app, 0), "Close Other");
     until(&app, "only the shown tab", 15, |a| titles(a) == ["Alpha"]);
-    assert_eq!(live_pages(&app), 1);
+    assert_eq!(live_pages(&app), Some(1));
 }
 
 #[test]
@@ -1116,7 +1124,7 @@ fn real_window_of_thirty_live_tabs_closes() {
     for _ in 0..29 {
         app.keyboard().press("cmd-shift-]").unwrap();
     }
-    until(&app, "thirty live pages", 60, |a| live_pages(a) == 30);
+    until(&app, "thirty live pages", 60, |a| live_pages(a) == Some(30));
     // The last window closing quits.
     real_click(&app, CLOSE_LIGHT.0, CLOSE_LIGHT.1);
     exited(&app, 30);
@@ -1191,7 +1199,7 @@ fn real_odd_but_valid_pages_load() {
     for (n, title) in expect.iter().enumerate() {
         press(&app, &format!("cmd-{}", n + 1));
         until(&app, &format!("{title} loaded"), 60, |a| titles(a).get(n).is_some_and(|t| t == title));
-        assert!(!has(&app, "error-page"), "{title} is no error");
+        assert!(lacks(&app, "error-page"), "{title} is no error");
     }
 }
 
@@ -1451,7 +1459,7 @@ fn real_sidebar_draws_every_row_state() {
         until(&app, "the long title", 15, |a| titles(a).get(1).is_some_and(|t| t.starts_with("A page")));
         press(&app, "cmd-1");
         pick_menu(&app, row_at(&app, 3), "Put Tab");
-        until(&app, "Beta asleep", 15, |a| live_pages(a) == 3);
+        until(&app, "Beta asleep", 15, |a| live_pages(a) == Some(3));
         for suffix in ["", "-720"] {
             if suffix == "-720" {
                 resize(&app, 720);

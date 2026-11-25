@@ -1769,7 +1769,8 @@ fn real_two_launches_at_once_share_one_session() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let mut other = other;
+    let mut other = Reaped(other);
+    let other = &mut other.0;
     let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
         .env("ND_CEF_STYLE", "chrome")
         .env("ND_APP_DATA_DIR", profile.display().to_string())
@@ -1804,6 +1805,16 @@ fn real_two_launches_at_once_share_one_session() {
         ["/alpha?1", "/alpha?2", "/beta", "/press"].iter().map(|p| format!("{base}{p}")).collect();
     expected.sort();
     assert_eq!(urls, expected);
+}
+
+/// A child process killed when the case ends, a failed one included.
+struct Reaped(std::process::Child);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
 }
 
 /// The main display's frame in global points, `(x, y, width, height)`.

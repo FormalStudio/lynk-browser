@@ -77,8 +77,9 @@ fn blocker_for(source: &str) -> Option<Arc<Blocker>> {
 struct State {
     store: Arc<Store<BlockingState>>,
     dir: PathBuf,
-    /// Requests stopped on each tab's page since it last navigated.
-    blocked: HashMap<TabId, usize>,
+    /// The addresses stopped on each tab's page since its load began. A set, since Chromium asks
+    /// for a resource more than once in one load (its preload scanner, then the parser).
+    blocked: HashMap<TabId, HashSet<String>>,
     scriptlets: Option<Evaluating>,
 }
 
@@ -263,8 +264,8 @@ pub fn prepare(view: &WebView) {
 pub fn observe(win: &mut BrowserWindow, id: TabId, event: &PageEvent, _: &mut Window, cx: &mut Context<BrowserWindow>) {
     let Some(state) = cx.try_global::<State>() else { return };
     match event {
-        PageEvent::RequestBlocked(_) => {
-            *cx.global_mut::<State>().blocked.entry(id).or_default() += 1;
+        PageEvent::RequestBlocked(e) => {
+            cx.global_mut::<State>().blocked.entry(id).or_default().insert(e.url.clone());
             cx.notify();
         }
         PageEvent::LoadingChanged(e) if e.loading => {
@@ -321,7 +322,7 @@ pub fn facts(tab: &Tab, cx: &App) -> Option<BlockingFacts> {
     Some(BlockingFacts {
         on: s.blocking_on(&site),
         hidden: s.hidden_on(&site).len(),
-        blocked: state.blocked.get(&tab.id).copied().unwrap_or(0),
+        blocked: state.blocked.get(&tab.id).map_or(0, HashSet::len),
         site,
     })
 }

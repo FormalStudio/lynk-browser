@@ -250,7 +250,8 @@ stateDiagram-v2
   hiding what rules by address match and the scriptlets for it. Generic rules need the page's
   classes and ids: a script in the `lynk-blocker` world posts them (`lynkCosmetic`), and the
   matched selectors go back as a style sheet in that world. nd reports each stopped request
-  (`RequestBlocked`); the count lives per tab and starts over on navigation. The engine builds
+  (`RequestBlocked`); the count is of the distinct addresses stopped on a tab's page, starting over
+  with each load, since Chromium can ask for one resource twice in a load. The engine builds
   off the main thread, restoring `adblock/engine.bin` when its key matches; until then requests
   pass. A release with no cached scriptlets gets them from a hidden page in the front window's
   holder, which imports `js/resources/scriptlets.js` over the `lynk-ubo:` scheme (served from the

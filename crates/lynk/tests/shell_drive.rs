@@ -1089,9 +1089,10 @@ fn real_sidebar_controls_answer_the_keyboard() {
     let (key, other) = ("down", "Beta");
     app.get_by_test_id("tabs").press(key).unwrap();
     until(&app, "the other tab, picked by key", 10, |a| shown_title(a) == other);
-    let shown =
-        rows(&app).into_iter().map(|r| r.0).find(|id| has(&app, &id.replace("tab-row-", "tab-close-"))).unwrap();
-    app.get_by_test_id(&shown.replace("tab-row-", "tab-close-")).press("space").unwrap();
+    let close =
+        |a: &AppHandle| rows(a).into_iter().map(|r| r.0.replace("tab-row-", "tab-close-")).find(|id| has(a, id));
+    until(&app, "the shown row's close button", 10, |a| close(a).is_some());
+    app.get_by_test_id(&close(&app).unwrap()).press("space").unwrap();
     until(&app, "the shown tab, closed by key", 10, |a| titles(a).len() == 1);
 }
 

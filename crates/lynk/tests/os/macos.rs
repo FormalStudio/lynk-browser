@@ -25,6 +25,9 @@ pub mod key {
     pub const TAB: Code = 48;
     pub const BACKSPACE: Code = 51;
     pub const DOWN: Code = 125;
+    pub const PAGE_UP: Code = 116;
+    pub const PAGE_DOWN: Code = 121;
+    pub const UP: Code = 126;
     pub const LEFT: Code = 123;
     pub const RIGHT: Code = 124;
     pub const A: Code = 0;

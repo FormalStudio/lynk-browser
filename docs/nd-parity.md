@@ -100,19 +100,19 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 ## Command bar
 - [x] Cmd+T: address mode, empty field, Enter opens a new tab; on a blank tab it loads in place; drive `real_command_bar_opens_sites` (macOS)
 - [ ] Cmd+L (or a click on the active row or compact tab): the current address, all selected, Enter loads in this tab; a second Cmd+L closes it
-- [ ] Cmd+K: switcher mode, empty field, Enter loads in this tab; with nothing typed the first row is the page you were on last
-- [ ] Opening while open reseeds it, never a second bar
-- [ ] Address mode rows, in order: the history-completed address; the typed text ("<words>" with "<engine> Search", or the address with "Open" or "Open in New Tab"); matching open tabs ("Switch to Tab"); history, newest first, one row per URL, never an open tab; matching commands with their shortcut as the hint
-- [ ] Switcher rows: the typed row, open tabs most recently shown first, commands
-- [ ] Typed text always gets its own row ahead of tabs; Return searches or loads it and never switches tabs
-- [x ] Inline completion from history only, host first, `www.` ignored, shown selected after the caret; Backspace stops it until the next insertion; Tab or Right accepts it (unit: port of `omnibox.test.ts`); drive `real_command_bar_suggests` (macOS)
-- [ ] Up, Down, Home, End; Enter runs the highlighted row; Cmd+Enter submits the text as typed; the top row is highlighted whenever results change
-- [ ] Esc or a click outside closes it and gives focus back to the page
-- [ ] No request leaves the machine before Return (no engine suggestions)
+- [x] Cmd+K: switcher mode, empty field, Enter loads in this tab; with nothing typed the first row is the page you were on last; drives `real_command_bar_reopens_in_place`, `real_command_bar_rows_come_in_order`
+- [x] Opening while open reseeds it, never a second bar; drive `real_command_bar_reopens_in_place`
+- [x] Address mode rows, in order: the history-completed address; the typed text ("<words>" with "<engine> Search", or the address with "Open" or "Open in New Tab"); matching open tabs ("Switch to Tab"); history, newest first, one row per URL, never an open tab; matching commands with their shortcut as the hint; drive `real_command_bar_rows_come_in_order`
+- [x] Switcher rows: the typed row, open tabs most recently shown first, commands; drive `real_command_bar_rows_come_in_order`
+- [x] Typed text always gets its own row ahead of tabs; Return searches or loads it and never switches tabs; drive `real_command_bar_moves_the_highlight`
+- [x] Inline completion from history only, host first, `www.` ignored, shown selected after the caret; Backspace stops it until the next insertion; Tab or Right accepts it (unit: port of `omnibox.test.ts`); drive `real_command_bar_suggests` (macOS)
+- [x] Up, Down, Page Up, Page Down; Enter runs the highlighted row; Cmd+Enter submits the text as typed; the top row is highlighted whenever results change; Home, End, Left and Right move the caret; drive `real_command_bar_moves_the_highlight`
+- [x] Esc or a click outside closes it and gives focus back to the page; drive `real_command_bar_hands_the_keys_back`
+- [x] No request leaves the machine before Return (no engine suggestions); drive `real_command_bar_fetches_nothing_before_return`
 - [ ] Look: 640 pt panel centred, top at 18% of the window height, 20 pt margin in narrow windows, up to ten 40 pt rows then scroll, window dimmed about 15% behind it with the page live, 20 pt field with a search glyph, 16 pt icon, title, address in secondary text, right-aligned hint that never truncates, accent fill on the highlighted row, no animation (old drive `omnibox-drive`)
 - [ ] Every command in `COMMANDS` is a row, with labels that flip (Pin or Unpin Tab, Reading Mode or Leave Reading Mode, Allow or Block Ads on This Site)
-- [ ] Hints spelled per OS ("⇧⌘T" on macOS, "Ctrl+Shift+T" on Linux)
-- [ ] Search engines DuckDuckGo (default), Google, Bing
+- [x] Hints spelled per OS ("⇧⌘T" on macOS, "Ctrl+Shift+T" on Linux); drive `real_command_bar_runs_commands`
+- [x] Search engines DuckDuckGo (default), Google, Bing; drive `real_command_bar_searches_the_chosen_engine`
 - [x] Address parsing: a scheme is kept, `host.tld` becomes `https://`, `localhost:port`, an IP or a local name `http://`, anything else searches; resubmitting an unchanged `http:` address keeps `http:` (unit: port of `url.test.ts`); unit `hosts_people_type`, `an_untouched_address_keeps_the_pages_own_scheme`
 - [ ] Context menu "Search with <engine>" on a selection opens a foreground tab (old drive `mac-context-menu`)
 

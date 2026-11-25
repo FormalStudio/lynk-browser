@@ -1292,22 +1292,37 @@ fn real_identity_holds_together() {
     assert!(problems.is_empty(), "{}\n{report}", problems.join("; "));
 }
 
-/// The live pages of the first window, a sleeping tab having none. `None` when the app gave no
-/// tree or has no window, so a wait for none never passes on a crash.
+/// The one window's tab rows, top to bottom, by tab id. `None` when the tree cannot be read,
+/// the app has other than one window, or no row is drawn, so a failed read never counts.
+fn window_rows(app: &AppHandle) -> Option<(nd_test::SemanticWindow, Vec<String>)> {
+    let [window] = <[_; 1]>::try_from(app.tree(None).ok()?.windows).ok()?;
+    let mut rows: Vec<(f32, String)> = window
+        .root
+        .iter()
+        .filter(|n| n.visible)
+        .filter_map(|n| Some((n.bounds?.origin.y, n.test_id.as_deref()?.strip_prefix("tab-row-")?.to_owned())))
+        .collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let rows: Vec<String> = rows.into_iter().map(|r| r.1).collect();
+    (!rows.is_empty()).then_some((window, rows))
+}
+
+/// How many pages the window holds. `None` unless [`window_rows`] reads the window.
 fn live_pages(app: &AppHandle) -> Option<usize> {
-    let tree = app.tree(None).ok()?;
-    tree.windows.first().map(|w| {
-        w.root
-            .iter()
-            .filter(|n| {
-                // `page-{tab}-{page}`: the tab's id, then which of its pages this is.
-                n.test_id
-                    .as_deref()
-                    .and_then(|t| t.strip_prefix("page-"))
-                    .and_then(|id| id.split_once('-'))
-                    .is_some_and(|(tab, page)| tab.parse::<u64>().is_ok() && page.parse::<u64>().is_ok())
-            })
-            .count()
+    let (window, _) = window_rows(app)?;
+    Some(window.root.iter().filter(|n| page_of(n).is_some()).count())
+}
+
+/// The tab id of a page node, `page-{tab}-{page}`.
+fn page_of(n: &nd_test::SemanticNode) -> Option<&str> {
+    let (tab, page) = n.test_id.as_deref()?.strip_prefix("page-")?.split_once('-')?;
+    (tab.parse::<u64>().is_ok() && page.parse::<u64>().is_ok()).then_some(tab)
+}
+
+/// Whether the tab in the `index`th row is asleep: its row still drawn and no page left for it.
+fn asleep(app: &AppHandle, index: usize) -> bool {
+    window_rows(app).is_some_and(|(window, rows)| {
+        rows.get(index).is_some_and(|tab| !window.root.iter().any(|n| page_of(n) == Some(tab.as_str())))
     })
 }
 
@@ -1373,7 +1388,7 @@ fn real_sleep_keeps_the_scroll() {
     open_in_new_tab(&app, &format!("{base}/beta"));
     press(&app, "cmd-1");
     sleep_first_tab(&app);
-    until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(1));
+    until(&app, "the tab asleep", 15, |a| asleep(a, 0) && live_pages(a) == Some(1));
     // Woken, it loads again and goes back to where it was scrolled.
     press(&app, "cmd-1");
     until(&app, "the scroll back in a new load", 15, |a| {
@@ -1395,7 +1410,7 @@ fn real_busy_page_still_sleeps() {
     std::thread::sleep(Duration::from_secs(1));
     let at = row_at(&app, 0);
     pick_menu(&app, at, "Put Tab");
-    until(&app, "the busy tab asleep", 5, |a| live_pages(a) == Some(1));
+    until(&app, "the busy tab asleep", 5, |a| asleep(a, 0) && live_pages(a) == Some(1));
 }
 
 #[test]
@@ -1429,7 +1444,7 @@ fn real_put_tab_to_sleep_and_wake() {
     // A sleeping tab keeps its row and gives its page back; selecting it wakes it.
     press(&app, "cmd-1");
     sleep_first_tab(&app);
-    until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(1));
+    until(&app, "the tab asleep", 15, |a| asleep(a, 0) && live_pages(a) == Some(1));
     assert_eq!(titles(&app), ["Alpha", "Beta"]);
     shot(&app, "tab-asleep");
     press(&app, "cmd-1");
@@ -1560,7 +1575,7 @@ fn real_close_others_over_every_page_state() {
     until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
     press(&app, "cmd-1");
     pick_menu(&app, row_at(&app, 1), "Put Tab");
-    until(&app, "the second tab asleep", 15, |a| live_pages(a) == Some(2));
+    until(&app, "the second tab asleep", 15, |a| asleep(a, 1) && live_pages(a) == Some(2));
     pick_menu(&app, row_at(&app, 0), "Close Other");
     until(&app, "only the shown tab", 15, |a| titles(a) == ["Alpha"]);
     assert_eq!(live_pages(&app), Some(1));
@@ -1928,7 +1943,7 @@ fn real_sidebar_draws_every_row_state() {
         until(&app, "the long title", 15, |a| titles(a).get(1).is_some_and(|t| t.starts_with("A page")));
         press(&app, "cmd-1");
         pick_menu(&app, row_at(&app, 3), "Put Tab");
-        until(&app, "Beta asleep", 15, |a| live_pages(a) == Some(3));
+        until(&app, "Beta asleep", 15, |a| asleep(a, 3) && live_pages(a) == Some(3));
         for suffix in ["", "-720"] {
             if suffix == "-720" {
                 resize(&app, 720);

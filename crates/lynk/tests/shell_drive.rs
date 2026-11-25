@@ -1113,13 +1113,18 @@ fn real_dev_tools_leave_their_tab_as_it_was() {
 
 /// A profile whose blocker runs on uBO 1.75.0's bundled lists with nothing due from the network,
 /// and with `.promo` hidden on 127.0.0.1 by the user. The release zip comes from `LYNK_UBO_ZIP`,
-/// else the test's tmp dir.
+/// else the test's tmp dir, which a first run fills from GitHub.
 fn blocking_profile(name: &str) -> PathBuf {
+    use lynk_core::ublock::{PINNED_SHA256, PINNED_VERSION, download_zip, sha256_hex};
     let dir = profile(name);
     let zip = std::env::var_os("LYNK_UBO_ZIP").map(PathBuf::from).unwrap_or_else(|| {
-        PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .join(format!("uBlock0_{}.chromium.zip", lynk_core::ublock::PINNED_VERSION))
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("uBlock0_{PINNED_VERSION}.chromium.zip"))
     });
+    if !zip.exists() {
+        let bytes = download_zip(PINNED_VERSION).unwrap_or_else(|e| panic!("{e}; set LYNK_UBO_ZIP"));
+        assert_eq!(sha256_hex(&bytes), PINNED_SHA256, "the downloaded uBO {PINNED_VERSION} zip");
+        std::fs::write(&zip, &bytes).unwrap();
+    }
     let bytes = std::fs::read(&zip).unwrap_or_else(|e| panic!("{}: {e}; set LYNK_UBO_ZIP", zip.display()));
     let adblock = lynk_core::adblock::adblock_dir(&dir).unwrap();
     let release = adblock.join("ubo").join(lynk_core::ublock::PINNED_VERSION);

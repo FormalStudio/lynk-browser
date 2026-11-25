@@ -152,6 +152,13 @@ pub fn toggle_fullscreen(win: &mut BrowserWindow, _: TabId, _: &mut Window, cx: 
         page.exit_fullscreen();
         return;
     }
+    // A fullscreen the window manager started (a Hyprland binding) is not Lynk's to keep: F11
+    // leaves it, as it does in Chrome.
+    #[cfg(target_os = "linux")]
+    if !win.browser_fullscreen && cx.window_fullscreen(win.id) {
+        cx.set_window_fullscreen(win.id, false);
+        return;
+    }
     win.browser_fullscreen = !win.browser_fullscreen;
     win.sync_window_fullscreen(cx);
     win.changed(cx);

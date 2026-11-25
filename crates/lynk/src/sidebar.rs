@@ -32,6 +32,12 @@ const LIGHT: f32 = 14.;
 /// Elsewhere: the column's padding.
 const INSET: f32 = 8.;
 const ROW_RADIUS: f32 = 8.;
+
+/// The column's leading and trailing margin on this platform.
+pub fn margin() -> f32 {
+    if target() == Target::MacOs { MAC_MARGIN } else { INSET }
+}
+
 /// Inside a row: before the favicon, between favicon and title, after the trailing slot.
 const ROW_LEAD: f32 = 6.;
 const ICON_GAP: f32 = 8.;
@@ -183,7 +189,7 @@ impl BrowserWindow {
 
     pub fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let mac = target() == Target::MacOs;
-        let margin = if mac { MAC_MARGIN } else { INSET };
+        let margin = margin();
         // The close light's top edge sits MAC_MARGIN down, centred in the controls row.
         let controls = drag_region()
             .id("controls-row")
@@ -241,7 +247,7 @@ impl BrowserWindow {
     pub fn foot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // The glyphs stand on the favicons' column.
         let mac = target() == Target::MacOs;
-        let margin = if mac { MAC_MARGIN } else { INSET } + ROW_LEAD;
+        let margin = margin() + ROW_LEAD;
         // On macOS the foot sits as far up from the bottom edge as the rows sit in from the left.
         let bottom = if mac { MAC_MARGIN - ROW_LEAD } else { INSET };
         let mut foot =

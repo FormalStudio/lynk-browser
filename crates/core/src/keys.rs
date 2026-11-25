@@ -37,6 +37,8 @@ const KEYS: &[Key] = &[
     k("close-tab", "Close tab", "primary+w", "primary+w"),
     k("reopen-tab", "Reopen closed tab", "primary+shift+t", "primary+shift+t"),
     k("settings", "Settings", "primary+comma", "primary+comma"),
+    // macOS's app menu owns Cmd+Q.
+    k("quit", "Quit", "", "primary+q"),
     k("find", "Find in page", "primary+f", "primary+f"),
     k("find-next", "Find next", "primary+g", "primary+g"),
     k("find-previous", "Find previous", "primary+shift+g", "primary+shift+g"),

@@ -137,6 +137,7 @@ pub const COMMANDS: &[OmniCommand] = &[
     cmd("new-profile", "New Profile\u{2026}", "avatar-default-symbolic", None, "person account"),
     cmd("rename-profile", "Rename Profile\u{2026}", "avatar-default-symbolic", None, "person account"),
     cmd("delete-profile", "Delete Profile\u{2026}", "edit-delete-symbolic", None, "person account remove"),
+    cmd("quit", "Quit", "window-close-symbolic", Some("quit"), "exit"),
 ];
 
 /// Commands that need Chromium: extensions, and the page scripts only it accepts.

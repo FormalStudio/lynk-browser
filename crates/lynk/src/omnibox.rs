@@ -291,6 +291,7 @@ fn command(id: &str) -> Option<&'static Command> {
         "webstore" => OpenWebStore.name(),
         "layout" => SwitchLayout.name(),
         "settings" => OpenSettings.name(),
+        "quit" => Quit.name(),
         _ => return None,
     };
     actions::COMMANDS.iter().find(|c| c.action().name() == name)

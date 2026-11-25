@@ -4,16 +4,27 @@
 //! read or written. Captures land in the test's target tmp dir.
 //!
 //! It opens real windows and moves the real pointer, so it runs only under nextest or with
-//! `ND_REAL=1`, and on macOS until the Linux gate drives it.
-#![cfg(target_os = "macos")]
+//! `ND_REAL=1`. On macOS that is the user's display; on Linux each app gets a private headless
+//! Hyprland (`os/linux.rs`, run through `scripts/linux-gate drive`).
+#![cfg(any(target_os = "macos", target_os = "linux"))]
+
+#[cfg_attr(target_os = "macos", path = "os/macos.rs")]
+#[cfg_attr(target_os = "linux", path = "os/linux.rs")]
+mod os;
+
+/// What only Linux can break: the compositor's scale, outputs, tiling and workspaces, layouts,
+/// selections, crashes and the profile's path.
+#[cfg(target_os = "linux")]
+#[path = "os/linux_cases.rs"]
+mod linux_cases;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use nd_test::{AppHandle, LaunchOptions, expect, launch_app};
-use ndshell::input::Modifier;
+use nd_test::{AppHandle, LaunchOptions, expect};
+use os::{App, Modifier, key};
 
 fn real_allowed() -> bool {
     let allowed = std::env::var_os("NEXTEST").is_some() || std::env::var_os("ND_REAL").is_some_and(|v| v == "1");
@@ -68,10 +79,6 @@ const LONG_TITLE: &str =
 /// Opens pop-ups as fast as it can, never from a click.
 const POPUPS: &str = r#"<!doctype html><title>Popups</title>
 <body><script>setInterval(() => window.open("/beta?" + Math.random()), 20);</script></body>"#;
-
-/// The close light's centre, in window points: its edges sit 19 in from the window's left and top
-/// (docs/sidebar.md), and it is 14 across.
-const CLOSE_LIGHT: (f32, f32) = (26., 26.);
 
 /// Serves the fixture pages on a free local port for the rest of the test process, each request
 /// on its own thread, since `/slow` never answers.
@@ -130,6 +137,10 @@ fn respond(mut stream: std::net::TcpStream) {
             page(&format!("<!doctype html><title>Cookie {}</title>", if cookie.is_empty() { "none" } else { &cookie }))
         }
         "/loop" => ("302 Found", "Location: /loop\r\n".to_owned(), String::new()),
+        "/late" => {
+            std::thread::sleep(Duration::from_secs(3));
+            page("<!doctype html><title>Late</title><p>Late")
+        }
         "/slow" => {
             std::thread::sleep(Duration::from_secs(600));
             return;
@@ -143,25 +154,24 @@ fn respond(mut stream: std::net::TcpStream) {
     );
 }
 
-fn launch(url: &str) -> AppHandle {
-    let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+fn options(url: &str) -> LaunchOptions {
+    LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
         .env("LYNK_URL", url)
         .env("ND_CEF_STYLE", "chrome")
-        .env("LYNK_SEARCHENGINE", "google");
-    let app = launch_app(options).unwrap();
-    activate(app.pid());
-    app
+        .env("LYNK_SEARCHENGINE", "google")
+}
+
+fn launch(url: &str) -> App {
+    os::launch(options(url))
 }
 
 /// Launches on `urls`, a tab each, as a launch from the command line does.
-fn launch_with(urls: &[String]) -> AppHandle {
+fn launch_with(urls: &[String]) -> App {
     let options = urls.iter().fold(
         LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).env("ND_CEF_STYLE", "chrome").env("LYNK_SEARCHENGINE", "google"),
         |o, url| o.arg(url),
     );
-    let app = launch_app(options).unwrap();
-    activate(app.pid());
-    app
+    os::launch(options)
 }
 
 /// A profile of the test's own, which outlives one launch so the next can restore it.
@@ -172,23 +182,25 @@ fn profile(name: &str) -> PathBuf {
     dir
 }
 
-/// Launches on `profile` with `urls` as the command line's.
-fn launch_on(profile: &std::path::Path, urls: &[String]) -> AppHandle {
-    let options = urls.iter().fold(
+fn profile_options(profile: &std::path::Path, urls: &[String]) -> LaunchOptions {
+    urls.iter().fold(
         LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
             .env("ND_CEF_STYLE", "chrome")
             .env("ND_APP_DATA_DIR", profile.display().to_string()),
         |o, url| o.arg(url),
-    );
-    let app = launch_app(options).unwrap();
-    activate(app.pid());
+    )
+}
+
+/// Launches on `profile` with `urls` as the command line's.
+fn launch_on(profile: &std::path::Path, urls: &[String]) -> App {
+    let app = os::launch(profile_options(profile, urls));
+    os::in_front(&app);
     app
 }
 
-/// SIGTERM, the way a service manager or `kill` quits the app, and the wait for it to go.
-fn quit(app: &AppHandle) {
-    let pid = app.pid().to_string();
-    assert!(std::process::Command::new("kill").args(["-TERM", &pid]).status().unwrap().success());
+/// Quits the app as the system asks an app to (`os::quit`), and waits for it to go.
+fn quit(app: &App) {
+    os::quit(app);
     exited(app, 15);
 }
 
@@ -199,48 +211,23 @@ fn session_of(profile: &std::path::Path) -> serde_json::Value {
     doc["data"].take()
 }
 
-/// Moves the front window's top-left corner to `(x, y)` in global points.
-fn move_to(app: &AppHandle, x: i32, y: i32) {
-    let pid = app.pid();
-    let script = format!(
-        "tell application \"System Events\" to set position of front window of (first process whose unix id is {pid}) to {{{x}, {y}}}"
-    );
-    let status = std::process::Command::new("osascript").args(["-e", &script]).status().unwrap();
-    assert!(status.success(), "the window would not move");
-    activate(pid);
-    std::thread::sleep(Duration::from_millis(800));
-}
-
-/// Brings the app forward and waits until macOS has it in front: a launched test app is not, and
-/// key events would go elsewhere. The accessibility call fails until the app has registered with
-/// the window server, and succeeds while another app (Finder, after the last test's app quit)
-/// keeps the front, so it retries until the front app is this one.
-fn activate(pid: u32) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !(ndshell::input::activate(pid) && front_pid() == Some(pid)) {
-        assert!(Instant::now() < deadline, "the app would not come forward; in front: {}", front_app());
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    std::thread::sleep(Duration::from_millis(300));
-}
-
-/// `pid`'s frontmost browser window, skipping popovers and other small windows.
-fn front_window(app: &AppHandle) -> ndshell::window_list::WindowInfo {
+/// The app's frontmost browser window, skipping popovers and other small windows.
+fn front_window(app: &App) -> os::Win {
     on_screen_window(app).expect("the app has a window on screen")
 }
 
-fn on_screen_window(app: &AppHandle) -> Option<ndshell::window_list::WindowInfo> {
-    ndshell::window_list::of_pid(app.pid()).into_iter().find(|w| w.bounds.2 >= 400. && w.bounds.3 >= 300.)
+fn on_screen_window(app: &App) -> Option<os::Win> {
+    os::windows(app).into_iter().find(|w| w.bounds.2 >= 400. && w.bounds.3 >= 300.)
 }
 
 /// The front window's width, for a wait: none while the window is off the screen's list.
-fn width_of(app: &AppHandle) -> Option<f64> {
+fn width_of(app: &App) -> Option<f64> {
     on_screen_window(app).map(|w| w.bounds.2)
 }
 
 /// Whether the key window is in fullscreen with macOS done moving it there; until then its
 /// frame may have grown already, but it takes no input.
-fn settled_fullscreen(app: &AppHandle) -> bool {
+fn settled_fullscreen(app: &App) -> bool {
     app.windows()
         .ok()
         .and_then(|w| w.as_array().cloned())
@@ -248,88 +235,32 @@ fn settled_fullscreen(app: &AppHandle) -> bool {
 }
 
 /// Resizes the front window to `width` points, keeping its height, as a drag of its edge would.
-fn resize(app: &AppHandle, width: u32) {
-    resize_to(app, width, front_window(app).bounds.3 as u32);
-}
-
-fn resize_to(app: &AppHandle, width: u32, height: u32) {
-    let pid = app.pid();
-    let script = format!(
-        "tell application \"System Events\" to set size of front window of (first process whose unix id is {pid}) to {{{width}, {height}}}"
-    );
-    let status = std::process::Command::new("osascript").args(["-e", &script]).status().unwrap();
-    assert!(status.success(), "the window would not resize");
-    // System Events leaves the window inactive, and a click on an inactive page only activates it.
-    activate(pid);
+fn resize(app: &App, width: u32) {
+    os::resize(app, width, front_window(app).bounds.3 as u32);
     std::thread::sleep(Duration::from_millis(800));
 }
 
 /// A real click at `(x, y)` in the window's points. A Chrome-style page lives in Chromium's own
 /// child window, which events posted to the app's window never reach; `launch_app` holds the
-/// machine's real-input lock for the run.
-fn real_click(app: &AppHandle, x: f32, y: f32) {
-    in_front(app);
+/// machine's real-input lock for the run on macOS.
+fn real_click(app: &App, x: f32, y: f32) {
+    os::in_front(app);
     let (wx, wy, _, _) = front_window(app).bounds;
-    ndshell::input::click((wx + f64::from(x), wy + f64::from(y)));
+    os::click(app, (wx + f64::from(x), wy + f64::from(y)));
     std::thread::sleep(Duration::from_millis(400));
-}
-
-/// Waits until one of the app's windows is key, bringing the app forward again meanwhile. A click
-/// on a window of an app that is not active only activates it, and an app the test quit a moment
-/// earlier hands activation to the next app in line after the new one came forward.
-fn in_front(app: &AppHandle) {
-    let key = |a: &AppHandle| {
-        a.windows().ok().is_some_and(|w| w.as_array().is_some_and(|ws| ws.iter().any(|w| w["key"] == true)))
-    };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !key(app) {
-        assert!(
-            Instant::now() < deadline,
-            "no window of the app became key; in front: {}, windows {:?}",
-            front_app(),
-            app.windows()
-        );
-        ndshell::input::activate(app.pid());
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-/// The top of a process's main thread stack, sampled for a second: where a hung app is stuck.
-fn main_thread_of(pid: u32) -> String {
-    let out = std::process::Command::new("sample").args([&pid.to_string(), "1"]).output();
-    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
-    let main = text.lines().skip_while(|l| !l.contains("com.apple.main-thread")).take(60);
-    main.collect::<Vec<_>>().join("\n")
-}
-
-/// The pid of the app macOS has in front. `lsappinfo` prints it as `"pid"=N` for a bundled app
-/// and `pid = N` for a bare binary like the test's.
-fn front_pid() -> Option<u32> {
-    let info = front_app();
-    let at = info.find("pid")? + 3;
-    info[at..].trim_start_matches(['"', ' ', '=']).split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
-}
-
-/// The app macOS has in front, by name and pid.
-fn front_app() -> String {
-    std::process::Command::new("sh")
-        .args(["-c", "lsappinfo info -only name -only pid $(lsappinfo front)"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', " "))
-        .unwrap_or_default()
 }
 
 /// A composited capture of the window, glass and pages included, which the automation
 /// socket's layer render leaves out.
-fn shot(app: &AppHandle, name: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shell-{name}.png"));
-    ndshell::window_list::capture(front_window(app).number, &path).unwrap();
+fn shot(app: &App, name: &str) -> PathBuf {
+    let path = os::shot_path(name);
+    os::capture(app, &front_window(app), &path);
     println!("screenshot {}", path.display());
     path
 }
 
 /// Waits until `check` holds, failing with the tab titles and the app's stderr after `secs`.
-fn until(app: &AppHandle, what: &str, secs: u64, check: impl Fn(&AppHandle) -> bool) {
+fn until(app: &App, what: &str, secs: u64, check: impl Fn(&App) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(secs);
     while Instant::now() < deadline {
         if check(app) {
@@ -382,12 +313,12 @@ fn window_count(app: &AppHandle) -> usize {
 }
 
 fn press(app: &AppHandle, keys: &str) {
-    app.keyboard().press(keys).unwrap();
+    app.keyboard().press(&os::chord(keys)).unwrap();
     std::thread::sleep(Duration::from_millis(300));
 }
 
 /// Clicks inside the page, `y` points below the content area's top.
-fn click_page(app: &AppHandle, y: f32) {
+fn click_page(app: &App, y: f32) {
     let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
     real_click(app, b.x + b.width / 2., b.y + y);
 }
@@ -401,7 +332,7 @@ fn real_tabs_navigation_and_layout() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the first page's title", 30, |a| titles(a) == ["Alpha"]);
     expect(&app.get_by_test_id("controls-row")).to_be_visible().unwrap();
-    expect(&app.get_by_test_id("new-tab-row")).to_be_visible().unwrap();
+    expect(&app.get_by_test_id(os::NEW_TAB)).to_be_visible().unwrap();
     resize(&app, 1200);
     shot(&app, "sidebar-1200");
     resize(&app, 720);
@@ -509,7 +440,7 @@ fn real_windows_and_closing() {
         a.tree(None).is_ok_and(|t| {
             t.windows.get(1).is_some_and(|w| {
                 let row = |id: &str| w.root.iter().any(|n| n.test_id.as_deref() == Some(id) && n.visible);
-                row("new-tab-row") && w.root.iter().any(|n| n.name == "New Tab")
+                row(os::NEW_TAB) && w.root.iter().any(|n| n.name == "New Tab")
             })
         })
     });
@@ -550,24 +481,20 @@ fn real_beforeunload_holds_the_close() {
     press(&app, "cmd-shift-t");
     until(&app, "the page back", 15, |a| titles(a) == ["Beta", "Leave"]);
     click_page(&app, 100.);
-    let close = CLOSE_LIGHT;
-    real_click(&app, close.0, close.1);
+    os::close_window(&app, &front_window(&app));
     std::thread::sleep(Duration::from_secs(1));
-    assert!(
-        ndshell::window_list::of_pid(app.pid()).len() > 2,
-        "the window waits on its page's answer, under its prompt"
-    );
+    // The prompt is a window of its own on macOS and drawn in the page on Linux.
+    assert_eq!(window_count(&app), 1, "the window waits on its page's answer, under its prompt");
     press(&app, "escape");
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(titles(&app), ["Beta", "Leave"], "Cancel keeps the window");
     // The last window going quits the app.
-    real_click(&app, close.0, close.1);
+    os::close_window(&app, &front_window(&app));
     std::thread::sleep(Duration::from_secs(1));
     press(&app, "enter");
     exited(&app, 15);
 }
 
-/// Waits for the app to exit.
 /// Whether the process has exited. The test holds a launched app unreaped, so an exited one
 /// lingers as a zombie.
 fn gone(pid: u32) -> bool {
@@ -576,6 +503,7 @@ fn gone(pid: u32) -> bool {
     stat.trim().is_empty() || stat.starts_with('Z')
 }
 
+/// Waits for the app to exit.
 fn exited(app: &AppHandle, secs: u64) {
     let pid = app.pid();
     let gone = || gone(pid);
@@ -639,7 +567,8 @@ fn real_one_instance_per_profile() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     // A second launch on the same profile hands its URL over and exits.
-    let mut second = std::process::Command::new(env!("CARGO_BIN_EXE_lynk"))
+    let mut second = app
+        .command(env!("CARGO_BIN_EXE_lynk"))
         .arg(format!("{base}/beta"))
         .env("ND_APP_DATA_DIR", app.dir().join("data"))
         .env("ND_CEF_STYLE", "chrome")
@@ -663,38 +592,17 @@ fn real_one_instance_per_profile() {
     assert_eq!(window_count(&app), 1);
 }
 
-/// macOS virtual key codes for the keys the cases post through the HID system.
-mod key {
-    pub const K: u16 = 40;
-    pub const L: u16 = 37;
-    pub const T: u16 = 17;
-    pub const V: u16 = 9;
-    pub const RETURN: u16 = 36;
-    pub const TAB: u16 = 48;
-    pub const BACKSPACE: u16 = 51;
-    pub const DOWN: u16 = 125;
-    pub const LEFT: u16 = 123;
-    pub const RIGHT: u16 = 124;
-    pub const A: u16 = 0;
-    pub const F: u16 = 3;
-    pub const I: u16 = 34;
-    pub const ESCAPE: u16 = 53;
-    pub const F1: u16 = 122;
-    pub const F7: u16 = 98;
-    pub const F12: u16 = 111;
-}
-
-/// A key through the HID system, which reaches a Chrome-style page's own window as typing does;
-/// the automation socket's keys reach only the app's.
-fn hid(code: u16, modifiers: &[Modifier]) {
-    ndshell::input::key(code, modifiers);
+/// A key through the system's keyboard, which reaches a Chrome-style page's own window as typing
+/// does; the automation socket's keys reach only the app's.
+fn hid(app: &App, code: os::Code, modifiers: &[Modifier]) {
+    os::key(app, code, modifiers);
     std::thread::sleep(Duration::from_millis(600));
 }
 
-/// The app's windows on screen, popovers and bubbles left out. A Chrome-style page adds a
-/// window of its own over the app's.
-fn on_screen(app: &AppHandle) -> usize {
-    ndshell::window_list::of_pid(app.pid()).iter().filter(|w| w.bounds.2 >= 300. && w.bounds.3 >= 200.).count()
+/// The app's windows on screen, popovers and bubbles left out. On macOS a Chrome-style page adds
+/// a window of its own over the app's.
+fn on_screen(app: &App) -> usize {
+    os::windows(app).iter().filter(|w| w.bounds.2 >= 300. && w.bounds.3 >= 200.).count()
 }
 
 #[test]
@@ -719,27 +627,49 @@ fn real_fullscreen_page_and_browser() {
         (0., 0., w, h),
         "the page fills the fullscreen window"
     );
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| width_of(a) == Some(width) && has(a, "controls-row"));
-    // The browser's: macOS's own Enter Full Screen, the sidebar kept.
-    hid(key::F, &[Modifier::Control, Modifier::Command]);
-    until(&app, "browser fullscreen", 10, settled_fullscreen);
-    assert!(has(&app, "controls-row"));
-    // The page's fullscreen inside it, left with Esc, leaves the window as the user had it.
-    click_page(&app, 100.);
-    until(&app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
-    hid(key::ESCAPE, &[]);
-    until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
+    browser_fullscreen(&app, width);
+}
+
+/// The browser's fullscreen: macOS's own Enter Full Screen, the sidebar kept. A page's
+/// fullscreen inside it, left with Esc, leaves the window as the user had it.
+#[cfg(target_os = "macos")]
+fn browser_fullscreen(app: &App, width: f64) {
+    hid(app, key::F, &[Modifier::Control, Modifier::Command]);
+    until(app, "browser fullscreen", 10, settled_fullscreen);
+    assert!(has(app, "controls-row"));
+    click_page(app, 100.);
+    until(app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
+    hid(app, key::ESCAPE, &[]);
+    until(app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
     // A wrong exit would start within this.
     std::thread::sleep(Duration::from_millis(1500));
-    assert!(settled_fullscreen(&app), "the window stays in the user's fullscreen");
-    hid(key::F, &[Modifier::Control, Modifier::Command]);
-    until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
+    assert!(settled_fullscreen(app), "the window stays in the user's fullscreen");
+    hid(app, key::F, &[Modifier::Control, Modifier::Command]);
+    until(app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
+}
+
+/// The browser's fullscreen on Linux: F11, Chrome's, with the sidebar put away. A page's
+/// fullscreen inside it, left with Esc, leaves the window in F11's fullscreen.
+#[cfg(target_os = "linux")]
+fn browser_fullscreen(app: &App, width: f64) {
+    hid(app, key::F11, &[]);
+    until(app, "browser fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width) && lacks(a, "controls-row"));
+    click_page(app, 100.);
+    std::thread::sleep(Duration::from_millis(1000));
+    hid(app, key::ESCAPE, &[]);
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(front_window(app).bounds.2 > width, "the window stays in F11's fullscreen");
+    assert!(lacks(app, "controls-row"), "the sidebar stays away in F11's fullscreen");
+    hid(app, key::F11, &[]);
+    until(app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width) && has(a, "controls-row"));
 }
 
 /// The window takes no input while macOS still moves it into fullscreen, though its frame has
 /// already grown; the app says it is fullscreen only once the move is over, and a click then
 /// reaches the page.
+#[cfg(target_os = "macos")]
 #[test]
 fn real_fullscreen_is_reported_once_the_move_is_over() {
     if !real_allowed() {
@@ -749,8 +679,8 @@ fn real_fullscreen_is_reported_once_the_move_is_over() {
     let app = launch(&format!("{base}/full"));
     until(&app, "the page", 30, |a| titles(a) == ["Full"]);
     let width = front_window(&app).bounds.2;
-    in_front(&app);
-    ndshell::input::key(key::F, &[Modifier::Control, Modifier::Command]);
+    os::in_front(&app);
+    os::key(&app, key::F, &[Modifier::Control, Modifier::Command]);
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut grown_while_moving = false;
     while !settled_fullscreen(&app) {
@@ -761,10 +691,10 @@ fn real_fullscreen_is_reported_once_the_move_is_over() {
     assert!(grown_while_moving, "the frame grew before the move was over");
     click_page(&app, 100.);
     until(&app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
     assert!(settled_fullscreen(&app), "the window stays in the user's fullscreen");
-    hid(key::F, &[Modifier::Control, Modifier::Command]);
+    hid(&app, key::F, &[Modifier::Control, Modifier::Command]);
     until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
 }
 
@@ -774,15 +704,13 @@ fn real_dev_tools_from_the_page() {
         return;
     }
     let base = serve();
-    for (name, code, modifiers) in
-        [("F12", key::F12, &[][..]), ("Alt+Cmd+I", key::I, &[Modifier::Option, Modifier::Command][..])]
-    {
+    for (name, code, modifiers) in [("F12", key::F12, &[][..]), os::DEVTOOLS] {
         let app = launch(&format!("{base}/alpha"));
         until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
         // Focus in the page, where Chrome sees the chord first.
         click_page(&app, 500.);
         let before = on_screen(&app);
-        hid(code, modifiers);
+        hid(&app, code, modifiers);
         until(&app, &format!("devtools from {name}"), 10, |a| on_screen(a) == before + 1);
     }
 }
@@ -798,30 +726,38 @@ fn real_chrome_only_keys_open_nothing() {
     click_page(&app, 500.);
     // Every window of the app on every layer, however small: F7's caret browsing prompt is a
     // small dialog, and a panel or popover sits above the normal layer.
-    let windows = |app: &AppHandle| ndshell::window_list::every_layer_of_pid(app.pid()).len();
+    let windows = |app: &App| os::every_window(app);
     let before = windows(&app);
-    // The count sees a window off the normal layer: a row's menu.
-    let (wx, wy, _, _) = front_window(&app).bounds;
-    let at = row_at(&app, 0);
-    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
-    until(&app, "the row menu counted", 5, |a| windows(a) > before);
-    hid(key::ESCAPE, &[]);
-    until(&app, "the row menu gone", 5, |a| windows(a) == before);
-    click_page(&app, 500.);
+    // The count sees a window off the normal layer: a row's menu. GPUI draws its menus inside
+    // the window on Linux, so there is no such window to see.
+    #[cfg(target_os = "macos")]
+    {
+        let (wx, wy, _, _) = front_window(&app).bounds;
+        let at = row_at(&app, 0);
+        os::right_click(&app, (wx + f64::from(at.0), wy + f64::from(at.1)));
+        until(&app, "the row menu counted", 5, |a| windows(a) > before);
+        hid(&app, key::ESCAPE, &[]);
+        until(&app, "the row menu gone", 5, |a| windows(a) == before);
+        click_page(&app, 500.);
+    }
     // Caret browsing, the task manager and help: Chrome UI with no place in Lynk.
     for (name, code, modifiers) in
         [("F7", key::F7, &[][..]), ("Shift+Esc", key::ESCAPE, &[Modifier::Shift][..]), ("F1", key::F1, &[][..])]
     {
-        hid(code, modifiers);
+        hid(&app, code, modifiers);
         std::thread::sleep(Duration::from_millis(900));
         assert_eq!(windows(&app), before, "{name} opened a window, dialog or panel");
         assert_eq!(titles(&app), ["Alpha"], "{name} opened a tab");
     }
     // F11 belongs to macOS (Show Desktop), so it goes through the app's own key handling only.
-    press(&app, "f11");
-    std::thread::sleep(Duration::from_millis(900));
-    assert_eq!(windows(&app), before, "F11 opened a window, dialog or panel");
-    assert_eq!(titles(&app), ["Alpha"], "F11 opened a tab");
+    // On Linux it is the browser's fullscreen, which `real_fullscreen_page_and_browser` covers.
+    #[cfg(target_os = "macos")]
+    {
+        press(&app, "f11");
+        std::thread::sleep(Duration::from_millis(900));
+        assert_eq!(windows(&app), before, "F11 opened a window, dialog or panel");
+        assert_eq!(titles(&app), ["Alpha"], "F11 opened a tab");
+    }
 }
 
 const IDENTITY: &str = r#"<!doctype html><title>identity probe</title><body>probe<script>
@@ -903,7 +839,9 @@ fn real_identity_holds_together() {
     });
     // Launched as a user launches it: no automation socket, a throwaway profile.
     let data = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("identity-{}", std::process::id()));
-    let mut app = std::process::Command::new(env!("CARGO_BIN_EXE_lynk"))
+    let display = os::Display::start();
+    let mut app = display
+        .command(env!("CARGO_BIN_EXE_lynk"))
         .env("ND_APP_DATA_DIR", &data)
         .env("LYNK_URL", &url)
         .env("ND_CEF_STYLE", "chrome")
@@ -1002,14 +940,13 @@ fn live_pages(app: &AppHandle) -> Option<usize> {
     })
 }
 
-/// Picks `item` in the menu bar's `menu` as a user does, through System Events.
-fn menu(app: &AppHandle, menu: &str, item: &str) {
-    let script = format!(
-        "tell application \"System Events\" to tell (first process whose unix id is {}) to click menu item \"{item}\" of menu \"{menu}\" of menu bar 1",
-        app.pid()
-    );
-    let status = std::process::Command::new("osascript").args(["-e", &script]).status().unwrap();
-    assert!(status.success(), "no {menu} > {item}");
+/// Puts the first tab, on show, to sleep from the menus: the menu bar's Tabs menu on macOS, the
+/// tab row's menu on Linux, which has no menu bar.
+fn sleep_first_tab(app: &App) {
+    #[cfg(target_os = "macos")]
+    os::menu(app, "Tabs", "Put Tab to Sleep");
+    #[cfg(target_os = "linux")]
+    pick_menu(app, row_at(app, 0), "Put Tab to Sleep");
     std::thread::sleep(Duration::from_millis(500));
 }
 
@@ -1027,15 +964,23 @@ fn real_first_click_reaches_a_new_page() {
             .env("LYNK_URL", format!("{base}/press"))
             .env("ND_CEF_STYLE", "chrome")
             .env("ND_LOG", "info,nd_cef=debug");
-        let app = launch_app(options).unwrap();
-        activate(app.pid());
+        let app = os::launch(options);
         let deadline = Instant::now() + Duration::from_secs(30);
         while titles(&app) != ["Press"] {
             assert!(Instant::now() < deadline, "the page never loaded");
             std::thread::sleep(Duration::from_millis(10));
         }
         let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
-        real_click(&app, b.x + b.width / 2., b.y + 100.);
+        // Chromium drops input that reaches a page before its first paint, so the click waits
+        // for the page under it, as a user's would.
+        let at = (b.x + b.width / 2., b.y + 100.);
+        until(&app, "the page drawn under the click", 10, |a| {
+            let w = front_window(a);
+            let path = shot(a, "first-click");
+            let [r, g, b] = os::pixel(a, &w, &path, (f64::from(at.0), f64::from(at.1)));
+            g > r.saturating_add(16) && g > b.saturating_add(16)
+        });
+        real_click(&app, at.0, at.1);
         until(&app, "the first click on the page", 5, |a| titles(a) == ["Pressed"]);
         let resized: Vec<String> =
             app.stderr_tail(400).into_iter().filter(|l| l.contains("lifted page view was resized")).collect();
@@ -1056,7 +1001,7 @@ fn real_sleep_keeps_the_scroll() {
     let before = titles(&app)[0].clone();
     open_in_new_tab(&app, &format!("{base}/beta"));
     press(&app, "cmd-1");
-    menu(&app, "Tabs", "Put Tab to Sleep");
+    sleep_first_tab(&app);
     until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(1));
     // Woken, it loads again and goes back to where it was scrolled.
     press(&app, "cmd-1");
@@ -1092,8 +1037,7 @@ fn real_launch_urls_open_as_tabs() {
         .arg(format!("{base}/alpha"))
         .arg(format!("{base}/beta"))
         .env("ND_CEF_STYLE", "chrome");
-    let app = launch_app(options).unwrap();
-    activate(app.pid());
+    let app = os::launch(options);
     // The second loads once it is first shown; until then its row shows its address.
     until(&app, "a tab per URL", 30, |a| {
         let t = titles(a);
@@ -1113,7 +1057,7 @@ fn real_put_tab_to_sleep_and_wake() {
     until(&app, "a second tab", 15, |a| titles(a) == ["Alpha", "Beta"] && live_pages(a) == Some(2));
     // A sleeping tab keeps its row and gives its page back; selecting it wakes it.
     press(&app, "cmd-1");
-    menu(&app, "Tabs", "Put Tab to Sleep");
+    sleep_first_tab(&app);
     until(&app, "the tab asleep", 15, |a| live_pages(a) == Some(1));
     assert_eq!(titles(&app), ["Alpha", "Beta"]);
     shot(&app, "tab-asleep");
@@ -1121,27 +1065,18 @@ fn real_put_tab_to_sleep_and_wake() {
     until(&app, "the tab awake", 15, |a| live_pages(a) == Some(2));
 }
 
-/// The macOS key code of a lowercase letter or a space, for typing into an open menu.
-fn key_of(c: char) -> u16 {
-    const LETTERS: &str = "asdfhgzxcv_bqweryt123465=97-80]ou[ip_lj'k;\\,/nm.";
-    if c == ' ' {
-        return 49;
-    }
-    LETTERS.find(c).map(|i| i as u16).expect("a key for the letter")
-}
-
 /// Right-clicks `at` (window points) and picks the item whose title starts with `item`, typed
 /// into the menu as a user selects by typing.
-fn pick_menu(app: &AppHandle, at: (f32, f32), item: &str) {
-    in_front(app);
+fn pick_menu(app: &App, at: (f32, f32), item: &str) {
+    os::in_front(app);
     let (wx, wy, _, _) = front_window(app).bounds;
-    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
+    os::right_click(app, (wx + f64::from(at.0), wy + f64::from(at.1)));
     std::thread::sleep(Duration::from_millis(600));
     for c in item.to_ascii_lowercase().chars() {
-        ndshell::input::key(key_of(c), &[]);
+        os::key(app, os::key_of(c), &[]);
         std::thread::sleep(Duration::from_millis(60));
     }
-    hid(36, &[]);
+    hid(app, key::ENTER, &[]);
 }
 
 /// The title of the app's first window, which is the shown tab's.
@@ -1152,7 +1087,7 @@ fn shown_title(app: &AppHandle) -> String {
 
 /// The first window's tab rows top to bottom: test id and centre, in window points.
 fn rows(app: &AppHandle) -> Vec<(String, (f32, f32))> {
-    let tree = app.tree(None).unwrap_or_else(|e| panic!("{e:?}\n{}", main_thread_of(app.pid())));
+    let tree = app.tree(None).unwrap_or_else(|e| panic!("{e:?}\n{}", os::main_thread_of(app.pid())));
     let mut rows: Vec<_> = tree.windows[0]
         .root
         .iter()
@@ -1189,7 +1124,13 @@ fn real_sidebar_controls_answer_the_keyboard() {
     let close =
         |a: &AppHandle| rows(a).into_iter().map(|r| r.0.replace("tab-row-", "tab-close-")).find(|id| has(a, id));
     until(&app, "the shown row's close button", 10, |a| close(a).is_some());
-    app.get_by_test_id(&close(&app).unwrap()).press("space").unwrap();
+    let button = app.get_by_test_id(&close(&app).unwrap());
+    // GPUI's buttons take no keyboard focus, so on Linux the press is assistive tech's.
+    if cfg!(target_os = "macos") {
+        button.press("space").unwrap()
+    } else {
+        button.click().unwrap()
+    }
     until(&app, "the shown tab, closed by key", 10, |a| titles(a).len() == 1);
 }
 
@@ -1207,9 +1148,9 @@ fn real_tab_row_menu() {
     // A right click on another tab's row opens its menu and leaves the shown tab alone.
     let (wx, wy, _, _) = front_window(&app).bounds;
     let at = row_at(&app, 0);
-    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
+    os::right_click(&app, (wx + f64::from(at.0), wy + f64::from(at.1)));
     std::thread::sleep(Duration::from_millis(600));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     assert_eq!(shown_title(&app), "Beta", "the shown tab after a menu on another row");
     // The row's menu acts on its own tab, not the one on show.
     let duplicate = rows(&app)[1].0.clone();
@@ -1217,11 +1158,11 @@ fn real_tab_row_menu() {
     until(&app, "only the second tab", 15, |a| titles(a) == ["Alpha"]);
     assert_eq!(rows(&app).into_iter().map(|r| r.0).collect::<Vec<_>>(), [duplicate], "the duplicate is the one left");
     // Off any tab: the column's menu.
-    let n = app.get_by_test_id("new-tab-row").bounding_box().unwrap().unwrap();
-    pick_menu(&app, (n.x + n.width / 2., n.y + n.height + 120.), "New Tab");
+    let last = row_at(&app, titles(&app).len() - 1);
+    pick_menu(&app, (last.0, last.1 + 160.), "New Tab");
     until(&app, "the bar from the column menu", 10, |a| bar_field(a).is_some());
-    type_real(&format!("{base}/beta"));
-    hid(key::RETURN, &[]);
+    type_real(&app, &format!("{base}/beta"));
+    hid(&app, key::ENTER, &[]);
     until(&app, "a tab from the column menu", 10, |a| titles(a).len() == 2);
 }
 
@@ -1258,14 +1199,14 @@ fn real_fifty_tabs_opened_and_closed_at_speed() {
     // Each through the command bar, typed as soon as the bar shows.
     for n in 0..50 {
         open_bar(&app, key::T);
-        ndshell::input::type_text(&format!("{base}/beta?{n}\n"));
+        os::type_text(&app, &format!("{base}/beta?{n}\n"));
     }
     until(&app, "the fifty tabs", 60, |a| live_pages(a) == Some(51));
     let keys = app.keyboard();
     // Fifty closes leave exactly the first tab only if all fifty opened: one too few would take
     // the window, and the app with it.
     for _ in 0..50 {
-        keys.press("cmd-w").unwrap();
+        keys.press(&os::chord("cmd-w")).unwrap();
     }
     until(&app, "back to the first tab", 30, |a| titles(a) == ["Alpha"]);
 }
@@ -1283,11 +1224,11 @@ fn real_window_of_thirty_live_tabs_closes() {
     shot(&app, "thirty");
     // Next Tab through all of them gives each its page.
     for _ in 0..29 {
-        app.keyboard().press("cmd-shift-]").unwrap();
+        app.keyboard().press(&os::chord("cmd-shift-]")).unwrap();
     }
     until(&app, "thirty live pages", 60, |a| live_pages(a) == Some(30));
     // The last window closing quits.
-    real_click(&app, CLOSE_LIGHT.0, CLOSE_LIGHT.1);
+    os::close_window(&app, &front_window(&app));
     exited(&app, 30);
 }
 
@@ -1437,10 +1378,10 @@ fn real_back_and_forward_spammed_during_loads() {
     until(&app, "Beta", 15, |a| titles(a) == ["Beta"]);
     let keys = app.keyboard();
     for _ in 0..20 {
-        keys.press("cmd-[").unwrap();
-        keys.press("cmd-]").unwrap();
+        keys.press(&os::chord("cmd-[")).unwrap();
+        keys.press(&os::chord("cmd-]")).unwrap();
     }
-    keys.press("cmd-[").unwrap();
+    keys.press(&os::chord("cmd-[")).unwrap();
     until(&app, "settled on Alpha", 15, |a| titles(a) == ["Alpha"]);
 }
 
@@ -1452,7 +1393,7 @@ fn real_resize_to_the_minimum_during_a_load() {
     let base = serve();
     let app = launch(&format!("{base}/slow"));
     until(&app, "the load under way", 30, |a| has(a, "load-bar"));
-    resize_to(&app, 600, 400);
+    os::resize(&app, 600, 400);
     let (_, _, w, h) = front_window(&app).bounds;
     assert_eq!((w, h), (720., 480.), "the window stops at its minimum size");
     assert!(has(&app, "controls-row") && has(&app, "load-bar"));
@@ -1489,27 +1430,18 @@ fn real_tab_moves_between_windows_without_a_reload() {
     pick_menu(&app, row_at(&app, 0), "Move Tab to New");
     until(&app, "a second window", 10, |a| window_count(a) == 2);
     let moved =
-        |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == stamped)));
+        |a: &App| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == stamped)));
     until(&app, "the moved page as it was", 10, moved);
-    let left = |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Alpha"]));
+    let left = |a: &App| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Alpha"]));
     until(&app, "the other tab left behind", 5, left);
 }
 
 /// The colour the page shows near its bottom right corner, where nothing of its own is drawn,
 /// read from a capture of the window.
-fn page_backdrop(app: &AppHandle, name: &str) -> [u8; 3] {
+fn page_backdrop(app: &App, name: &str) -> [u8; 3] {
     let path = shot(app, name);
-    let decoder = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()));
-    let mut reader = decoder.read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size().unwrap()];
-    let info = reader.next_frame(&mut buf).unwrap();
-    let scale = f64::from(info.width) / front_window(app).bounds.2;
     let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
-    let x = ((f64::from(b.x + b.width) - 40.) * scale) as usize;
-    let y = ((f64::from(b.y + b.height) - 40.) * scale) as usize;
-    let channels = info.color_type.samples();
-    let at = y * info.line_size + x * channels;
-    [buf[at], buf[at + 1], buf[at + 2]]
+    os::pixel(app, &front_window(app), &path, (f64::from(b.x + b.width) - 40., f64::from(b.y + b.height) - 40.))
 }
 
 #[test]
@@ -1544,8 +1476,8 @@ fn real_a_page_with_a_colour_scheme_keeps_its_canvas() {
             .env("ND_CEF_STYLE", "chrome")
             .env("ND_THEME_TOML", theme.display().to_string())
             .arg(format!("{base}{path}"));
-        let app = launch_app(options).unwrap();
-        activate(app.pid());
+        let app = os::launch(options);
+        os::in_front(&app);
         until(&app, "the page", 30, |a| titles(a) == [title]);
         std::thread::sleep(Duration::from_secs(1));
         let canvas = page_backdrop(&app, &format!("page-scheme-{title}-{appearance}"));
@@ -1567,8 +1499,8 @@ fn real_a_light_dark_page_follows_an_appearance_flip() {
         .env("ND_CEF_STYLE", "chrome")
         .env("ND_THEME_TOML", theme.display().to_string())
         .arg(format!("{base}/both-schemes"));
-    let app = launch_app(options).unwrap();
-    activate(app.pid());
+    let app = os::launch(options);
+    os::in_front(&app);
     until(&app, "the page", 30, |a| titles(a) == ["Both"]);
     std::thread::sleep(Duration::from_secs(1));
     let light = page_backdrop(&app, "page-flip-light");
@@ -1607,8 +1539,7 @@ fn real_sidebar_draws_every_row_state() {
                 o.arg(format!("{base}{path}"))
             })
             .env("ND_THEME_TOML", theme.display().to_string());
-        let app = launch_app(options).unwrap();
-        activate(app.pid());
+        let app = os::launch(options);
         until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
         // The slow tab keeps loading behind the shown one; Beta loads, then sleeps.
         press(&app, "cmd-3");
@@ -1624,10 +1555,10 @@ fn real_sidebar_draws_every_row_state() {
             if suffix == "-720" {
                 resize(&app, 720);
             }
-            in_front(&app);
+            os::in_front(&app);
             let (wx, wy, _, _) = front_window(&app).bounds;
             let at = row_at(&app, 1);
-            ndshell::input::move_to((wx + f64::from(at.0), wy + f64::from(at.1)));
+            os::move_to(&app, (wx + f64::from(at.0), wy + f64::from(at.1)));
             std::thread::sleep(Duration::from_millis(600));
             shot(&app, &format!("sidebar-states-{appearance}{suffix}"));
             sidebar_geometry_holds(&app);
@@ -1636,14 +1567,14 @@ fn real_sidebar_draws_every_row_state() {
         let (wx, wy, _, _) = front_window(&app).bounds;
         let at = row_at(&app, 1);
         let at = (wx + f64::from(at.0), wy + f64::from(at.1));
-        ndshell::input::hold(at);
+        os::hold(&app, at);
         std::thread::sleep(Duration::from_millis(400));
         shot(&app, &format!("sidebar-pressed-{appearance}"));
-        ndshell::input::release(at);
+        os::release(&app, at);
     }
 }
 
-/// The column's numbers, read off the shown row: 28 tall, 19 in from the window's left edge and
+/// The column's numbers, read off the shown row: 28 tall, the margin in from the window's left edge and
 /// the sidebar's trailing edge, the close button inside its trailing slot with air on every side,
 /// and the title ending before it.
 fn sidebar_geometry_holds(app: &AppHandle) {
@@ -1652,7 +1583,8 @@ fn sidebar_geometry_holds(app: &AppHandle) {
     let row_id = rows(app)[0].0.clone();
     let id = row_id.strip_prefix("tab-row-").unwrap();
     let (row, close, title) = (bounds(&row_id), bounds(&format!("tab-close-{id}")), bounds(&format!("tab-title-{id}")));
-    assert_eq!((row.x, row.width, row.height), (19., 240. - 2. * 19., 28.), "the shown row");
+    let margin = lynk::sidebar::margin();
+    assert_eq!((row.x, row.width, row.height), (margin, 240. - 2. * margin, 28.), "the shown row");
     let (gap_right, gap_top) = (row.x + row.width - (close.x + close.width), close.y - row.y);
     assert!(gap_right >= 4. && gap_top >= 4., "the close button keeps clear of the row's edges: {close:?} in {row:?}");
     assert!(title.x + title.width <= close.x, "the title stops before the close button: {title:?}, {close:?}");
@@ -1671,8 +1603,13 @@ fn real_a_relaunch_restores_the_session() {
     let urls: Vec<String> = ["/alpha", "/long", "/beta"].iter().map(|p| format!("{base}{p}")).collect();
     let app = launch_on(&profile, &urls);
     until(&app, "three tabs", 30, |a| rows(a).len() == 3 && titles(a)[0] == "Alpha");
-    move_to(&app, 180, 140);
-    resize_to(&app, 1100, 760);
+    // The app places and sizes its window on macOS; on Linux the compositor does.
+    #[cfg(target_os = "macos")]
+    {
+        os::move_window(&app, 180, 140);
+        os::resize(&app, 1100, 760);
+        std::thread::sleep(Duration::from_millis(800));
+    }
     let (x, y) = row_at(&app, 1);
     real_click(&app, x, y);
     until(&app, "the long page", 30, |a| titles(a)[1] == "Long");
@@ -1692,6 +1629,7 @@ fn real_a_relaunch_restores_the_session() {
     assert_eq!(saved_urls, urls.iter().map(String::as_str).collect::<Vec<_>>(), "{saved}");
     assert_eq!(window["activeId"], tabs[2]["id"]);
     assert_eq!(tabs[1]["scroll"], serde_json::json!([0.0, 600.0]), "{saved}");
+    #[cfg(target_os = "macos")]
     assert_eq!((window["x"].as_f64(), window["y"].as_f64()), (Some(before.0), Some(before.1)), "{saved}");
     drop(app);
 
@@ -1704,10 +1642,12 @@ fn real_a_relaunch_restores_the_session() {
     until(&app, "beta shown again", 30, |a| shown_title(a) == "Beta");
     assert_eq!(live_pages(&app), Some(1), "only the shown tab loads");
     let after = front_window(&app).bounds;
+    #[cfg(target_os = "macos")]
     assert!(
         (after.0 - before.0).abs() < 2. && (after.1 - before.1).abs() < 2. && (after.2 - before.2).abs() < 2.,
         "the window came back at {after:?}, not {before:?}"
     );
+    let _ = (before, after);
     let stamp = restored[1].clone();
     let (x, y) = row_at(&app, 1);
     real_click(&app, x, y);
@@ -1792,7 +1732,7 @@ fn real_a_quit_writes_the_last_change() {
             && session_of(&profile)["windows"][0]["tabs"].as_array().map(Vec::len) == Some(2)
     });
     // Shown by the next key, then quit before the store's debounce has passed.
-    app.keyboard().press("cmd-1").unwrap();
+    app.keyboard().press(&os::chord("cmd-1")).unwrap();
     quit(&app);
     drop(app);
     let saved = session_of(&profile);
@@ -1889,6 +1829,8 @@ fn real_a_restored_tab_that_no_longer_loads_stays() {
 
 /// Two launches at the same moment on one profile: one browser comes up with the session and
 /// the other's address, and the session holds each tab once.
+/// macOS only for now: on Linux the second launch has to reach the first's private display.
+#[cfg(target_os = "macos")]
 #[test]
 fn real_two_launches_at_once_share_one_session() {
     if !real_allowed() {
@@ -1907,13 +1849,9 @@ fn real_two_launches_at_once_share_one_session() {
         .unwrap();
     let mut other = Reaped(other);
     let other = &mut other.0;
-    let options = LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
-        .env("ND_CEF_STYLE", "chrome")
-        .env("ND_APP_DATA_DIR", profile.display().to_string())
-        .arg(format!("{base}/press"));
     // Either launch can take the profile. This one can open its automation socket and still
     // lose, hand its address over and quit, so the one left running is the one that won.
-    let this = launch_app(options).ok();
+    let this = nd_test::launch_app(profile_options(&profile, &[format!("{base}/press")])).ok();
     let deadline = Instant::now() + Duration::from_secs(20);
     let won = loop {
         let this_gone = this.as_ref().is_none_or(|a| gone(a.pid()));
@@ -1926,14 +1864,15 @@ fn real_two_launches_at_once_share_one_session() {
         assert!(
             Instant::now() < deadline,
             "both launches kept running\nthe other:\n{}\nthis one:\n{}",
-            main_thread_of(other.id()),
-            this.as_ref().map(|a| main_thread_of(a.pid())).unwrap_or_default()
+            os::main_thread_of(other.id()),
+            this.as_ref().map(|a| os::main_thread_of(a.pid())).unwrap_or_default()
         );
         std::thread::sleep(Duration::from_millis(100));
     };
     match won {
         Some(app) => {
-            activate(app.pid());
+            let app = os::App::from(app);
+            os::in_front(&app);
             until(&app, "both launches' tabs", 30, |a| rows(a).len() == 4);
             quit(&app);
         }
@@ -1957,8 +1896,10 @@ fn real_two_launches_at_once_share_one_session() {
 }
 
 /// A child process killed when the case ends, a failed one included.
+#[cfg(target_os = "macos")]
 struct Reaped(std::process::Child);
 
+#[cfg(target_os = "macos")]
 impl Drop for Reaped {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -1967,6 +1908,7 @@ impl Drop for Reaped {
 }
 
 /// The main display's frame in global points, `(x, y, width, height)`.
+#[cfg(target_os = "macos")]
 fn main_display() -> (f64, f64, f64, f64) {
     let script = "ObjC.import('AppKit'); const f = $.NSScreen.screens.objectAtIndex(0).frame; \
                   [f.origin.x, f.origin.y, f.size.width, f.size.height].join(',')";
@@ -1976,6 +1918,7 @@ fn main_display() -> (f64, f64, f64, f64) {
 }
 
 /// A window kept on a display that is gone comes back on one that is there.
+#[cfg(target_os = "macos")]
 #[test]
 fn real_a_window_from_a_display_that_is_gone_comes_back_on_screen() {
     if !real_allowed() {
@@ -2010,34 +1953,31 @@ fn bar_field(app: &AppHandle) -> Option<String> {
     })
 }
 
-/// Opens the bar with Cmd and `code` (T, L, K) through the HID system and waits for it.
+/// Opens the bar with Cmd (Ctrl on Linux) and `code` (T, L, K) on the system's keyboard and waits
+/// for it.
 #[track_caller]
-fn open_bar(app: &AppHandle, code: u16) {
-    in_front(app);
-    hid(code, &[Modifier::Command]);
+fn open_bar(app: &App, code: os::Code) {
+    os::in_front(app);
+    hid(app, code, &[os::CMD]);
     bar_wait(app, true);
 }
 
 #[track_caller]
-fn bar_closed(app: &AppHandle) {
+fn bar_closed(app: &App) {
     bar_wait(app, false);
 }
 
 /// Waits for the bar to be open or closed, with a capture and the app's windows when it is not.
 #[track_caller]
-fn bar_wait(app: &AppHandle, open: bool) {
+fn bar_wait(app: &App, open: bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while bar_field(app).is_some() != open {
         if Instant::now() > deadline {
             shot(app, "bar-timeout");
-            let windows = ndshell::window_list::of_pid(app.pid());
-            let front = std::process::Command::new("sh")
-                .args(["-c", "lsappinfo info -only name $(lsappinfo front)"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
             panic!(
-                "the bar never {}: windows {windows:?}, keys {:?}, front app {front:?}, app said {:#?}",
+                "the bar never {}: windows {:?}, keys {:?}, app said {:#?}",
                 if open { "opened" } else { "closed" },
+                os::windows(app),
                 app.windows(),
                 app.stderr_tail(25)
             );
@@ -2046,51 +1986,45 @@ fn bar_wait(app: &AppHandle, open: bool) {
     }
 }
 
-/// Types at the HID tap, character by character, as a keyboard would.
-fn type_real(text: &str) {
-    ndshell::input::type_text(text);
+/// Types on the system's keyboard, character by character, as a keyboard would.
+fn type_real(app: &App, text: &str) {
+    os::type_text(app, text);
     std::thread::sleep(Duration::from_millis(400));
 }
 
-/// Pastes `text` with Cmd+V, from the real pasteboard.
-fn paste(text: &str) {
-    let mut copy = std::process::Command::new("pbcopy")
-        .env("LANG", "en_US.UTF-8")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    copy.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
-    assert!(copy.wait().unwrap().success());
-    hid(key::V, &[Modifier::Command]);
+/// Pastes `text` with Cmd+V (Ctrl+V on Linux), from the real clipboard.
+fn paste(app: &App, text: &str) {
+    os::set_clipboard(app, text);
+    hid(app, key::V, &[os::CMD]);
 }
 
 /// Opens `url` in a new tab through the bar, as typed.
 #[track_caller]
-fn open_in_new_tab(app: &AppHandle, url: &str) {
+fn open_in_new_tab(app: &App, url: &str) {
     let before = titles(app).len();
     open_bar(app, key::T);
-    type_real(url);
-    hid(key::RETURN, &[]);
+    type_real(app, url);
+    hid(app, key::ENTER, &[]);
     bar_closed(app);
     until(app, "the new tab", 15, |a| titles(a).len() == before + 1);
 }
 
 /// The shown tab's address, as the bar Cmd+L opens on it holds it.
 #[track_caller]
-fn address(app: &AppHandle) -> String {
+fn address(app: &App) -> String {
     open_bar(app, key::L);
     let field = bar_field(app).unwrap_or_default();
-    hid(key::ESCAPE, &[]);
+    hid(app, key::ESCAPE, &[]);
     bar_closed(app);
     field
 }
 
 /// Types `text` over a Cmd+L selection and goes there with Return.
 #[track_caller]
-fn go_to(app: &AppHandle, text: &str) {
+fn go_to(app: &App, text: &str) {
     open_bar(app, key::L);
-    type_real(text);
-    hid(key::RETURN, &[]);
+    type_real(app, text);
+    hid(app, key::ENTER, &[]);
     bar_closed(app);
 }
 
@@ -2110,7 +2044,7 @@ fn real_command_bar_keeps_keys_typed_during_a_load() {
         until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
         open_bar(&app, key::L);
         let typed = format!("{base}/alpha?{n}");
-        ndshell::input::type_text(&typed);
+        os::type_text(&app, &typed);
         let deadline = Instant::now() + Duration::from_secs(5);
         while bar_field(&app).and_then(|f| f.split('|').next().map(str::to_owned)).as_deref() != Some(typed.as_str()) {
             assert!(
@@ -2121,20 +2055,86 @@ fn real_command_bar_keeps_keys_typed_during_a_load() {
             );
             std::thread::sleep(Duration::from_millis(100));
         }
-        hid(key::ESCAPE, &[]);
+        hid(&app, key::ESCAPE, &[]);
         bar_closed(&app);
     }
     assert_eq!(titles(&app).len(), 1, "no search for keys the page took");
 }
 
 /// The bar's field as typed, without a completion it shows.
-fn bar_typed(app: &AppHandle) -> String {
+fn bar_typed(app: &App) -> String {
     bar_field(app).and_then(|f| f.split('|').next().map(str::to_owned)).unwrap_or_default()
 }
 
+/// A 300-character address stays inside the bar's field, with the caret keys, typing at its end
+/// and a 2,000-character paste.
+#[test]
+fn real_command_bar_long_address_stays_in_its_field() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let long = format!("{base}/beta?{}", "segment/".repeat(36));
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    go_to(&app, &long);
+    until(&app, "Beta", 15, |a| titles(a) == ["Beta"]);
+
+    // Right of the card, a field that does not clip shows the address's tail.
+    open_bar(&app, key::T);
+    type_real(&app, "b");
+    let edge = |what: &str| {
+        shot(&app, what);
+        #[cfg(target_os = "linux")]
+        return os::right_edge(&app, &front_window(&app), front_window(&app).bounds.2 * 0.2, 3);
+        #[cfg(not(target_os = "linux"))]
+        Vec::<[u8; 3]>::new()
+    };
+    let clear = edge("bar-long-reference");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    let clipped = |what: &str| {
+        let seen = edge(what);
+        let off =
+            clear.iter().zip(&seen).filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 24)).count();
+        assert_eq!(off, 0, "{what}: {off} pixels right of the bar changed");
+    };
+
+    open_bar(&app, key::L);
+    let address = bar_typed(&app);
+    assert!(address.len() >= 300, "the bar holds the address: {address:?}");
+    clipped("bar-long-selected");
+    hid(&app, os::LINE_END.0, os::LINE_END.1);
+    clipped("bar-long-end");
+    type_real(&app, "x");
+    assert_eq!(bar_typed(&app), format!("{address}x"), "the line's end, then typing, adds at the end");
+    hid(&app, os::LINE_START.0, os::LINE_START.1);
+    type_real(&app, "y");
+    hid(&app, key::RIGHT, &[]);
+    type_real(&app, "z");
+    hid(&app, key::LEFT, &[]);
+    hid(&app, key::LEFT, &[]);
+    type_real(&app, "w");
+    assert_eq!(
+        bar_typed(&app),
+        format!("yw{}z{}x", &address[..1], &address[1..]),
+        "the line's start, Right and Left move the caret"
+    );
+    clipped("bar-long-home");
+
+    let pasted = format!("{base}/beta?{}", "p".repeat(2000 - base.len() - 6));
+    hid(&app, key::A, &[os::CMD]);
+    paste(&app, &pasted);
+    until(&app, "the pasted address", 5, |a| bar_typed(a) == pasted);
+    clipped("bar-long-pasted");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    quit(&app);
+}
+
 /// A 300-character address in the bar: the caret keys, typing at its end and a 2,000-character
-/// paste edit it where the caret is. Cmd+arrows go to the ends, as in any AppKit field, where
-/// Home and End only scroll.
+/// paste edit it where the caret is. The line's ends are Cmd+arrows on macOS, as in any AppKit
+/// field, and Home and End elsewhere.
 #[test]
 fn real_command_bar_long_address_edits_at_the_caret() {
     if !real_allowed() {
@@ -2151,30 +2151,30 @@ fn real_command_bar_long_address_edits_at_the_caret() {
     let address = bar_typed(&app);
     assert!(address.len() >= 300, "the bar holds the address: {address:?}");
     shot(&app, "bar-long-selected");
-    hid(key::RIGHT, &[Modifier::Command]);
+    hid(&app, os::LINE_END.0, os::LINE_END.1);
     shot(&app, "bar-long-end");
-    type_real("x");
-    assert_eq!(bar_typed(&app), format!("{address}x"), "Cmd+Right, then typing, adds at the end");
-    hid(key::LEFT, &[Modifier::Command]);
-    type_real("y");
-    hid(key::RIGHT, &[]);
-    type_real("z");
-    hid(key::LEFT, &[]);
-    hid(key::LEFT, &[]);
-    type_real("w");
+    type_real(&app, "x");
+    assert_eq!(bar_typed(&app), format!("{address}x"), "the line's end, then typing, adds at the end");
+    hid(&app, os::LINE_START.0, os::LINE_START.1);
+    type_real(&app, "y");
+    hid(&app, key::RIGHT, &[]);
+    type_real(&app, "z");
+    hid(&app, key::LEFT, &[]);
+    hid(&app, key::LEFT, &[]);
+    type_real(&app, "w");
     assert_eq!(
         bar_typed(&app),
         format!("yw{}z{}x", &address[..1], &address[1..]),
-        "Cmd+Left, Right and Left move the caret"
+        "the line's start, Right and Left move the caret"
     );
     shot(&app, "bar-long-home");
 
     let pasted = format!("{base}/beta?{}", "p".repeat(2000 - base.len() - 6));
-    hid(key::A, &[Modifier::Command]);
-    paste(&pasted);
+    hid(&app, key::A, &[os::CMD]);
+    paste(&app, &pasted);
     until(&app, "the pasted address", 5, |a| bar_typed(a) == pasted);
     shot(&app, "bar-long-pasted");
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
     quit(&app);
 }
@@ -2193,13 +2193,13 @@ fn real_command_bar_opens_sites() {
     // Cmd+T is a bar, not a tab: Escape mid-typing leaves no blank tab behind, and neither does
     // Return on an empty field.
     open_bar(&app, key::T);
-    type_real("half typ");
+    type_real(&app, "half typ");
     shot(&app, "bar-typing");
     assert_eq!(bar_field(&app).as_deref(), Some("half typ"));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
     open_bar(&app, key::T);
-    hid(key::RETURN, &[]);
+    hid(&app, key::ENTER, &[]);
     bar_closed(&app);
     assert_eq!(titles(&app), ["Alpha"], "no dead blank tab");
 
@@ -2228,7 +2228,15 @@ fn real_command_bar_opens_sites() {
     // A bare domain and an internationalised one are addresses, not searches.
     go_to(&app, "example.com");
     until(&app, "the bare domain", 15, |a| address(a).starts_with("https://example.com"));
-    go_to(&app, "b\u{fc}cher.de");
+    // The compositor's virtual keyboard types no letters outside its US layout, so Linux pastes.
+    if cfg!(target_os = "macos") {
+        go_to(&app, "b\u{fc}cher.de");
+    } else {
+        open_bar(&app, key::L);
+        paste(&app, "b\u{fc}cher.de");
+        hid(&app, key::ENTER, &[]);
+        bar_closed(&app);
+    }
     until(&app, "the IDN host's page", 30, |a| titles(a).get(1).is_some_and(|t| t.contains("b\u{fc}cher.de")));
 
     // data: and file: addresses load as typed.
@@ -2241,16 +2249,16 @@ fn real_command_bar_opens_sites() {
 
     // Pasted text keeps no trailing newline, and a 2000 character address goes in whole.
     open_bar(&app, key::L);
-    paste(&format!("{base}/beta?pasted\n"));
-    hid(key::RETURN, &[]);
+    paste(&app, &format!("{base}/beta?pasted\n"));
+    hid(&app, key::ENTER, &[]);
     bar_closed(&app);
     until(&app, "the pasted address", 15, |a| address(a) == format!("{base}/beta?pasted"));
     let long = format!("{base}/beta?{}", "q".repeat(2000 - base.len() - 6));
     assert_eq!(long.len(), 2000);
     open_bar(&app, key::L);
-    paste(&long);
+    paste(&app, &long);
     shot(&app, "bar-long-url");
-    hid(key::RETURN, &[]);
+    hid(&app, key::ENTER, &[]);
     bar_closed(&app);
     until(&app, "the long address", 15, |a| address(a) == long);
 
@@ -2271,12 +2279,12 @@ fn real_command_bar_opens_sites() {
     real_click(&app, x, y);
     bar_wait(&app, true);
     assert_eq!(bar_field(&app), Some(format!("{base}/beta")));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
 
     // A second Cmd+L puts the bar away.
     open_bar(&app, key::L);
-    hid(key::L, &[Modifier::Command]);
+    hid(&app, key::L, &[os::CMD]);
     bar_closed(&app);
     drop(app);
 
@@ -2284,13 +2292,15 @@ fn real_command_bar_opens_sites() {
     let app = launch("");
     until(&app, "the new tab page", 30, |a| has(a, "new-tab-page"));
     open_bar(&app, key::T);
-    type_real(&format!("{base}/beta"));
-    hid(key::RETURN, &[]);
+    type_real(&app, &format!("{base}/beta"));
+    hid(&app, key::ENTER, &[]);
     until(&app, "Beta in the blank tab", 15, |a| titles(a) == ["Beta"]);
 }
 
 /// Another app taking focus leaves the bar open, and coming back gives its field the keys again,
 /// as it had them.
+/// macOS only for now: the other app is Finder.
+#[cfg(target_os = "macos")]
 #[test]
 fn real_command_bar_survives_an_app_switch() {
     if !real_allowed() {
@@ -2300,22 +2310,21 @@ fn real_command_bar_survives_an_app_switch() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     open_bar(&app, key::T);
-    type_real("lynk-");
+    type_real(&app, "lynk-");
     let finder = std::process::Command::new("pgrep").args(["-x", "Finder"]).output().unwrap();
     let finder: u32 = String::from_utf8_lossy(&finder.stdout).trim().parse().expect("Finder runs");
     ndshell::input::activate(finder);
-    let away = |a: &AppHandle| {
-        a.windows().ok().is_some_and(|w| w.as_array().is_some_and(|ws| ws.iter().all(|w| w["key"] != true)))
-    };
+    let away =
+        |a: &App| a.windows().ok().is_some_and(|w| w.as_array().is_some_and(|ws| ws.iter().all(|w| w["key"] != true)));
     until(&app, "another app in front", 10, away);
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(bar_field(&app).as_deref(), Some("lynk-"), "the bar stays open while away");
     // The bar's panel takes key back, not the window under it.
     ndshell::input::activate(app.pid());
     std::thread::sleep(Duration::from_millis(600));
-    type_real("back");
+    type_real(&app, "back");
     assert_eq!(bar_field(&app).as_deref(), Some("lynk-back"), "the field has the keys again");
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
     assert_eq!(titles(&app), ["Alpha"]);
 }
@@ -2335,14 +2344,13 @@ fn real_command_bar_keeps_the_keys_while_a_window_behind_loads() {
     press(&app, "cmd-n");
     until(&app, "a second window", 10, |a| window_count(a) == 2);
     open_bar(&app, key::T);
-    type_real("lynk-");
-    let behind_loaded =
-        |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Beta"]));
+    type_real(&app, "lynk-");
+    let behind_loaded = |a: &App| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Beta"]));
     until(&app, "the window behind on its new site", 20, behind_loaded);
     std::thread::sleep(Duration::from_secs(1));
-    type_real("back");
+    type_real(&app, "back");
     assert_eq!(bar_field(&app).as_deref(), Some("lynk-back"), "the bar in front kept the keys");
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
 }
 
@@ -2378,36 +2386,36 @@ fn real_command_bar_suggests() {
     // Inline completion from history: the host and its port, shown selected after what was typed.
     let port = base.rsplit(':').next().unwrap().to_owned();
     open_bar(&app, key::T);
-    type_real("127.0.0");
+    type_real(&app, "127.0.0");
     until(&app, "the completed host", 5, |a| bar_field(a) == Some(format!("127.0.0|.1:{port}")));
     // Backspace takes the completion away, and it stays away until the next letter.
-    hid(key::BACKSPACE, &[]);
+    hid(&app, key::BACKSPACE, &[]);
     until(&app, "the completion gone", 5, |a| bar_field(a).as_deref() == Some("127.0.0"));
-    type_real(".");
+    type_real(&app, ".");
     until(&app, "completing again", 5, |a| bar_field(a) == Some(format!("127.0.0.|1:{port}")));
     // Tab takes it; then a path finishes from history.
-    hid(key::TAB, &[]);
+    hid(&app, key::TAB, &[]);
     until(&app, "the host taken", 5, |a| bar_field(a).as_deref() == Some(host.as_str()));
-    type_real("/pl");
+    type_real(&app, "/pl");
     until(&app, "the path completed", 5, |a| bar_field(a) == Some(format!("{host}/pl|ain")));
     let rows = bar_rows(&app);
     assert!(rows.first().is_some_and(|r| r.starts_with(&format!("{host}/plain"))), "{rows:?}");
-    hid(key::RETURN, &[]);
+    hid(&app, key::ENTER, &[]);
     bar_closed(&app);
     until(&app, "the completed address in a new tab", 15, |a| titles(a) == ["Plain", "Beta", "Plain"]);
 
     // An open tab is offered as a switch: Down, then Return, shows it instead of opening it again.
     open_bar(&app, key::L);
-    type_real("Bet");
+    type_real(&app, "Bet");
     until(&app, "the open tab offered", 5, |a| {
         bar_rows(a).iter().any(|r| r.starts_with("Beta") && r.ends_with("Switch to Tab"))
     });
     let rows = bar_rows(&app);
     let at = rows.iter().position(|r| r.ends_with("Switch to Tab")).unwrap();
     for _ in 0..at {
-        hid(key::DOWN, &[]);
+        hid(&app, key::DOWN, &[]);
     }
-    hid(key::RETURN, &[]);
+    hid(&app, key::ENTER, &[]);
     bar_closed(&app);
     until(&app, "Beta shown", 10, |a| shown_title(a) == "Beta");
     assert_eq!(titles(&app), ["Plain", "Beta", "Plain"], "switched, not opened again");
@@ -2416,7 +2424,7 @@ fn real_command_bar_suggests() {
     open_bar(&app, key::K);
     let rows = bar_rows(&app);
     assert!(rows.first().is_some_and(|r| r.starts_with("Plain") && r.ends_with("Switch to Tab")), "{rows:?}");
-    hid(key::RETURN, &[]);
+    hid(&app, key::ENTER, &[]);
     bar_closed(&app);
     until(&app, "back to the tab before", 10, |a| shown_title(a) == "Plain");
 
@@ -2428,27 +2436,29 @@ fn real_command_bar_suggests() {
     // separator (37 pt), then 40 pt rows. Not `real_click`: the bar's panel has key, not the
     // window it waits for.
     let (wx, wy, _, wh) = front_window(&app).bounds;
-    ndshell::input::click((wx + 600., wy + (wh * 0.18).round() + 26. + 37. + 40. * at as f64 + 20.));
+    os::click(&app, (wx + 600., wy + (wh * 0.18).round() + 26. + 37. + 40. * at as f64 + 20.));
     bar_closed(&app);
     until(&app, "Beta by the pointer", 10, |a| shown_title(a) == "Beta");
 
     // Typing fast while the rows come back from history keeps every letter, in order.
     open_bar(&app, key::T);
-    type_real(&format!("{host}/beta?fast-typing"));
+    type_real(&app, &format!("{host}/beta?fast-typing"));
     assert_eq!(bar_field(&app), Some(format!("{host}/beta?fast-typing")));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
 }
 
 /// A capture for the report, under the worktree's `target/report-shots`, at the display's scale.
-fn report_shot(app: &AppHandle, name: &str) {
+#[cfg(target_os = "macos")]
+fn report_shot(app: &App, name: &str) {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/report-shots");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.png"));
-    ndshell::window_list::capture(front_window(app).number, &path).unwrap();
+    os::capture(app, &front_window(app), &path);
     println!("screenshot {}", path.display());
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn real_command_bar_looks() {
     if !real_allowed() {
@@ -2467,37 +2477,36 @@ fn real_command_bar_looks() {
                 .env("ND_THEME_TOML", theme.to_str().unwrap()),
             |o, url| o.arg(url),
         );
-        let app = launch_app(options).unwrap();
-        activate(app.pid());
+        let app = os::launch(options);
         until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
         for width in [1200, 720] {
             resize(&app, width);
             let name = |what: &str| format!("bar-{appearance}-{width}-{what}");
             open_bar(&app, key::T);
             report_shot(&app, &name("empty"));
-            type_real("bet");
+            type_real(&app, "bet");
             report_shot(&app, &name("few"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             open_bar(&app, key::K);
             report_shot(&app, &name("many"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             press(&app, "cmd-3");
             open_bar(&app, key::L);
             report_shot(&app, &name("long-url"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             press(&app, "cmd-1");
             open_bar(&app, key::T);
-            type_real("\u{645}\u{631}\u{62d}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}");
+            type_real(&app, "\u{645}\u{631}\u{62d}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}");
             report_shot(&app, &name("rtl"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             open_bar(&app, key::T);
-            type_real("\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{691c}\u{7d22} \u{30c6}\u{30b9}\u{30c8}");
+            type_real(&app, "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{691c}\u{7d22} \u{30c6}\u{30b9}\u{30c8}");
             report_shot(&app, &name("cjk"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
         }
     }
@@ -2505,7 +2514,7 @@ fn real_command_bar_looks() {
 
 /// The first window's pinned tiles in reading order: their tab's label and their frame, in
 /// window points.
-fn tiles(app: &AppHandle) -> Vec<(String, (f32, f32, f32, f32))> {
+fn tiles(app: &App) -> Vec<(String, (f32, f32, f32, f32))> {
     let Ok(tree) = app.tree(None) else { return Vec::new() };
     let Some(window) = tree.windows.first() else { return Vec::new() };
     let mut tiles: Vec<_> = window
@@ -2524,11 +2533,11 @@ fn tiles(app: &AppHandle) -> Vec<(String, (f32, f32, f32, f32))> {
     tiles
 }
 
-fn tile_names(app: &AppHandle) -> Vec<String> {
+fn tile_names(app: &App) -> Vec<String> {
     tiles(app).into_iter().map(|t| t.0).collect()
 }
 
-fn tile_at(app: &AppHandle, index: usize) -> (f32, f32) {
+fn tile_at(app: &App, index: usize) -> (f32, f32) {
     let (_, (x, y, w, h)) = tiles(app)[index].clone();
     (x + w / 2., y + h / 2.)
 }
@@ -2630,7 +2639,7 @@ fn real_pinned_grid_at_two_widths() {
             let before_rows = rows(&app);
             let (wx, wy, _, _) = front_window(&app).bounds;
             let at = row_at(&app, 3);
-            ndshell::input::scroll((wx + f64::from(at.0), wy + f64::from(at.1)), -800, 8);
+            os::scroll(&app, (wx + f64::from(at.0), wy + f64::from(at.1)), -800, 8);
             until(&app, "the list scrolled", 10, |a| rows(a) != before_rows);
             let after: Vec<_> = tiles(&app).into_iter().map(|t| t.1).collect();
             assert_eq!(after, laid.iter().map(|t| t.1).collect::<Vec<_>>(), "the tiles moved with the list");
@@ -2695,27 +2704,27 @@ fn real_drag_between_the_list_and_the_pins() {
     let from = row_at(&app, 1);
     let (_, (tx, ty, tw, th)) = tiles(&app)[0].clone();
     let to = (tx + tw * 1.6, ty + th / 2.);
-    ndshell::input::drag(global(from), f64::from(to.0 - from.0), f64::from(to.1 - from.1), 16);
+    os::drag(&app, global(from), f64::from(to.0 - from.0), f64::from(to.1 - from.1), 16);
     until(&app, "the row pinned by a drop", 10, |a| tiles(a).len() == 2 && titles(a).len() == 1);
     shot(&app, "pins-dropped-row");
 
     let order = tile_names(&app);
     let (a, b) = (tile_at(&app, 0), tile_at(&app, 1));
-    ndshell::input::drag(global(b), f64::from(a.0 - b.0 - 8.), f64::from(a.1 - b.1), 16);
+    os::drag(&app, global(b), f64::from(a.0 - b.0 - 8.), f64::from(a.1 - b.1), 16);
     until(&app, "the tiles swapped", 10, |a| tile_names(a) == [order[1].clone(), order[0].clone()]);
 
     let tile = tile_at(&app, 0);
     let row = row_at(&app, 0);
-    ndshell::input::drag(global(tile), f64::from(row.0 - tile.0), f64::from(row.1 - tile.1 - 4.), 16);
+    os::drag(&app, global(tile), f64::from(row.0 - tile.0), f64::from(row.1 - tile.1 - 4.), 16);
     until(&app, "the tile unpinned by a drop", 10, |a| tiles(a).len() == 1 && titles(a).len() == 2);
     quit(&app);
 }
 
 /// Runs a command from the bar: types `typed` and takes the row that starts with `row`.
 #[track_caller]
-fn run_command(app: &AppHandle, typed: &str, row: &str) {
+fn run_command(app: &App, typed: &str, row: &str) {
     open_bar(app, key::K);
-    type_real(typed);
+    type_real(app, typed);
     let deadline = Instant::now() + Duration::from_secs(10);
     let at = loop {
         let rows = bar_rows(app);
@@ -2726,27 +2735,27 @@ fn run_command(app: &AppHandle, typed: &str, row: &str) {
         std::thread::sleep(Duration::from_millis(150));
     };
     for _ in 0..at {
-        hid(key::DOWN, &[]);
+        hid(app, key::DOWN, &[]);
         std::thread::sleep(Duration::from_millis(80));
     }
-    hid(key::RETURN, &[]);
+    hid(app, key::ENTER, &[]);
     bar_closed(app);
 }
 
 /// Makes a profile called `name` from the command bar, which opens a window in it.
 #[track_caller]
-fn new_profile(app: &AppHandle, name: &str) {
+fn new_profile(app: &App, name: &str) {
     let before = window_count(app);
     run_command(app, "new profile", "New Profile");
     until(app, "the name field", 10, |a| has(a, "profile-name"));
-    paste(name);
+    paste(app, name);
     std::thread::sleep(Duration::from_millis(300));
-    hid(key::RETURN, &[]);
+    hid(app, key::ENTER, &[]);
     until(app, "a window in the new profile", 20, |a| window_count(a) == before + 1);
 }
 
 /// Each window's title, which is its shown tab's.
-fn all_titles(app: &AppHandle) -> Vec<String> {
+fn all_titles(app: &App) -> Vec<String> {
     let windows = app.windows().unwrap_or_default();
     let mut titles: Vec<String> = windows
         .as_array()
@@ -2768,31 +2777,6 @@ fn profiles_in(dir: &std::path::Path) -> Vec<(String, String, bool)> {
         .collect()
 }
 
-/// Clicks the button titled `title` in the app's alert, sheet or window.
-fn click_alert_button(app: &AppHandle, title: &str) {
-    let script = format!(
-        r#"tell application "System Events" to tell (first process whose unix id is {pid})
-            repeat with w in windows
-                if exists button "{title}" of w then
-                    click button "{title}" of w
-                    return
-                end if
-                if exists sheet 1 of w then
-                    if exists button "{title}" of sheet 1 of w then
-                        click button "{title}" of sheet 1 of w
-                        return
-                    end if
-                end if
-            end repeat
-            error "no button {title}"
-        end tell"#,
-        pid = app.pid()
-    );
-    let status = std::process::Command::new("osascript").args(["-e", &script]).status().unwrap();
-    assert!(status.success(), "no {title} button");
-    std::thread::sleep(Duration::from_millis(500));
-}
-
 /// Two profiles with windows open together keep their cookies apart, come back together after
 /// a restart, and switching brings each one's window forward. A cookie set in Default is sent
 /// to Default's pages only.
@@ -2812,9 +2796,9 @@ fn real_two_profiles_keep_their_cookies_apart() {
     run_command(&app, "switch to default", "Switch to Default");
     // Keys typed the moment the switched-to window comes forward can land before its bar does.
     open_bar(&app, key::T);
-    paste(&format!("{base}/cookie"));
+    paste(&app, &format!("{base}/cookie"));
     std::thread::sleep(Duration::from_millis(300));
-    hid(key::RETURN, &[]);
+    hid(&app, key::ENTER, &[]);
     bar_closed(&app);
     until(&app, "Default sent its cookie", 15, |a| all_titles(a) == ["Cookie none", "Cookie who=one"]);
     let profiles = profiles_in(&dir);
@@ -2829,13 +2813,13 @@ fn real_two_profiles_keep_their_cookies_apart() {
     // Each window's shown page reloads at launch, sending what its profile has kept.
     let app = launch_on(&dir, &[]);
     until(&app, "both profiles back, still apart", 30, |a| all_titles(a) == ["Cookie none", "Cookie who=one"]);
-    let key_title = |a: &AppHandle| {
+    let key_title = |a: &App| {
         a.windows().ok().and_then(|w| w.as_array().cloned()).and_then(|ws| {
             ws.iter().find(|w| w["key"] == true).map(|w| w["title"].as_str().unwrap_or_default().to_owned())
         })
     };
     for (row, title) in [("Switch to Default", "Cookie who=one"), ("Switch to Work", "Cookie none")] {
-        in_front(&app);
+        os::in_front(&app);
         // The profile in front offers no switch to itself.
         if key_title(&app).as_deref() != Some(title) {
             run_command(&app, &row.to_lowercase(), row);
@@ -2872,12 +2856,12 @@ fn real_delete_the_open_profile() {
     run_command(&app, "delete profile", "Delete Profile");
     std::thread::sleep(Duration::from_secs(1));
     shot(&app, "profiles-delete-asks");
-    click_alert_button(&app, "Cancel");
+    os::click_button(&app, "Cancel");
     std::thread::sleep(Duration::from_secs(1));
     assert_eq!(window_count(&app), 2, "Cancel keeps the profile");
     run_command(&app, "delete profile", "Delete Profile");
     std::thread::sleep(Duration::from_secs(1));
-    click_alert_button(&app, "Delete Profile");
+    os::click_button(&app, "Delete Profile");
     until(&app, "its window gone", 15, |a| window_count(a) == 1);
     assert_eq!(all_titles(&app), ["Alpha"]);
     assert_eq!(profiles_in(&dir).len(), 1);
@@ -2893,7 +2877,8 @@ fn real_delete_the_open_profile() {
 }
 
 /// A capture of the window's region of the screen, menus and popovers over it included.
-fn screen_shot(app: &AppHandle, name: &str) -> PathBuf {
+#[cfg(target_os = "macos")]
+fn screen_shot(app: &App, name: &str) -> PathBuf {
     let (x, y, w, h) = front_window(app).bounds;
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shell-{name}.png"));
     let region = format!("-R{x},{y},{w},{h}");
@@ -2906,6 +2891,7 @@ fn screen_shot(app: &AppHandle, name: &str) -> PathBuf {
 /// Captures of the pins and the profile controls in light and dark at 720 and 1200 pt: tiles at
 /// rest, under the pointer and pressed, the tile menu with Reset to Pinned Page off, the profile
 /// menu holding an 80 character name, and the name popover refusing a taken name.
+#[cfg(target_os = "macos")]
 #[test]
 fn real_pins_and_profiles_captures() {
     if !real_allowed() {
@@ -2932,23 +2918,22 @@ fn real_pins_and_profiles_captures() {
                 .env("ND_CEF_STYLE", "chrome")
                 .env("ND_THEME_TOML", theme.display().to_string())
                 .env("ND_APP_DATA_DIR", dir.display().to_string());
-            let app = launch_app(options).unwrap();
-            activate(app.pid());
+            let app = os::launch(options);
             until(&app, "the tiles", 30, |a| tiles(a).len() == 5 && shown_title(a) == "Alpha");
             std::thread::sleep(Duration::from_secs(1));
             let name = |state: &str| format!("pins-{state}-{appearance}-{width}");
             shot(&app, &name("rest"));
             let (wx, wy, _, _) = front_window(&app).bounds;
             let global = |p: (f32, f32)| (wx + f64::from(p.0), wy + f64::from(p.1));
-            ndshell::input::move_to(global(tile_at(&app, 2)));
+            os::move_to(&app, global(tile_at(&app, 2)));
             std::thread::sleep(Duration::from_millis(600));
             shot(&app, &name("hover"));
-            ndshell::input::hold(global(tile_at(&app, 2)));
+            os::hold(&app, global(tile_at(&app, 2)));
             std::thread::sleep(Duration::from_millis(300));
             shot(&app, &name("pressed"));
-            ndshell::input::release(global(tile_at(&app, 2)));
+            os::release(&app, global(tile_at(&app, 2)));
             std::thread::sleep(Duration::from_millis(600));
-            ndshell::input::right_click(global(tile_at(&app, 0)));
+            os::right_click(&app, global(tile_at(&app, 0)));
             std::thread::sleep(Duration::from_millis(700));
             screen_shot(&app, &name("tile-menu-reset-off"));
             press(&app, "escape");
@@ -2959,8 +2944,8 @@ fn real_pins_and_profiles_captures() {
             press(&app, "escape");
             run_command(&app, "new profile", "New Profile");
             until(&app, "the name field", 10, |a| has(a, "profile-name"));
-            type_real("default");
-            hid(key::RETURN, &[]);
+            type_real(&app, "default");
+            hid(&app, key::ENTER, &[]);
             until(&app, "the name refused", 10, |a| has(a, "profile-name-error"));
             shot(&app, &format!("profiles-name-taken-{appearance}-{width}"));
             press(&app, "escape");

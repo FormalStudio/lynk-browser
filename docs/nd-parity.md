@@ -216,7 +216,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] "Start with a Fresh Window": the pins of every window in one window in front of a new tab (the homepage if set)
 - [ ] `history.sqlite` (`visits(id, url, title, ts)`) read and written in place
 - [ ] Favicons cached per origin and per appearance (light and dark); icons that would vanish on the appearance are rejected; restored tabs show icons before their page loads (unit: port of `favicons.test.ts`)
-- [x] SIGTERM quits gracefully and nothing is cut off mid-write (old `sigterm-check`) (drive: `real_sigterm_quits_cleanly`, `real_a_relaunch_restores_the_session`, `real_two_hundred_tabs_restore_asleep`, `real_kill_9_never_leaves_a_broken_session`)
+- [x] SIGTERM quits gracefully and nothing is cut off mid-write (old `sigterm-check`) (drive: `real_sigterm_quits_cleanly`, `real_a_quit_writes_the_last_change`, `real_a_relaunch_restores_the_session`, `real_two_hundred_tabs_restore_asleep`, `real_kill_9_never_leaves_a_broken_session`)
 - [ ] Follows the system light and dark appearance
 
 ## Keyboard and menus

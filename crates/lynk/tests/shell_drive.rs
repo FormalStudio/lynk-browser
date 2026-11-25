@@ -1679,6 +1679,30 @@ fn real_a_broken_or_newer_session_starts_fresh() {
     }
 }
 
+/// A quit inside the store's debounce still writes the change that came just before it.
+#[test]
+fn real_a_quit_writes_the_last_change() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("session-quit");
+    let app = launch_on(&profile, &[format!("{base}/alpha")]);
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    open_in_new_tab(&app, &format!("{base}/beta"));
+    until(&app, "the new tab written", 10, |_| {
+        profile.join("session.json").exists()
+            && session_of(&profile)["windows"][0]["tabs"].as_array().map(Vec::len) == Some(2)
+    });
+    // Shown by the next key, then quit before the store's debounce has passed.
+    app.keyboard().press("cmd-1").unwrap();
+    quit(&app);
+    drop(app);
+    let saved = session_of(&profile);
+    let window = &saved["windows"][0];
+    assert_eq!(window["activeId"], window["tabs"][0]["id"], "{saved}");
+}
+
 /// `kill -9` while changes are being written leaves the last session written whole: it reads
 /// and restores every time.
 #[test]

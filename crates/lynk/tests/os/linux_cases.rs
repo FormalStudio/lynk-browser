@@ -783,3 +783,30 @@ fn real_quit_mid_load_with_devtools_and_two_windows() {
     quit_by(&app, Quit::Key);
     assert_eq!(session_of(&profile)["windows"].as_array().map(Vec::len), Some(2), "both windows saved");
 }
+
+/// One F12 opens DevTools every time: on a fresh launch, while a page is still loading, and
+/// right after DevTools was closed.
+#[test]
+fn real_one_f12_opens_devtools() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let opens = |app: &App, when: &str| {
+        os::key(app, key::F12, &[]);
+        until(app, &format!("DevTools from one F12 {when}"), 5, |a| os::windows(a).len() == 2);
+    };
+    for i in 0..30 {
+        let app = launch(&format!("{base}/alpha"));
+        until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+        opens(&app, &format!("on launch {i}"));
+        quit_by(&app, Quit::Term);
+    }
+    let app = launch(&format!("{base}/slow"));
+    until(&app, "the never-ending load", 15, |a| has(a, "load-bar"));
+    opens(&app, "during a load");
+    os::key(&app, key::F12, &[]);
+    until(&app, "DevTools closed", 5, |a| os::windows(a).len() == 1);
+    opens(&app, "after closing DevTools");
+    quit_by(&app, Quit::Term);
+}

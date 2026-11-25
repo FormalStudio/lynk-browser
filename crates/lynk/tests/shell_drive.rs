@@ -34,7 +34,7 @@ fn real_allowed() -> bool {
     allowed
 }
 
-const ALPHA: &str = r#"<!doctype html><title>Alpha</title>
+const ALPHA: &str = r#"<!doctype html><title>Alpha</title><link rel="icon" href="/icon.png">
 <body style="margin:0;font:16px sans-serif">
 <a id="go" href="/beta" style="display:block;height:200px;background:#cde">To beta</a>
 <p>needle one, needle two, needle three</p>
@@ -126,6 +126,16 @@ fn respond(mut stream: std::net::TcpStream) {
     }
     let target = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
     let path = target.split('?').next().unwrap_or("/");
+    if path == "/icon.png" {
+        let icon = include_bytes!("fixtures/icon.png");
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            icon.len()
+        );
+        let _ = stream.write_all(icon);
+        return;
+    }
     let page = |body: &str| ("200 OK", String::new(), body.to_owned());
     let (status, extra, body) = match path {
         "/alpha" => page(ALPHA),
@@ -2869,6 +2879,20 @@ fn real_command_bar_looks() {
     }
 }
 
+/// The tiles once two reads 150 ms apart agree: a reorder glides them to their slots.
+fn settled_tiles(app: &App) -> Vec<(String, (f32, f32, f32, f32))> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last = tiles(app);
+    loop {
+        std::thread::sleep(Duration::from_millis(150));
+        let now = tiles(app);
+        if now == last || Instant::now() > deadline {
+            return now;
+        }
+        last = now;
+    }
+}
+
 /// The first window's pinned tiles in reading order: their tab's label and their frame, in
 /// window points.
 fn tiles(app: &App) -> Vec<(String, (f32, f32, f32, f32))> {
@@ -2980,7 +3004,7 @@ fn real_pinned_grid_at_two_widths() {
             write_pinned(&profile, &base, n, 40, width);
             let app = launch_on(&profile, &[]);
             until(&app, "the tiles", 30, |a| tiles(a).len() == n && rows(a).len() > 5);
-            let laid = tiles(&app);
+            let laid = settled_tiles(&app);
             let top = laid[0].1.1;
             let first_row: Vec<f32> = laid.iter().filter(|t| (t.1.1 - top).abs() < 1.).map(|t| t.1.0).collect();
             assert_eq!(first_row.len(), n.min(columns), "{n} pins at {width}: {laid:?}");
@@ -2998,7 +3022,7 @@ fn real_pinned_grid_at_two_widths() {
             let at = row_at(&app, 3);
             os::scroll(&app, (wx + f64::from(at.0), wy + f64::from(at.1)), -800, 8);
             until(&app, "the list scrolled", 10, |a| rows(a) != before_rows);
-            let after: Vec<_> = tiles(&app).into_iter().map(|t| t.1).collect();
+            let after: Vec<_> = settled_tiles(&app).into_iter().map(|t| t.1).collect();
             assert_eq!(after, laid.iter().map(|t| t.1).collect::<Vec<_>>(), "the tiles moved with the list");
             quit(&app);
             drop(app);
@@ -3213,12 +3237,14 @@ fn real_delete_the_open_profile() {
     run_command(&app, "delete profile", "Delete Profile");
     std::thread::sleep(Duration::from_secs(1));
     shot(&app, "profiles-delete-asks");
+    assert!(os::alert_button_shown(&app, "Cancel"), "Delete Profile asks first");
     os::click_button(&app, "Cancel");
-    std::thread::sleep(Duration::from_secs(1));
+    until(&app, "the alert gone after Cancel", 10, |a| !os::alert_button_shown(a, "Cancel"));
     assert_eq!(window_count(&app), 2, "Cancel keeps the profile");
     run_command(&app, "delete profile", "Delete Profile");
     std::thread::sleep(Duration::from_secs(1));
     os::click_button(&app, "Delete Profile");
+    until(&app, "the alert gone after Delete", 10, |a| !os::alert_button_shown(a, "Cancel"));
     until(&app, "its window gone", 15, |a| window_count(a) == 1);
     assert_eq!(all_titles(&app), ["Alpha"]);
     assert_eq!(profiles_in(&dir).len(), 1);
@@ -3277,6 +3303,18 @@ fn real_pins_and_profiles_captures() {
                 .env("ND_APP_DATA_DIR", dir.display().to_string());
             let app = os::launch(options);
             until(&app, "the tiles", 30, |a| tiles(a).len() == 5 && shown_title(a) == "Alpha");
+            // Pins 2 and 3 wake and show the page's favicon; 4 and 5 sleep on their letter.
+            press(&app, "cmd-shift-]");
+            press(&app, "cmd-shift-]");
+            real_click(&app, tile_at(&app, 0).0, tile_at(&app, 0).1);
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while letters(&app) != 2 {
+                if Instant::now() > deadline {
+                    shot(&app, &format!("pins-favicons-timeout-{appearance}-{width}"));
+                    panic!("{} tiles still draw a letter", letters(&app));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
             std::thread::sleep(Duration::from_secs(1));
             let name = |state: &str| format!("pins-{state}-{appearance}-{width}");
             shot(&app, &name("rest"));
@@ -3294,11 +3332,7 @@ fn real_pins_and_profiles_captures() {
             std::thread::sleep(Duration::from_millis(700));
             screen_shot(&app, &name("tile-menu-reset-off"));
             press(&app, "escape");
-            let glyph = app.get_by_test_id("profile-menu").bounding_box().unwrap().expect("the profile glyph");
-            real_click(&app, glyph.x + glyph.width / 2., glyph.y + glyph.height / 2.);
-            std::thread::sleep(Duration::from_millis(700));
-            screen_shot(&app, &format!("profiles-menu-{appearance}-{width}"));
-            press(&app, "escape");
+            profile_menu_at_the_display_bottom(&app, &format!("profiles-menu-{appearance}-{width}"));
             run_command(&app, "new profile", "New Profile");
             until(&app, "the name field", 10, |a| has(a, "profile-name"));
             type_real(&app, "default");
@@ -3310,4 +3344,210 @@ fn real_pins_and_profiles_captures() {
             drop(app);
         }
     }
+}
+
+/// Under `pinStyle = "letters"` a loaded pin whose page has a favicon still draws its letter.
+#[test]
+fn real_letters_pin_style_keeps_the_letter() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let profile = profile("pins-letters");
+    write_pinned(&profile, &base, 2, 3, 1000);
+    std::fs::create_dir_all(profile.join("config")).unwrap();
+    std::fs::write(profile.join("config/config.toml"), "pinStyle = \"letters\"\n").unwrap();
+    let app = launch_on(&profile, &[]);
+    until(&app, "the pinned page", 30, |a| tiles(a).len() == 2 && shown_title(a) == "Alpha");
+    // Long enough for the page's icon to have replaced the letter under the icons style.
+    std::thread::sleep(Duration::from_secs(3));
+    shot(&app, "pins-letters-style");
+    assert_eq!(letters(&app), 2, "both tiles draw their letter");
+    quit(&app);
+}
+
+/// The pinned tiles drawing their letter, not a favicon.
+fn letters(app: &App) -> usize {
+    let Ok(tree) = app.tree(None) else { return 0 };
+    tree.windows.first().map_or(0, |w| {
+        w.root
+            .iter()
+            .filter(|n| n.visible && n.test_id.as_deref().is_some_and(|t| t.starts_with("pin-letter-")))
+            .count()
+    })
+}
+
+/// The main display's size in points.
+#[cfg(target_os = "macos")]
+fn display_size() -> (f64, f64) {
+    let out = std::process::Command::new("osascript")
+        .args([
+            "-l",
+            "JavaScript",
+            "-e",
+            "ObjC.import('AppKit'); var f = $.NSScreen.mainScreen.frame; '0,0,' + f.size.width + ',' + f.size.height",
+        ])
+        .output()
+        .unwrap();
+    let n: Vec<f64> = String::from_utf8_lossy(&out.stdout).split(',').filter_map(|v| v.trim().parse().ok()).collect();
+    (n[2], n[3])
+}
+
+/// The open menu's frame in global points: the app's one on-screen window above the normal
+/// layer.
+#[cfg(target_os = "macos")]
+fn open_menu_frame(app: &App) -> Option<(f64, f64, f64, f64)> {
+    let normal: Vec<u32> = ndshell::window_list::of_pid(app.pid()).iter().map(|w| w.number).collect();
+    ndshell::window_list::every_layer_of_pid(app.pid())
+        .into_iter()
+        .find(|w| !normal.contains(&w.number) && w.bounds.3 > 40.)
+        .map(|w| w.bounds)
+}
+
+/// Parks the window on the display's bottom edge, opens the foot's profile menu and captures the
+/// whole display: the menu opens upward from the glyph and stays on screen.
+#[cfg(target_os = "macos")]
+fn profile_menu_at_the_display_bottom(app: &App, name: &str) {
+    let (_, display_height) = display_size();
+    let (x, _, _, h) = front_window(app).bounds;
+    os::move_window(app, x as i32, (display_height - h) as i32);
+    let (wx, wy, _, _) = front_window(app).bounds;
+    let glyph = app.get_by_test_id("profile-menu").bounding_box().unwrap().expect("the profile glyph");
+    real_click(app, glyph.x + glyph.width / 2., glyph.y + glyph.height / 2.);
+    std::thread::sleep(Duration::from_millis(700));
+    screen_shot(app, name);
+    let menu = open_menu_frame(app).expect("the profile menu is open");
+    press(app, "escape");
+    let glyph_top = wy + f64::from(glyph.y);
+    assert!(menu.1 + menu.3 <= glyph_top + 2., "the menu opens upward from the glyph: {menu:?}, glyph top {glyph_top}");
+    assert!(menu.1 >= 0. && menu.1 + menu.3 <= display_height, "the menu stays on screen: {menu:?}");
+    assert!(menu.0 >= wx - 1., "the menu starts at the glyph, inside the window: {menu:?}");
+}
+
+/// A tab dragged to the top of a sidebar with nothing pinned finds a pin target there, and
+/// dropping it pins the tab.
+#[test]
+fn real_a_row_dropped_on_the_empty_pinned_block_pins() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/alpha"), format!("{base}/press")]);
+    until(&app, "two rows", 30, |a| titles(a).len() == 2 && tiles(a).is_empty());
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let global = |p: (f32, f32)| (wx + f64::from(p.0), wy + f64::from(p.1));
+    let strip = app.get_by_test_id("pin-target").bounding_box().unwrap().expect("the empty pinned block");
+    let from = global(row_at(&app, 1));
+    let to = global((strip.x + strip.width / 2., strip.y + strip.height / 2.));
+    os::hold(&app, from);
+    for i in 1..=16 {
+        let t = f64::from(i) / 16.;
+        let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+        os::drag_move(&app, at);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    until(&app, "the pin target", 5, |a| has(a, "pin-target-label"));
+    shot(&app, "pins-empty-target");
+    let open = app.get_by_test_id("pin-target").bounding_box().unwrap().expect("the target");
+    os::release(&app, global((open.x + open.width / 2., open.y + open.height / 2.)));
+    until(&app, "the row pinned", 10, |a| tiles(a).len() == 1 && titles(a).len() == 1);
+    assert!(lacks(&app, "pin-target"), "the target gives way to the tiles");
+    quit(&app);
+}
+
+/// Every window's nodes with `test_id`.
+fn count_ids(app: &App, test_id: &str) -> usize {
+    let Ok(tree) = app.tree(None) else { return 0 };
+    tree.windows.iter().flat_map(|w| w.root.iter()).filter(|n| n.test_id.as_deref() == Some(test_id)).count()
+}
+
+/// A profile is renamed in place; a profile whose last window closed opens again with its
+/// session when switched to; history and zoom levels stay with the profile they were made in,
+/// on the same host.
+#[test]
+fn real_rename_and_reopen_a_closed_profile() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = profile("profiles-closed");
+    let app = launch_on(&dir, &[format!("{base}/alpha")]);
+    until(&app, "the first window", 30, |a| shown_title(a) == "Alpha");
+    new_profile(&app, "Work");
+    go_to(&app, &format!("{base}/press"));
+    until(&app, "Work on Press", 15, |a| all_titles(a).contains(&"Press".to_owned()));
+    go_to(&app, &format!("{base}/beta"));
+    until(&app, "Work on Beta", 15, |a| all_titles(a).contains(&"Beta".to_owned()));
+
+    run_command(&app, "rename profile", "Rename Profile");
+    until(&app, "the name field", 10, |a| has(a, "profile-name"));
+    hid(&app, os::key_of('a'), &[os::CMD]);
+    paste(&app, "Office");
+    std::thread::sleep(Duration::from_millis(300));
+    hid(&app, key::ENTER, &[]);
+    until(&app, "the popover gone", 10, |a| lacks(a, "profile-name"));
+    assert_eq!(profiles_in(&dir)[1].1, "Office", "renamed in place, same id");
+
+    // Zoom on Office's page leaves Default's page on the same host at 100%.
+    press(&app, "cmd-=");
+    until(&app, "Office zoomed", 10, |a| count_ids(a, "zoom") == 1);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(count_ids(&app, "zoom"), 1, "only Office's window shows a zoom level");
+
+    // History: Office has been to Press, Default has not.
+    open_bar(&app, key::T);
+    type_real(&app, "press");
+    until(&app, "Office's history", 10, |a| bar_rows(a).iter().any(|r| r.starts_with("Press")));
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+
+    os::close_window(&app, &front_window(&app));
+    until(&app, "Office's window closed", 15, |a| window_count(a) == 1);
+    assert!(!profiles_in(&dir)[1].2, "a profile with no window is closed");
+    open_bar(&app, key::T);
+    type_real(&app, "press");
+    std::thread::sleep(Duration::from_secs(1));
+    let rows = bar_rows(&app);
+    assert!(!rows.iter().any(|r| r.starts_with("Press")), "Default's history has no Press: {rows:?}");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    assert_eq!(count_ids(&app, "zoom"), 0, "Default's page on the same host is at 100%");
+
+    run_command(&app, "switch to office", "Switch to Office");
+    until(&app, "Office back with its session", 20, |a| window_count(a) == 2 && all_titles(a) == ["Alpha", "Beta"]);
+    until(&app, "and its zoom", 10, |a| count_ids(a, "zoom") == 1);
+    assert!(profiles_in(&dir)[1].2, "open again");
+    quit(&app);
+}
+
+/// A row dragged along the list shows the slot it would drop into, and drops there.
+#[test]
+fn real_a_row_dragged_in_the_list_marks_its_slot() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/alpha"), format!("{base}/beta"), format!("{base}/press")]);
+    until(&app, "three rows", 30, |a| titles(a).len() == 3);
+    let before = rows(&app);
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let global = |p: (f32, f32)| (wx + f64::from(p.0), wy + f64::from(p.1));
+    // Between the second and the third row.
+    let from = global(before[0].1);
+    let to = global(((before[1].1.0 + before[2].1.0) / 2., (before[1].1.1 + before[2].1.1) / 2.));
+    os::hold(&app, from);
+    for i in 1..=20 {
+        let t = f64::from(i) / 20.;
+        let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+        os::drag_move(&app, at);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    std::thread::sleep(Duration::from_millis(400));
+    shot(&app, "list-slot-line");
+    os::release(&app, to);
+    until(&app, "the first row moved into the slot", 10, |a| {
+        let now: Vec<String> = rows(a).into_iter().map(|r| r.0).collect();
+        now == [before[1].0.clone(), before[0].0.clone(), before[2].0.clone()]
+    });
+    quit(&app);
 }

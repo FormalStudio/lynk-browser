@@ -179,6 +179,18 @@ impl ProfilesState {
     }
 }
 
+/// Longest name a menu shows whole; a longer one ends in an ellipsis there.
+pub const MENU_NAME_CHARS: usize = 32;
+
+/// `name` as a menu row shows it.
+pub fn menu_name(name: &str) -> String {
+    if name.chars().count() <= MENU_NAME_CHARS {
+        return name.to_owned();
+    }
+    let cut: String = name.chars().take(MENU_NAME_CHARS - 1).collect();
+    format!("{}\u{2026}", cut.trim_end())
+}
+
 /// Where `id` keeps the files core writes: its session, history, favicons, bookmarks.
 pub fn data_dir(root: &Path, id: &str) -> PathBuf {
     if id == DEFAULT_ID { root.to_path_buf() } else { root.join("profiles").join(id) }
@@ -225,6 +237,15 @@ mod tests {
         assert_eq!(s.rename("p9", "x"), Err(ProfileError::UnknownProfile));
         assert!(!s.get(&id).unwrap().open, "a new profile opens with its first window");
         assert_eq!(chromium_name(&id), Some("p2"));
+    }
+
+    #[test]
+    fn a_long_name_is_cut_in_menus_only() {
+        assert_eq!(menu_name("Work"), "Work");
+        let long = "\u{1F680} Work and play ".to_owned() + &"x".repeat(64);
+        let shown = menu_name(&long);
+        assert_eq!(shown.chars().count(), MENU_NAME_CHARS);
+        assert!(shown.starts_with("\u{1F680} Work and play x") && shown.ends_with('\u{2026}'));
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use lynk_core::session::{tab_id, tab_number};
+use lynk_core::settings::{LynkSettings, PinStyle};
 use lynk_core::tabstate::tile_letter;
 use nd::core::WindowId;
 use nd::platform::{Target, target};
@@ -66,7 +67,13 @@ const TILE_GAP: f32 = 6.;
 const TILE_RADIUS: f32 = 10.;
 const TILE_ICON: f32 = 20.;
 /// The tab on show is the brighter pill: its glass tinted this much white.
-const RAISED_TINT: f32 = 0.35;
+/// Tile fills as black (light) or white (dark) at these alphas: at rest, under the pointer, and
+/// the tab on show, which also takes the hairline. The shown fill is the reference's live pin
+/// grey, loud enough to read as selected without the letter.
+/// The empty pinned block: a strip a drag can find, and the target it opens into.
+const EMPTY_TARGET_REST: f32 = 12.;
+const EMPTY_TARGET_OPEN: f32 = 36.;
+const TILE_FILLS: [(f32, f32); 3] = [(0.0314, 0.0432), (0.0419, 0.0595), (0.0995, 0.1243)];
 const FOUR_COLUMNS_FROM: f64 = 900.;
 /// Between the tiles and the first row.
 const PINS_BOTTOM: f32 = 8.;
@@ -213,13 +220,9 @@ impl BrowserWindow {
             })
             .accepts_drops([TAB_KIND])
             .on_drop(cx.listener(|win, e: &RowDropped<SidebarRow>, _, cx| {
-                let Some(id) = tab_number(&e.item.id) else { return };
-                // A tile dropped on a row lands in that row's place, anywhere else at the end.
-                let at = match e.key {
-                    Some(SidebarRow::Tab(row)) => win.index_of(row),
-                    _ => None,
-                };
-                win.unpin_to(id, at.unwrap_or(usize::MAX), cx);
+                if let Some(id) = tab_number(&e.item.id) {
+                    win.drop_in_list(id, e.index, cx);
+                }
             }))
             .on_select(cx.listener(|win, e: &SelectEvent<SidebarRow>, window, cx| match e.key {
                 // A click on the row on show opens the command bar on its address.
@@ -271,7 +274,7 @@ impl BrowserWindow {
     fn pinned(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let pins: Vec<TabId> = self.tree().pins.iter().filter_map(|p| tab_number(p)).collect();
         if pins.is_empty() {
-            return None;
+            return Some(self.pin_target(cx));
         }
         let columns = if self.frame.width < FOUR_COLUMNS_FROM { 3 } else { 4 };
         let tiles: Vec<Tile> = pins.iter().filter_map(|id| Some(tile(tab_id(*id), self.tile(*id, cx)?))).collect();
@@ -297,15 +300,56 @@ impl BrowserWindow {
         Some(div().id("pinned").flex_none().pb(px(PINS_BOTTOM)).child(grid).into_any_element())
     }
 
-    /// One pinned tile: the site's icon, or its letter until there is one. The tab on show is
-    /// the raised pill with its letter in full ink.
+    /// The pinned block with nothing pinned: a strip under the controls that a dragged tab grows
+    /// into a tile-high target, and pins on a drop.
+    fn pin_target(&self, cx: &mut Context<Self>) -> AnyElement {
+        let over = self.pin_target;
+        let theme = cx.theme();
+        let target = div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(TILE_RADIUS))
+            .border_1()
+            .border_color(theme.border.subtle)
+            .bg(theme.text.primary.opacity(TILE_FILLS[1].0))
+            .child(label("Drop to pin").id("pin-target-label").secondary());
+        div()
+            .id("pin-target")
+            .flex_none()
+            .w_full()
+            .h(px(if over { EMPTY_TARGET_OPEN } else { EMPTY_TARGET_REST }))
+            .mb(px(if over { PINS_BOTTOM } else { 0. }))
+            .accepts_drops([TAB_KIND])
+            .on_drag_over(cx.listener(|win, e: &DragOver, _, cx| {
+                let over = e.phase != DragOverPhase::Exited;
+                if win.pin_target != over {
+                    win.pin_target = over;
+                    cx.notify();
+                }
+            }))
+            .on_drop(cx.listener(|win, e: &Dropped, _, cx| {
+                win.pin_target = false;
+                if let Some(id) = tab_number(&e.item.id) {
+                    win.pin_at(id, 0, cx);
+                }
+                cx.notify();
+            }))
+            .when(over, |strip| strip.child(target))
+            .into_any_element()
+    }
+
+    /// One pinned tile: the site's icon, or its letter until there is one (only the letter under
+    /// `pinStyle = "letters"`). The tab on show takes the darker fill and the hairline, its letter
+    /// in full ink.
     fn tile(&self, id: TabId, cx: &mut Context<Self>) -> Option<AnyElement> {
         let tab = self.tab(id)?;
         let me = self.id;
         let active = self.active == id;
         let mac = target() == Target::MacOs;
-        let ink = cx.theme().text.primary;
-        let face = match &tab.favicon {
+        let icons = cx.settings::<LynkSettings>().pin_style == PinStyle::Icons;
+        let face = match tab.favicon.as_ref().filter(|_| icons) {
             Some(url) => image(url.to_string())
                 .size(px(TILE_ICON))
                 .on_error(cx.listener(move |win, _: &ImageFailed, _, cx| {
@@ -320,32 +364,31 @@ impl BrowserWindow {
                 if active { letter } else { letter.secondary() }.into_any_element()
             }
         };
+        let theme = cx.theme();
+        let dark = theme.is_dark();
+        let ground = hsla(0., 0., if dark { 1. } else { 0. }, 1.);
+        let [rest, hover, shown] =
+            TILE_FILLS.map(|(light, dark_alpha)| ground.opacity(if dark { dark_alpha } else { light }));
+        let hairline = theme.border.subtle;
         let face = div()
             .size_full()
             .flex()
             .items_center()
             .justify_center()
-            .when(tab.is_asleep(), |f| f.opacity(ASLEEP))
-            .child(face);
+            .rounded(px(TILE_RADIUS))
+            .when(active, |f| f.bg(shown).border_1().border_color(hairline))
+            .when(!active, |f| f.bg(rest).hover(|s| s.bg(hover)))
+            .child(div().when(tab.is_asleep(), |f| f.opacity(ASLEEP)).child(face));
         let body = if mac {
             glass()
                 .size_full()
                 .rounded(px(TILE_RADIUS))
-                // Clear glass over the light sidebar reads as a dark slab, so every tile is Regular
-                // and the shown one is raised by its tint.
                 .variant(GlassVariant::Regular)
-                .when(active, |g| g.tint(hsla(0., 0., 1., RAISED_TINT)))
                 .interactive()
                 .child(face)
                 .into_any_element()
         } else {
-            div()
-                .size_full()
-                .rounded(px(TILE_RADIUS))
-                .when(active, |t| t.bg(ink.opacity(SHOWN_FILL)))
-                .when(!active, |t| t.hover(|s| s.bg(ink.opacity(HOVER_FILL))))
-                .child(face)
-                .into_any_element()
+            face.into_any_element()
         };
         Some(
             div()

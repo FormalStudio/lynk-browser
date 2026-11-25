@@ -75,7 +75,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 ## Sidebar
 - [ ] Controls row, 32 pt, holding only the window controls (and a secondary window's menu); hidden when no controls lead
 - [ ] Pinned tiles: Arc's favourites grid, at most four columns (three at 720 pt, four from about 900), tiles at least 40 wide, height 0.74 of the width, short last row keeps the pitch, reflows while the divider drags
-- [ ] Pinned tile shows the site icon, or its first letter until there is one; `pinStyle = "letters"` shows only letters, the active one in full ink
+- [x] Pinned tile shows the site icon, or its first letter until there is one; `pinStyle = "letters"` shows only letters, the active one in full ink (drive: `real_pins_and_profiles_captures`, `real_letters_pin_style_keeps_the_letter`)
 - [x] [mac] Each tile is a Liquid Glass pill, the active one raised; macOS 27 adds the interactive glass press (shot: `real_pins_and_profiles_captures`, rest, hover and pressed in light and dark)
 - [ ] [linux] Flat tiles, the active one filled, the rest fill on hover
 - [ ] Tab rows: 28 pt tall, 2 apart, 16 pt favicon, title truncated with an ellipsis; the active row filled with its title in full ink, the rest secondary and filled on hover
@@ -87,7 +87,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] [mac] "New tab" row after the tabs, dimmed until pointed at; [linux] a "+" at the foot's trailing end instead
 - [ ] Foot, in order: settings, padlock, zoom (while not 100%), blocked pop-ups, extensions puzzle and pinned extension buttons, downloads; [linux] downloads leads and "+" closes the row
 - [ ] The tab list scrolls; the controls row, pinned block and foot stay put
-- [ ] Drag a row: a line marks the slot, a drop on the list reorders and unpins, a drop on the pinned block pins (lane `nd-tab-drag`; old drive `mac-tabdrag`)
+- [x] Drag a row: a line marks the slot, a drop on the list reorders and unpins, a drop on the pinned block pins, an empty one included (lane `nd-tab-drag`; old drive `mac-tabdrag`; drive: `real_a_row_dragged_in_the_list_marks_its_slot`, `real_drag_between_the_list_and_the_pins`, `real_a_row_dropped_on_the_empty_pinned_block_pins`)
 - [ ] Drag a tile over the others: the tile takes the slot under the pointer and the rest slide aside (0.2 s ease-out); a drop keeps the order, Esc or a release outside puts it back
 - [ ] A row or tile dropped on another window moves the live page there without a reload
 - [x] Pin moves the tab to the end of the pinned block, unpin to the head of the rest; Next and Previous Tab follow the sidebar order (drive: `real_pin_and_unpin`; unit: `pin_goes_to_the_end_of_the_block_and_unpin_to_the_head_of_the_list`)
@@ -222,12 +222,12 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 ## Profiles
 New in the nd build; the 0.5.11 app had one profile. Design in [architecture.md](architecture.md#profiles).
 - [x] The profile there was before profiles is `Default`, in place: its session, history and `cef/Default` open unchanged, nothing copied (unit: `a_session_the_shell_wrote_before_pins_opens_as_default_and_keeps_pins_from_then_on`, `a_fresh_install_and_a_profile_from_before_profiles_both_have_default_open`)
-- [ ] Create, rename and switch from the foot's profile menu and from the command bar ("New Profile…", "Rename Profile…", "Switch to <name>"); a name is trimmed, unique without case, at most 100 characters, and keeps spaces and emoji
+- [x] Create, rename and switch from the foot's profile menu and from the command bar ("New Profile…", "Rename Profile…", "Switch to <name>"); a name is trimmed, unique without case, at most 100 characters, and keeps spaces and emoji (drive: `real_two_profiles_keep_their_cookies_apart`, `real_rename_and_reopen_a_closed_profile`, `real_pins_and_profiles_captures`; unit: `a_long_name_is_cut_in_menus_only`)
 - [x] Delete asks first, naming what goes (tabs, pins, history, cookies, saved data), closes the profile's windows without asking their pages and removes its files; `Default` cannot be deleted (drive: `real_delete_the_open_profile`; unit: `delete_names_both_directories_and_keeps_default`)
 - [x] Windows of several profiles open at once; New Window, pop-ups and Reopen Closed Tab stay in the window's profile; a tab moves only between windows of one profile (drive: `real_two_profiles_keep_their_cookies_apart`; unit: `closed_tabs_and_new_windows_stay_in_their_profile`)
-- [ ] Each profile's windows and pins restore after a restart; a profile whose windows were closed opens only when switched to
+- [x] Each profile's windows and pins restore after a restart; a profile whose windows were closed opens only when switched to (drive: `real_two_profiles_keep_their_cookies_apart`, `real_rename_and_reopen_a_closed_profile`)
 - [x] Cookies and site data stay in their profile (a cookie set in one is not sent from another) (drive: `real_two_profiles_keep_their_cookies_apart`, before and after a restart)
-- [ ] History, zoom per host and the closed-tab stack per profile
+- [x] History, zoom per host and the closed-tab stack per profile (drive: `real_rename_and_reopen_a_closed_profile`; unit: `closed_tabs_and_new_windows_stay_in_their_profile`)
 - [ ] Extensions in a profile other than `Default` (nd-cef installs into the default request context only)
 
 ## Keyboard and menus

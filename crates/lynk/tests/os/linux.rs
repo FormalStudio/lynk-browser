@@ -277,6 +277,11 @@ pub fn move_to(app: &App, at: (f64, f64)) {
     app.input.borrow_mut().move_to(at.0, at.1);
 }
 
+/// Moves the pointer to `at` with the left button down, between a `hold` and a `release`.
+pub fn drag_move(app: &App, at: (f64, f64)) {
+    move_to(app, at);
+}
+
 /// Presses the left button at `at` and keeps it down.
 pub fn hold(app: &App, at: (f64, f64)) {
     let mut input = app.input.borrow_mut();
@@ -333,6 +338,15 @@ pub fn click_button(app: &App, title: &str) {
     let (x, y, _, _) = front(app).bounds;
     click(app, (x + f64::from(r.origin.x + r.size.width / 2.), y + f64::from(r.origin.y + r.size.height / 2.)));
     std::thread::sleep(Duration::from_millis(500));
+}
+
+/// Whether a drawn alert in one of the app's windows shows a button called `title`.
+pub fn alert_button_shown(app: &App, title: &str) -> bool {
+    let Ok(tree) = app.tree(None) else { return false };
+    tree.windows
+        .iter()
+        .flat_map(|w| w.root.iter())
+        .any(|n| format!("{:?}", n.role) == "Dialog" && n.children.iter().any(|b| b.name == title))
 }
 
 pub fn right_click(app: &App, at: (f64, f64)) {

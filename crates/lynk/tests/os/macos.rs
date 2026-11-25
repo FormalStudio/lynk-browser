@@ -188,6 +188,11 @@ pub fn move_to(_: &App, at: (f64, f64)) {
     ndshell::input::move_to(at);
 }
 
+/// Moves the pointer to `at` with the left button down, between a `hold` and a `release`.
+pub fn drag_move(_: &App, at: (f64, f64)) {
+    ndshell::input::mouse(objc2_core_graphics::CGEventType::LeftMouseDragged, at);
+}
+
 /// Drags the left button from `from` by `(dx, dy)` in `steps` moves.
 pub fn drag(_: &App, from: (f64, f64), dx: f64, dy: f64, steps: u32) {
     ndshell::input::drag(from, dx, dy, steps);
@@ -221,6 +226,24 @@ pub fn click_button(app: &App, title: &str) {
     let status = Command::new("osascript").args(["-e", &script]).status().unwrap();
     assert!(status.success(), "no {title} button");
     std::thread::sleep(Duration::from_millis(500));
+}
+
+/// Whether an alert of the app shows a button called `title`, in a window or a sheet.
+pub fn alert_button_shown(app: &App, title: &str) -> bool {
+    let script = format!(
+        r#"tell application "System Events" to tell (first process whose unix id is {pid})
+            repeat with w in windows
+                if exists button "{title}" of w then return "yes"
+                if exists sheet 1 of w then
+                    if exists button "{title}" of sheet 1 of w then return "yes"
+                end if
+            end repeat
+            return "no"
+        end tell"#,
+        pid = app.pid()
+    );
+    let out = Command::new("osascript").args(["-e", &script]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).trim() == "yes"
 }
 
 /// How many windows the app has on every layer, however small.

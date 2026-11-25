@@ -109,6 +109,8 @@ pub struct BrowserWindow {
     next_toast: u64,
     /// Where the window is and how big, for the session.
     pub frame: Frame,
+    /// A tab is dragged over the empty pinned block, which then shows where it would pin.
+    pub(crate) pin_target: bool,
 }
 
 impl BrowserWindow {
@@ -150,6 +152,7 @@ impl BrowserWindow {
             rows: ListState::new(cx).estimated_row_height(px(crate::sidebar::ROW_HEIGHT)),
             next_toast: 0,
             frame,
+            pin_target: false,
         };
         if !moved {
             for id in this.order() {
@@ -525,11 +528,13 @@ impl BrowserWindow {
     }
 
     /// A tile dropped on the list at row `index`.
-    pub fn unpin_to(&mut self, id: TabId, index: usize, cx: &mut Context<Self>) {
-        if !self.is_pinned(id) || self.tree.unpin(&tab_id(id), index).is_err() {
+    /// A tab dropped on the list in the gap `slot` marked: a pin unpins there, a row moves there.
+    pub fn drop_in_list(&mut self, id: TabId, slot: usize, cx: &mut Context<Self>) {
+        let was_pinned = self.is_pinned(id);
+        if self.tree.drop_in_list(&tab_id(id), slot).is_err() {
             return;
         }
-        if let Some(tab) = self.tab_mut(id) {
+        if was_pinned && let Some(tab) = self.tab_mut(id) {
             tab.pinned_url = None;
         }
         self.changed(cx);
@@ -927,7 +932,7 @@ mod tests {
             assert_eq!(w.order(), [3, 2, 1], "a pin moves among the pins");
             w.duplicate(2, cx);
             assert_eq!(w.order()[2], 4, "a pin's copy heads the list");
-            w.unpin_to(2, usize::MAX, cx);
+            w.drop_in_list(2, usize::MAX, cx);
             assert_eq!(*w.order().last().unwrap(), 2);
             assert_eq!(w.tab(2).unwrap().pinned_url, None);
             w.pin_at(1, 0, cx);

@@ -241,6 +241,21 @@ stateDiagram-v2
   side for the next DevTools opened in it; closing the tab, moving it to another window or
   closing the window closes them.
 
+- **Ad blocking.** `blocking.rs` puts core's `blocker::Blocker` (the compiled lists plus the
+  user's own rules) on nd's request filter, read on Chromium's IO thread through a lock-guarded
+  `Arc`, with the sites it is off for beside it. A request gets core's `Decision`; a document
+  gets its `$csp=` policy and, at the top of its head through the filter's `head`, a style sheet
+  hiding what rules by address match and the scriptlets for it. Generic rules need the page's
+  classes and ids: a script in the `lynk-blocker` world posts them (`lynkCosmetic`), and the
+  matched selectors go back as a style sheet in that world. nd reports each stopped request
+  (`RequestBlocked`); the count lives per tab and starts over on navigation. The engine builds
+  off the main thread, restoring `adblock/engine.bin` when its key matches; until then requests
+  pass. A release with no cached scriptlets gets them from a hidden page in the front window's
+  holder, which imports `js/resources/scriptlets.js` over the `lynk-ubo:` scheme (served from the
+  release folder only) and posts each function's source back. Known limits: a page whose own
+  policy forbids inline script or style keeps the head's scriptlets or style out, generic rules
+  reach the main frame only, and procedural filters (`:has-text()` and the like) are not applied.
+
 ## Registries
 
 Later features plug in by appending to a list the shell owns. Each list is a `const` slice of
@@ -478,6 +493,7 @@ Shell, `crates/lynk/src`:
 | `omnibox.rs` | the command bar: its state per window, running the picked row | rank rows or parse typed text (core does) |
 | `history.rs` | recording visits and titles, searching them for the bar | rank matches (core does) |
 | `zoom.rs` | zoom steps, the foot glyph and popover | store levels outside `app` |
+| `blocking.rs` | the request filter, per-tab blocked counts, the site switch and its padlock row, the scriptlet page | decide what a rule matches (core does) |
 | `devtools.rs` | each tab's DevTools, each window's dock, the split and the DevTools window | reach into the inspected page |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |
 | `main.rs` | calls `lynk::run` | anything else |
@@ -507,6 +523,7 @@ Core, `crates/core/src`:
 | `extensions` | extension rows, pins, popup bounds | talk to Chromium |
 | `webstore` | the store fixup and install hold scripts, permission lines | install |
 | `adblock` | `blocking.json`, the engine build and cache | hold the engine across a network call |
+| `blocker` | what a request, a document and a page's classes get from the engines | know which sites blocking is off for |
 | `ublock` | uBO release pinning, lists, scriptlets, resources | write `blocking.json` |
 
 ## Rules for new code

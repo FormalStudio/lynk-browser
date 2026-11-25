@@ -55,6 +55,7 @@ pub const TAB_EVENTS: &[TabListener] = &[
     crate::site_info::tab_event,
     crate::omnibox::tab_event,
     crate::devtools::tab_event,
+    crate::blocking::tab_event,
 ];
 
 /// Drops what a module keeps for a window that has gone.
@@ -68,6 +69,7 @@ pub const WINDOW_CLOSED: &[WindowListener] = &[
     crate::omnibox::forget,
     crate::profile::forget,
     crate::devtools::forget,
+    crate::blocking::forget,
 ];
 
 /// Closes waiting on pages' `beforeunload`. `settle` is the one place a close goes ahead, and

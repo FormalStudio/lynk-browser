@@ -198,7 +198,7 @@ fn rows(win: &BrowserWindow, bar: &Bar, cx: &App) -> Vec<OmniRow> {
         pinned,
         can_sleep: win.can_sleep(win.active),
         reading: false,
-        blocking: None,
+        blocking: win.active_tab().and_then(|t| crate::blocking::facts(t, cx)),
         favicon: &|_| None,
         profiles: &crate::profile::others(cx, &win.profile),
         default_profile: win.profile == lynk_core::profiles::DEFAULT_ID,

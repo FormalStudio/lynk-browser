@@ -104,7 +104,7 @@ impl BrowserWindow {
             let pad = cx.theme().spacing.sm;
             shown = shown.child(div().absolute().top(pad).right(pad).child(bar));
         }
-        let held = held.children(crate::devtools::held(self, cx));
+        let held = held.children(crate::devtools::held(self, cx)).children(crate::blocking::held(self, cx));
         crate::devtools::dock(self, shown.child(held).into_any_element(), cx)
     }
 

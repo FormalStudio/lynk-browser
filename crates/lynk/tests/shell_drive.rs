@@ -57,6 +57,18 @@ const FULL: &str = r#"<!doctype html><title>Full</title>
 
 /// No colours of its own: Chromium's default white is what it sits on.
 const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own.";
+/// Two requests EasyList stops wherever they are served (`/pagead/conversion.js$script`,
+/// `/banner_ads/*`), an element its generic `##.ad_banner` hides (except on 127.0.0.1, where
+/// EasyList's `@@://127.0.0.1$generichide` turns generic rules off) and one the user hid on
+/// 127.0.0.1. The title reports what each did: `Ads <ad_banner> <promo> <script>`.
+const ADS: &str = r#"<!doctype html><title>Ads</title>
+<script src="/pagead/conversion.js"></script>
+<img src="/banner_ads/b.png" alt="">
+<div class="ad_banner">Ad</div><div class="promo">Promo</div><p>Content</p>
+<script>
+const shown = s => getComputedStyle(document.querySelector(s)).display;
+setInterval(() => { document.title = `Ads ${shown('.ad_banner')} ${shown('.promo')} ${window.converted ? 'ran' : 'stopped'}`; }, 200);
+</script>"#;
 const DARK_SCHEME: &str = "<!doctype html><meta name=color-scheme content=dark><title>Dark</title><p>Dark only.";
 const BOTH_SCHEMES: &str =
     "<!doctype html><meta name=color-scheme content=\"light dark\"><title>Both</title><p>Either scheme.";
@@ -119,6 +131,8 @@ fn respond(mut stream: std::net::TcpStream) {
         "/press" => page(PRESS),
         "/popups" => page(POPUPS),
         "/plain" => page(PLAIN),
+        "/ads" => page(ADS),
+        "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
         "/dark-scheme" => page(DARK_SCHEME),
         "/both-schemes" => page(BOTH_SCHEMES),
         "/long-title" => page(LONG_TITLE),
@@ -685,6 +699,7 @@ mod key {
     pub const F7: u16 = 98;
     pub const F12: u16 = 111;
     pub const W: u16 = 13;
+    pub const R: u16 = 15;
 }
 
 /// A key through the HID system, which reaches a Chrome-style page's own window as typing does;
@@ -997,6 +1012,81 @@ fn real_dev_tools_follow_their_tab() {
     assert_eq!(window_count(&app), 1);
 }
 
+/// A profile whose blocker runs on uBO 1.75.0's bundled lists with nothing due from the network,
+/// and with `.promo` hidden on 127.0.0.1 by the user. The release zip comes from `LYNK_UBO_ZIP`,
+/// else the test's tmp dir.
+fn blocking_profile(name: &str) -> PathBuf {
+    let dir = profile(name);
+    let zip = std::env::var_os("LYNK_UBO_ZIP").map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("uBlock0_{}.chromium.zip", lynk_core::ublock::PINNED_VERSION))
+    });
+    let bytes = std::fs::read(&zip).unwrap_or_else(|e| panic!("{}: {e}; set LYNK_UBO_ZIP", zip.display()));
+    let adblock = lynk_core::adblock::adblock_dir(&dir).unwrap();
+    let release = adblock.join("ubo").join(lynk_core::ublock::PINNED_VERSION);
+    lynk_core::ublock::extract(&bytes, &release).unwrap();
+    let lists = lynk_core::ublock::default_lists(&release).unwrap();
+    let now = lynk_core::now_ms();
+    let store = lynk_core::adblock::open(&dir);
+    store.update(|s| {
+        s.last_release_check = now;
+        for list in &lists {
+            s.fetched.insert(list.key.clone(), now);
+        }
+        s.hide("127.0.0.1", ".promo", "Promo", "", now);
+    });
+    drop(store);
+    dir
+}
+
+/// The blocker on a local page: EasyList's requests stopped and counted in the padlock, the
+/// user's rule hiding its element from the head, EasyList's generic rule held off on 127.0.0.1 by
+/// its own exception and hiding its element on `[::1]`; the switch turns it all off for the site
+/// once the page reloads, and on again.
+#[test]
+fn real_blocking_counts_hides_and_switches_off() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = blocking_profile("blocking");
+    let app = launch_on(&dir, &[format!("{base}/ads")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Ads")));
+    // The engine compiles off the main thread; the page loaded before it may have gone through.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while titles(&app) != ["Ads block none stopped"] {
+        assert!(
+            Instant::now() < deadline,
+            "the blocker never took the page, title {:?}\n{}",
+            titles(&app),
+            app.stderr_tail(60).join("\n")
+        );
+        click_page(&app, 300.);
+        hid(key::R, &[Modifier::Command]);
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    click_id(&app, "site-info");
+    until(&app, "the padlock popover", 10, |a| has(a, "site-blocking-switch"));
+    assert_eq!(text_of(&app, "site-blocking-title").as_deref(), Some("Block Ads and Trackers"));
+    until(&app, "the count", 10, |a| {
+        text_of(a, "site-blocking-count").as_deref() == Some("2 requests blocked on this page")
+    });
+    shot(&app, "blocking-padlock");
+    click_id(&app, "site-blocking-switch");
+    until(&app, "blocking off after the reload", 20, |a| titles(a) == ["Ads block block ran"]);
+    if lacks(&app, "site-blocking-switch") {
+        click_id(&app, "site-info");
+    }
+    until(&app, "the off row", 10, |a| text_of(a, "site-blocking-count").as_deref() == Some("Off for this site"));
+    shot(&app, "blocking-padlock-off");
+    click_id(&app, "site-blocking-switch");
+    until(&app, "blocking back on", 20, |a| titles(a) == ["Ads block none stopped"]);
+    // Elsewhere the generic rule applies, and the user's rule for 127.0.0.1 does not.
+    let v6 = serve_at("[::1]:0");
+    open_bar(&app, key::L);
+    ndshell::input::type_text(&format!("{v6}/ads\n"));
+    until(&app, "the generic rule on [::1]", 30, |a| titles(a) == ["Ads none block stopped"]);
+}
 
 #[test]
 fn real_chrome_only_keys_open_nothing() {

@@ -84,6 +84,7 @@ impl Live {
         // The handler first: it defines `messageHandlers` in the world the report then posts to.
         view.register_script_message(SCROLL_MESSAGE, Some(SCROLL_WORLD), ["*"]);
         view.add_user_script(UserScript::new("lynk-scroll", SCROLL_REPORT).in_world(SCROLL_WORLD));
+        crate::blocking::prepare(&view);
         Self { view, key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), scroll_back }
     }
 }

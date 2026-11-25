@@ -345,7 +345,11 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<ShowBookmarks>("Bookmarks").key("bookmarks").menu(MenuId::View),
     Command::new::<BookmarkPage>("Bookmark This Page").key("bookmark-page").menu(MenuId::View).enabled(web_page),
     Command::new::<ReadingMode>("Reading Mode").key("reader").menu(MenuId::View),
-    Command::new::<ToggleAdBlocking>("Allow Ads on This Site").menu(MenuId::View).enabled(web_page),
+    Command::new::<ToggleAdBlocking>("Allow Ads on This Site")
+        .menu(MenuId::View)
+        .flips("Block Ads on This Site", crate::blocking::off_here)
+        .enabled(web_page)
+        .handler(crate::blocking::toggle),
     Command::new::<HideElement>("Hide Element").key("hide-element").menu(MenuId::View).enabled(web_page),
     Command::new::<FloatVideo>("Float Video").key("float").menu(MenuId::View),
     Command::new::<ZoomIn>("Zoom In")

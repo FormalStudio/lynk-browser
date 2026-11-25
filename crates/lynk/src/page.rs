@@ -34,6 +34,7 @@ pub enum PageEvent<'a> {
     DownloadUpdated(&'a DownloadUpdated),
     ContextMenuItemClicked(&'a ContextMenuItemClicked),
     ScriptMessage(&'a ScriptMessage),
+    RequestBlocked(&'a RequestBlocked),
     ExternalProtocol(&'a ExternalProtocol),
     ExtensionPopupOpened(&'a ExtensionPopupOpened),
     ExtensionPopupResized(&'a ExtensionPopupResized),
@@ -43,7 +44,7 @@ pub enum PageEvent<'a> {
 pub type Observer = fn(&mut BrowserWindow, TabId, &PageEvent, &mut Window, &mut Context<BrowserWindow>);
 
 /// The modules listening to every tab's page, in the order they hear an event.
-pub const OBSERVERS: &[Observer] = &[crate::history::record];
+pub const OBSERVERS: &[Observer] = &[crate::history::record, crate::blocking::observe];
 
 fn observe(win: &mut BrowserWindow, id: TabId, event: PageEvent, window: &mut Window, cx: &mut Context<BrowserWindow>) {
     for observer in OBSERVERS {
@@ -169,6 +170,9 @@ pub fn mount(tab: &Tab, live: &Live, cx: &mut Context<BrowserWindow>) -> AnyElem
                 return;
             }
             observe(w, id, PageEvent::ScriptMessage(e), window, cx)
+        }))
+        .on_request_blocked(cx.listener(move |w, e: &RequestBlocked, window, cx| {
+            observe(w, id, PageEvent::RequestBlocked(e), window, cx)
         }))
         .on_external_protocol(cx.listener(move |w, e: &ExternalProtocol, window, cx| {
             observe(w, id, PageEvent::ExternalProtocol(e), window, cx)

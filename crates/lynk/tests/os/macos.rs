@@ -251,7 +251,9 @@ pub fn type_text(_: &App, text: &str) {
 
 pub fn set_clipboard(_: &App, text: &str) {
     use std::io::Write;
-    let mut copy = Command::new("pbcopy").stdin(std::process::Stdio::piped()).spawn().unwrap();
+    // pbcopy reads its input in the locale's encoding, MacRoman without one.
+    let mut copy =
+        Command::new("pbcopy").env("LANG", "en_US.UTF-8").stdin(std::process::Stdio::piped()).spawn().unwrap();
     copy.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
     assert!(copy.wait().unwrap().success());
 }

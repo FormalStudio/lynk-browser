@@ -1,7 +1,7 @@
-//! What every window shares: the windows themselves, tab ids, the closed-tab stack and the zoom
-//! levels kept per host. Windows open and close through here.
+//! What every window shares: the windows themselves and tab ids, and per profile the closed-tab
+//! stack and the zoom levels kept per host. Windows open and close through here.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use lynk_core::session::{WINDOW_HEIGHT, WINDOW_WIDTH};
 use lynk_core::sidebar_tree::SidebarTree;
@@ -23,8 +23,10 @@ pub struct Browser {
     windows: Vec<(WindowId, Entity<BrowserWindow>)>,
     next_tab: TabId,
     next_window: u64,
-    closed: Vec<String>,
-    pub zoom_by_host: BTreeMap<String, f64>,
+    /// Addresses of closed tabs with the profile each was in, newest last.
+    closed: Vec<(String, String)>,
+    /// Zoom levels per host, per profile.
+    pub zoom_by_host: HashMap<String, BTreeMap<String, f64>>,
     menus: Vec<(SharedString, bool)>,
 }
 
@@ -49,28 +51,46 @@ pub fn next_tab_id(cx: &mut App) -> TabId {
     browser.next_tab
 }
 
-/// A tab's address goes on the closed stack, unless it never had one.
-pub fn remember_closed(cx: &mut App, tab: &Tab) {
+/// A tab's address goes on its profile's closed stack, unless it never had one.
+pub fn remember_closed(cx: &mut App, profile: &str, tab: &Tab) {
     if tab.url.is_empty() {
         return;
     }
     let closed = &mut cx.global_mut::<Browser>().closed;
-    closed.push(tab.url.clone());
-    if closed.len() > CLOSED_LIMIT {
-        closed.remove(0);
+    closed.push((profile.to_owned(), tab.url.clone()));
+    if closed.iter().filter(|(p, _)| p == profile).count() > CLOSED_LIMIT
+        && let Some(oldest) = closed.iter().position(|(p, _)| p == profile)
+    {
+        closed.remove(oldest);
     }
 }
 
-pub fn pop_closed(cx: &mut App) -> Option<String> {
-    cx.global_mut::<Browser>().closed.pop()
+/// The last tab closed in `profile`.
+pub fn pop_closed(cx: &mut App, profile: &str) -> Option<String> {
+    let closed = &mut cx.global_mut::<Browser>().closed;
+    let at = closed.iter().rposition(|(p, _)| p == profile)?;
+    Some(closed.remove(at).1)
 }
 
-pub fn zoom_for(cx: &App, url: &str) -> f64 {
-    lynk_core::zoom::zoom_for(&cx.global::<Browser>().zoom_by_host, url)
+/// What a deleted profile leaves behind in memory goes with it.
+pub fn forget_profile(cx: &mut App, profile: &str) {
+    let browser = cx.global_mut::<Browser>();
+    browser.closed.retain(|(p, _)| p != profile);
+    browser.zoom_by_host.remove(profile);
 }
 
-pub fn remember_zoom(cx: &mut App, url: &str, factor: f64) {
-    lynk_core::zoom::remember_zoom(&mut cx.global_mut::<Browser>().zoom_by_host, url, factor);
+pub fn zoom_for(cx: &App, profile: &str, url: &str) -> f64 {
+    cx.global::<Browser>().zoom_by_host.get(profile).map_or(1., |levels| lynk_core::zoom::zoom_for(levels, url))
+}
+
+pub fn remember_zoom(cx: &mut App, profile: &str, url: &str, factor: f64) {
+    let levels = cx.global_mut::<Browser>().zoom_by_host.entry(profile.to_owned()).or_default();
+    lynk_core::zoom::remember_zoom(levels, url, factor);
+}
+
+/// The windows of `profile`, oldest first.
+pub fn windows_of(cx: &App, profile: &str) -> Vec<(WindowId, Entity<BrowserWindow>)> {
+    windows(cx).into_iter().filter(|(_, w)| w.read(cx).profile == profile).collect()
 }
 
 pub fn windows(cx: &App) -> Vec<(WindowId, Entity<BrowserWindow>)> {
@@ -125,34 +145,44 @@ fn set_menus_if_changed(menus: Vec<Menu>, cx: &mut App) {
     set_menus(cx, menus);
 }
 
-/// Opens a window on new `tabs` showing `active`; no tabs means one new tab page.
-pub fn open_window(cx: &mut App, mut tabs: Vec<Tab>, active: Option<TabId>) -> WindowId {
+/// Opens a window on new `tabs` showing `active` in the key window's profile, else `Default`;
+/// no tabs means one new tab page.
+pub fn open_window(cx: &mut App, tabs: Vec<Tab>, active: Option<TabId>) -> WindowId {
+    let profile = key_window(cx)
+        .and_then(|id| window(cx, id))
+        .map_or_else(|| lynk_core::profiles::DEFAULT_ID.to_owned(), |w| w.read(cx).profile.clone());
+    open_window_in(cx, profile, tabs, active)
+}
+
+/// Opens a window of `profile` on new `tabs` showing `active`; no tabs means one new tab page.
+pub fn open_window_in(cx: &mut App, profile: String, mut tabs: Vec<Tab>, active: Option<TabId>) -> WindowId {
     if tabs.is_empty() {
         tabs.push(Tab::new(next_tab_id(cx), ""));
     }
-    open(cx, tabs, active, false, None, None)
+    open(cx, profile, tabs, active, false, None)
 }
 
 /// Opens a window the session kept, where it was and as big, with its tabs in its order.
 pub fn open_restored(cx: &mut App, restored: Restored) -> WindowId {
-    let Restored { tabs, tree, active, frame } = restored;
-    open(cx, tabs, active, false, Some(tree), Some(frame))
+    let Restored { profile, tabs, tree, active, frame } = restored;
+    open(cx, profile, tabs, active, false, Some((tree, frame)))
 }
 
-/// Opens a window around `tab`, moved out of another window.
-pub fn open_window_around(cx: &mut App, tab: Tab) -> WindowId {
+/// Opens a window of `profile` around `tab`, moved out of another of its windows.
+pub fn open_window_around(cx: &mut App, profile: String, tab: Tab) -> WindowId {
     let active = Some(tab.id);
-    open(cx, vec![tab], active, true, None, None)
+    open(cx, profile, vec![tab], active, true, None)
 }
 
 fn open(
     cx: &mut App,
+    profile: String,
     tabs: Vec<Tab>,
     active: Option<TabId>,
     moved: bool,
-    tree: Option<SidebarTree>,
-    frame: Option<Frame>,
+    kept: Option<(SidebarTree, Frame)>,
 ) -> WindowId {
+    let (tree, frame) = kept.map_or((None, None), |(tree, frame)| (Some(tree), Some(frame)));
     let frame = frame.unwrap_or(Frame { origin: None, width: WINDOW_WIDTH, height: WINDOW_HEIGHT });
     let browser = cx.global_mut::<Browser>();
     browser.next_window += 1;
@@ -175,11 +205,15 @@ fn open(
             let size = window.viewport_size();
             let frame = Frame { origin, width: f64::from(size.width), height: f64::from(size.height) };
             if let Some(w) = self::window(cx, id) {
-                w.update(cx, |w, _| w.frame = frame);
+                // The pinned tiles take their column count from the window's width.
+                w.update(cx, |w, cx| {
+                    w.frame = frame;
+                    cx.notify();
+                });
             }
             crate::session::changed(cx);
         });
-        cx.new(|cx| BrowserWindow::new(id, tabs, active, moved, tree, frame, cx))
+        cx.new(|cx| BrowserWindow::new(id, profile, tabs, active, moved, (tree, frame), cx))
     });
     let id = handle.id();
     let entity = handle.root().clone();

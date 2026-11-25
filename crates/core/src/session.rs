@@ -910,6 +910,37 @@ mod tests {
     }
 
     #[test]
+    fn a_session_the_shell_wrote_before_pins_opens_as_default_and_keeps_pins_from_then_on() {
+        let dir = write(include_str!("../fixtures/session-shell-before-pins.json"));
+        let profiles = crate::profiles::open(dir.path());
+        assert_eq!(profiles.get().open_ids(), [crate::profiles::DEFAULT_ID]);
+        let root = crate::profiles::data_dir(dir.path(), crate::profiles::DEFAULT_ID);
+        let store = open(&root);
+        assert_eq!(store.load_error(), None);
+        let s = store.get();
+        let w = &s.windows[0];
+        assert_eq!(drawn(w), ["t2", "t3"]);
+        assert!(w.spaces.tree().unwrap().pins.is_empty());
+        assert!(w.tabs.iter().all(|t| t.pinned_url.is_none()));
+
+        store.update(|s| {
+            let w = &mut s.windows[0];
+            w.spaces.tree_mut().set_pinned("t3", true).unwrap();
+            w.tabs[1].pinned_url = Some(w.tabs[1].url.clone());
+            w.tabs[1].url = "http://127.0.0.1:8765/alpha.html#later".into();
+        });
+        store.flush().unwrap();
+        let again = open(&root).get();
+        let w = &again.windows[0];
+        assert_eq!(w.spaces.tree().unwrap().pins, ["t3"]);
+        assert_eq!(w.spaces.tree().unwrap().loose_tabs(), ["t2"]);
+        let pin = w.tab("t3").unwrap();
+        assert_eq!(pin.pinned_url.as_deref(), Some("http://127.0.0.1:8765/beta.html"));
+        assert!(crate::tabstate::left_pinned_page(pin.pinned_url.as_deref(), &pin.url));
+        check_all(&again);
+    }
+
+    #[test]
     fn fields_a_newer_build_added_survive_a_round_trip() {
         let text = r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[{"id":"t1","url":"https://a.test/","title":"A","muted":true}],"activeId":"t1","width":900,"height":700,"spaces":{"shown":"s1","sidebars":{"s1":{"pins":[],"items":[{"type":"tab","id":"t1"}],"lastActive":"t1"}}},"mru":["t1"],"zoomLevel":2}],"nextTabId":2,"nextWindowId":2,"zoomByHost":{},"spaces":[{"id":"s1","name":"Personal","theme":{"hue":220,"accentHue":260}}],"spaceRules":[],"nextItemId":2,"archive":[],"futureThing":{"a":[1,2]}}}"#;
         let dir = write(text);

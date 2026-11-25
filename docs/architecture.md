@@ -69,16 +69,17 @@ SIGTERM quits like the Quit command, so Chromium flushes the profile. A launch o
 tabs in the key window, or in a new window when none is open.
 
 `app.rs` holds the `Browser` global: the window registry, the tab id counter (ids are unique
-across windows, so a tab keeps its id when it moves), the closed-tab stack (25 addresses), the
-zoom levels per host, and the last menu signature. Every window is an nd main window
+across windows, so a tab keeps its id when it moves), the closed-tab stack (25 addresses, each
+with its profile, so Reopen Closed Tab stays in the window's profile), the zoom levels per host
+for each profile, and the last menu signature. Every window is an nd main window
 `browser-<n>`, 1280 by 800 unless the session kept another frame, at least 720 by 480, with a
 custom title bar.
 
 ## Session
 
-`session.rs` keeps `session.json` in the app data dir through core's `session::open` (version
-3, versions 1 and 2 migrated, `normalize` on load). A write is the whole session rebuilt from
-the window registry: each window's frame, its tabs in sidebar order with title and scroll, its
+`session.rs` keeps each open profile's `session.json` (see Profiles) through core's
+`session::open` (version 3, versions 1 and 2 migrated, `normalize` on load). A write is each
+profile's session rebuilt from that profile's windows in the registry: each window's frame, its tabs in sidebar order with title and scroll, its
 tree and the tab on show. `BrowserWindow::changed`, a window leaving the registry, a page's
 scroll report and a window frame change each call `session::changed`, which coalesces into one
 write per main-loop turn. nd's `Store` debounces that (250 ms, at most 2 s) and writes through a
@@ -98,8 +99,8 @@ A page reports its scroll from the `lynk` world (`tab::SCROLL_MESSAGE`, once par
 after each scroll), and `Tab::scroll` is where it goes back to after sleeping or a relaunch. A
 tab's script and handler are added before its first load: nd-cef runs scripts only on documents
 that start after them. Chromium cannot hand a page a back and forward list, so a restored tab's
-history starts at its address. What the shell does not track yet (a pin's page, fields a newer
-build wrote) is carried over from the stored tab.
+history starts at its address. Fields a newer build wrote are carried over from the stored
+tab.
 
 The menu bar is built from the key window (`app::key_window`). It is rebuilt when a window becomes
 key and after every `BrowserWindow::changed`, and only set when its signature (labels and enabled
@@ -107,6 +108,68 @@ flags) differs. A window other than the first carries its own menu button in the
 
 When the last window closes, it stays in the registry with its tabs: the app is quitting, and that
 window is what a relaunch will restore.
+
+## Pins
+
+A pin is a tab in the tree's `pins` block, nothing more: `SidebarTree::set_pinned` puts it at the
+end of the block (Pin Tab, Shift+Cmd+D) or at the head of the list (Unpin Tab), and `move_row`
+with `Dest::Pins` or `Dest::Root` is what a drop does. Next and Previous Tab walk
+`tab_ids()`, pins first. The page a tab was pinned at is `Tab::pinned_url`, written to the
+session as `pinnedUrl` beside the tree; Reset to Pinned Page is enabled while
+`tabstate::left_pinned_page` holds. Pins come back after a restart like every restored tab:
+`Page::Waiting` until shown. Close Other Tabs spares them.
+
+The sidebar draws the block with nd's `tile_grid` above the list, which does not scroll.
+Rows (`virtual_list::drag_rows`) and tiles (`draggable_tiles`) drag as one kind, `tab`, each
+carrying its session tab id: the grid takes a row's drop and pins it at the slot, the list
+takes a tile's drop and unpins it at the row it lands on, and the grid reorders its own tiles.
+Separators, folders and splits are rows of the same tree, so they drop into the list with the
+same `move_row` without touching the pins.
+
+## Profiles
+
+A profile is everything one person's browsing keeps: its Chromium store (cookies, cache, local
+storage, passwords, site permissions), its session with its pins, its history, favicons,
+bookmarks and downloads list, and its extensions. Profiles never share any of it.
+
+- **On disk.** The app data dir (`~/Library/Application Support/lynk` on macOS,
+  `$XDG_DATA_HOME/lynk`, else `~/.local/share/lynk`, on Linux) holds `profiles.json`, the list:
+  each profile's id, name and whether it had windows open at quit. The profile that existed
+  before profiles did is `Default`: its files stay where they are, at the root, and its
+  Chromium store stays `cef/Default`. Nothing is copied or moved. Every other profile has
+  `profiles/<id>/` for the files core keeps and `cef/profile-<id>/` for Chromium's, ids being
+  `p` and a number `profiles.json` hands out, so a name with spaces or emoji never reaches a
+  path.
+- **One process.** nd-cef gives every `nd::webview::Profile::Named` its own persistent request
+  context under the CEF root, in the one Chromium the app runs, and Chrome style keeps them
+  apart (each context is a Chromium profile). So windows of several profiles are open at once
+  in one process, and the instance lock stays one per data dir, as today: a second launch
+  hands its URLs to the running app, which opens them in the key window's profile.
+- **Window to profile.** A `BrowserWindow` holds its `ProfileId` from birth and never changes
+  it; every page it creates passes that profile in `WebViewOptions::profile`. New Window opens
+  in the key window's profile. A tab moves between windows of one profile only; a live page
+  never crosses profiles. When spaces land, a space names its profile, and a window shows only
+  spaces of its own profile, so this binding is the space's and the window keeps one.
+- **Session per profile.** Each profile has its own `session.json` (the root one for
+  `Default`). The session module keeps one store per profile with windows open and writes each
+  from that profile's windows. A profile's last window closing while other windows stay keeps
+  its windows in its own file and marks the profile closed in `profiles.json`; quitting keeps
+  every open profile marked open. At launch each profile marked open restores its own windows
+  and pins; switching to a closed profile restores its session, or opens one new window.
+- **Settings.** `settings.json` stays app wide at the root: appearance, keys and layout are the
+  person's at this machine. What Chromium keeps per profile (passwords, permissions, site data)
+  is per profile because it lives in the profile's request context.
+- **Switching.** The foot's profile glyph opens a menu: each profile (the window's own checked),
+  New Profile, Rename Profile, Delete Profile. Picking another profile brings its front window
+  forward, or restores it as above. The command bar lists "Switch to <name>" for each other
+  profile and the three actions.
+- **Delete.** Asks first, naming what goes: the profile's tabs, pins, history, cookies, saved
+  passwords and extensions. Its windows close without asking their pages, then its entry
+  leaves `profiles.json` and both its directories are removed. Chromium may still hold files
+  in its store, so a directory that will not go is listed in `profiles.json` and removed at
+  the next launch before Chromium starts. `Default` cannot be deleted; it can be renamed.
+- **Extensions.** nd-cef installs extensions into the default profile only, so until nd lets a
+  named profile load its own, a profile other than `Default` has none (open in nd).
 
 ## Tab and page lifecycle
 
@@ -392,7 +455,8 @@ Shell, `crates/lynk/src`:
 | --- | --- | --- |
 | `lib.rs` | `run` and `init`: the first window | hold state |
 | `process.rs` | instance lock, later launches, SIGTERM | touch a window's tabs except through `open_tab` and `open_window` |
-| `session.rs` | `session.json`: restoring windows at launch, writing on change and on quit | open a window except through `app::open_restored` |
+| `session.rs` | each profile's `session.json`: restoring windows at launch, writing on change and on quit | open a window except through `app::open_restored` |
+| `profile.rs` | `profiles.json`, the foot's profile menu and name popover, switching, create, rename, delete | reach into another profile's windows except to close them on delete |
 | `app.rs` | the `Browser` global, window open and close, menu bar refresh | draw |
 | `window.rs` | one window's tabs and their lifecycle, `TAB_EVENTS` | draw, or know a feature's internals |
 | `tab.rs` | one tab and its page's lifetime | reach the window |

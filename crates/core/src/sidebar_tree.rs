@@ -474,6 +474,19 @@ impl SidebarTree {
         self.move_row(tab, Dest::Root(root_index))
     }
 
+    /// Pin Tab puts the tab at the end of the pinned block, Unpin Tab at the head of the list.
+    /// Asking for the state the tab is already in changes nothing.
+    pub fn set_pinned(&mut self, tab: &str, pinned: bool) -> Result<(), TreeError> {
+        if !self.contains_tab(tab) {
+            return Err(TreeError::UnknownRow);
+        }
+        match (pinned, self.is_pinned(tab)) {
+            (true, false) => self.pin(tab, usize::MAX),
+            (false, true) => self.unpin(tab, 0),
+            _ => Ok(()),
+        }
+    }
+
     /// The list's row holding `tab`: its own row, its split's, or its folder's.
     fn root_index_of(&self, tab: &str) -> Option<usize> {
         let loc = self.locate(tab)?;
@@ -870,6 +883,35 @@ mod tests {
         assert_eq!(t.pins, ["c", "p2", "e"]);
         assert_eq!(t.folder("f1").unwrap().children, vec![ctab("d"), ctab("f")]);
         assert_eq!(t.check(), Ok(()));
+    }
+
+    #[test]
+    fn pin_goes_to_the_end_of_the_block_and_unpin_to_the_head_of_the_list() {
+        let mut t = sample();
+        t.set_pinned("c", true).unwrap();
+        assert_eq!(t.pins, ["p1", "p2", "c"]);
+        t.set_pinned("c", true).unwrap();
+        assert_eq!(t.pins, ["p1", "p2", "c"], "pinning a pin changes nothing");
+        t.set_pinned("p2", false).unwrap();
+        assert_eq!(t.pins, ["p1", "c"]);
+        assert_eq!(rows(&t)[0], "p2");
+        t.set_pinned("a", false).unwrap();
+        assert_eq!(rows(&t)[0], "p2", "unpinning a loose tab changes nothing");
+        assert_eq!(t.set_pinned("nope", true), Err(TreeError::UnknownRow));
+        // Next and Previous Tab walk this order: the pins first, then the list.
+        assert_eq!(&t.tab_ids()[..3], ["p1", "c", "p2"]);
+        assert_eq!(t.check(), Ok(()));
+    }
+
+    #[test]
+    fn the_last_loose_tab_pins_and_leaves_the_list_empty() {
+        let mut t = tree(&[], vec![tab("a")]);
+        t.set_pinned("a", true).unwrap();
+        assert_eq!(t.pins, ["a"]);
+        assert!(t.items.is_empty());
+        t.set_pinned("a", false).unwrap();
+        assert_eq!(rows(&t), ["a"]);
+        assert!(t.pins.is_empty());
     }
 
     #[test]

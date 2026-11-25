@@ -153,7 +153,7 @@ fn front_pid() -> Option<u32> {
 }
 
 /// The app macOS has in front, by name and pid.
-fn front_app() -> String {
+pub fn front_app() -> String {
     Command::new("sh")
         .args(["-c", "lsappinfo info -only name -only pid $(lsappinfo front)"])
         .output()

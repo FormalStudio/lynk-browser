@@ -11,6 +11,7 @@ use std::time::Duration;
 use lynk_core::session::{OpenDisposition, Placement, place_opened_tab, tab_id, tab_number};
 use lynk_core::sidebar_tree::{Dest, SidebarTree};
 use lynk_core::spaces::neighbour;
+use lynk_core::tabstate::left_pinned_page;
 use nd::core::WindowId;
 use nd::prelude::*;
 use nd::virtual_list::ListState;
@@ -56,8 +57,13 @@ pub const TAB_EVENTS: &[TabListener] =
 pub type WindowListener = fn(&mut App, WindowId);
 
 /// Called as a window goes, so no module keeps state for it.
-pub const WINDOW_CLOSED: &[WindowListener] =
-    &[crate::zoom::forget, crate::site_info::forget, crate::sidebar::forget, crate::omnibox::forget];
+pub const WINDOW_CLOSED: &[WindowListener] = &[
+    crate::zoom::forget,
+    crate::site_info::forget,
+    crate::sidebar::forget,
+    crate::omnibox::forget,
+    crate::profile::forget,
+];
 
 /// Closes waiting on pages' `beforeunload`. `settle` is the one place a close goes ahead, and
 /// `changed` reaches it after every change to the window's tabs or pages, so a path that drops,
@@ -76,6 +82,8 @@ struct Closing {
 
 pub struct BrowserWindow {
     pub id: WindowId,
+    /// The profile every page of the window belongs to, fixed for its life.
+    pub profile: String,
     /// In no order; `tree` holds the sidebar's.
     tabs: Vec<Tab>,
     tree: SidebarTree,
@@ -97,19 +105,21 @@ pub struct BrowserWindow {
 }
 
 impl BrowserWindow {
-    /// A window on `tabs`, which are new unless `moved` (one tab moved out of another window),
-    /// in `tree`'s order when the session kept one.
+    /// A window of `profile` on `tabs`, which are new unless `moved` (one tab moved out of
+    /// another window), in `tree`'s order when the session kept one.
     pub fn new(
         id: WindowId,
-        tabs: Vec<Tab>,
+        profile: String,
+        mut tabs: Vec<Tab>,
         active: Option<TabId>,
         moved: bool,
-        tree: Option<SidebarTree>,
-        frame: Frame,
+        (tree, frame): (Option<SidebarTree>, Frame),
         cx: &mut Context<Self>,
     ) -> Self {
         let mut tree = tree.unwrap_or_default();
-        for tab in &tabs {
+        let engine = crate::profile::engine(&profile);
+        for tab in &mut tabs {
+            tab.profile = engine.clone();
             if !tree.contains_tab(&tab_id(tab.id)) {
                 tree.add_tab(&tab_id(tab.id), None, usize::MAX).expect("tab ids are unique");
             }
@@ -120,6 +130,7 @@ impl BrowserWindow {
             .unwrap_or_default();
         let mut this = Self {
             id,
+            profile,
             tabs,
             tree,
             active,
@@ -255,6 +266,7 @@ impl BrowserWindow {
             }
         };
         self.tree.add_tab(&tab_id(id), None, index).expect("tab ids are unique");
+        tab.profile = crate::profile::engine(&self.profile);
         self.tabs.push(tab);
         if opened {
             self.tab_event(id, TabEvent::Opened, cx);
@@ -395,7 +407,7 @@ impl BrowserWindow {
         let tab = self.tabs.remove(at);
         self.tree.close_tab(&tab_id(id));
         self.closing.tabs.retain(|t| *t != id);
-        app::remember_closed(cx, &tab);
+        app::remember_closed(cx, &self.profile, &tab);
         self.tab_event(id, TabEvent::Closed, cx);
         if self.tabs.is_empty() {
             self.close_window(cx);
@@ -452,9 +464,15 @@ impl BrowserWindow {
         if app::windows(cx).len() < 2 {
             return;
         }
+        let me = self.id;
+        let alone = !app::windows(cx).into_iter().any(|(id, w)| id != me && w.read(cx).profile == self.profile);
+        if alone {
+            crate::session::close_profile(cx, self);
+            crate::profile::closed(cx, &self.profile);
+        }
         for id in self.order() {
             if let Some(tab) = self.tab(id) {
-                app::remember_closed(cx, tab);
+                app::remember_closed(cx, &self.profile, tab);
             }
         }
         self.tabs.clear();
@@ -463,11 +481,72 @@ impl BrowserWindow {
         crate::session::changed(cx);
     }
 
-    /// Shift+Cmd+T: the last tab closed in any window, here.
+    /// Closes the window at once, asking no page: its profile is being deleted.
+    pub fn discard(&mut self, cx: &mut Context<Self>) {
+        self.closing = Closing::default();
+        self.close_window(cx);
+    }
+
+    /// Shift+Cmd+T: the last tab closed in any window of the profile, here.
     pub fn reopen(&mut self, cx: &mut Context<Self>) {
-        if let Some(url) = app::pop_closed(cx) {
+        if let Some(url) = app::pop_closed(cx, &self.profile) {
             self.open_tab(url, Open::End, cx);
         }
+    }
+
+    /// Pin Tab and Unpin Tab. A pin keeps the page it was pinned at for Reset to Pinned Page.
+    pub fn set_pinned(&mut self, id: TabId, pinned: bool, cx: &mut Context<Self>) {
+        if self.tree.set_pinned(&tab_id(id), pinned).is_err() {
+            return;
+        }
+        if let Some(tab) = self.tab_mut(id) {
+            tab.pinned_url = pinned.then(|| tab.url.clone()).filter(|u| !u.is_empty());
+        }
+        self.changed(cx);
+    }
+
+    /// A tab dropped on the pinned tiles at `index`: pinned there, or moved there if it was a pin.
+    pub fn pin_at(&mut self, id: TabId, index: usize, cx: &mut Context<Self>) {
+        let was = self.is_pinned(id);
+        if self.tree.move_row(&tab_id(id), Dest::Pins(index)).is_err() {
+            return;
+        }
+        if !was && let Some(tab) = self.tab_mut(id) {
+            tab.pinned_url = Some(tab.url.clone()).filter(|u| !u.is_empty());
+        }
+        self.changed(cx);
+    }
+
+    /// A tile dropped on the list at row `index`.
+    pub fn unpin_to(&mut self, id: TabId, index: usize, cx: &mut Context<Self>) {
+        if !self.is_pinned(id) || self.tree.unpin(&tab_id(id), index).is_err() {
+            return;
+        }
+        if let Some(tab) = self.tab_mut(id) {
+            tab.pinned_url = None;
+        }
+        self.changed(cx);
+    }
+
+    /// The pinned tab has left the page it was pinned at.
+    pub fn can_reset_pin(&self, id: TabId) -> bool {
+        self.is_pinned(id) && self.tab(id).is_some_and(|t| left_pinned_page(t.pinned_url.as_deref(), &t.url))
+    }
+
+    /// Reset to Pinned Page: back to where the pin was made.
+    pub fn reset_pin(&mut self, id: TabId, cx: &mut Context<Self>) {
+        if let Some(url) = self.tab(id).filter(|_| self.can_reset_pin(id)).and_then(|t| t.pinned_url.clone()) {
+            self.navigate(id, url, cx);
+        }
+    }
+
+    pub fn set_muted(&mut self, id: TabId, muted: bool, cx: &mut Context<Self>) {
+        let Some(tab) = self.tab_mut(id) else { return };
+        tab.muted = muted;
+        if let Some(page) = tab.view() {
+            page.set_muted(muted);
+        }
+        self.changed(cx);
     }
 
     /// Every other tab that is not pinned: pinned tabs are kept on purpose.
@@ -479,18 +558,26 @@ impl BrowserWindow {
     }
 
     pub fn duplicate(&mut self, id: TabId, cx: &mut Context<Self>) {
-        let (Some(at), Some(url)) = (self.index_of(id), self.tab(id).map(|t| t.url.clone())) else { return };
-        self.open_tab(url, Open::At { index: at + 1, foreground: true }, cx);
+        let Some(url) = self.tab(id).map(|t| t.url.clone()) else { return };
+        // A pin's copy is an ordinary tab, at the head of the list.
+        let index = self.index_of(id).map_or(0, |at| at + 1);
+        self.open_tab(url, Open::At { index, foreground: true }, cx);
     }
 
     /// Moves `id` one place left (`-1`) or right (`1`) in the sidebar.
+    /// A pin moves among the pins.
     pub fn move_by(&mut self, id: TabId, delta: isize, cx: &mut Context<Self>) {
-        let Some(at) = self.index_of(id) else { return };
+        let key = tab_id(id);
+        let (at, len, dest): (_, _, fn(usize) -> Dest) = match self.tree.pins.iter().position(|p| *p == key) {
+            Some(at) => (Some(at), self.tree.pins.len(), Dest::Pins),
+            None => (self.index_of(id), self.tree.items.len(), Dest::Root),
+        };
+        let Some(at) = at else { return };
         let to = at as isize + delta;
-        if to < 0 || to as usize >= self.tree.items.len() {
+        if to < 0 || to as usize >= len {
             return;
         }
-        if self.tree.move_row(&tab_id(id), Dest::Root(to as usize)).is_ok() {
+        if self.tree.move_row(&key, dest(to as usize)).is_ok() {
             self.changed(cx);
         }
     }
@@ -608,7 +695,7 @@ impl BrowserWindow {
     /// Gives `id`'s page the level kept for its host.
     pub fn apply_zoom(&mut self, id: TabId, cx: &mut Context<Self>) {
         let Some(url) = self.tab(id).map(|t| t.url.clone()) else { return };
-        let factor = app::zoom_for(cx, &url);
+        let factor = app::zoom_for(cx, &self.profile, &url);
         self.set_zoom(id, factor);
     }
 
@@ -811,6 +898,59 @@ mod tests {
         assert!(!cx.window_ids().any(|w| w == a));
         let b = app::key_window(&cx).expect("the launch has its own window");
         assert_eq!(urls(&cx, b), ["https://example.org/"]);
+    }
+
+    #[test]
+    fn a_pin_keeps_its_page_and_moves_by_the_pins() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let tabs = ["https://a.test/", "https://b.test/", ""].map(|u| Tab::new(app::next_tab_id(&mut cx), u)).into();
+        let a = app::open_window(&mut cx, tabs, None);
+        cx.run_until_idle();
+        with(&mut cx, a, |w, cx| {
+            w.set_pinned(2, true, cx);
+            w.set_pinned(3, true, cx);
+            assert_eq!(w.order(), [2, 3, 1]);
+            assert_eq!(w.tab(2).unwrap().pinned_url.as_deref(), Some("https://b.test/"));
+            assert_eq!(w.tab(3).unwrap().pinned_url, None, "a new tab page pins with no page to go back to");
+            assert!(!w.can_reset_pin(2));
+            w.tab_mut(2).unwrap().url = "https://b.test/elsewhere".into();
+            assert!(w.can_reset_pin(2));
+            w.move_by(3, -1, cx);
+            assert_eq!(w.order(), [3, 2, 1], "a pin moves among the pins");
+            w.duplicate(2, cx);
+            assert_eq!(w.order()[2], 4, "a pin's copy heads the list");
+            w.unpin_to(2, usize::MAX, cx);
+            assert_eq!(*w.order().last().unwrap(), 2);
+            assert_eq!(w.tab(2).unwrap().pinned_url, None);
+            w.pin_at(1, 0, cx);
+            assert_eq!(w.order()[..2], [1, 3]);
+        });
+    }
+
+    #[test]
+    fn closed_tabs_and_new_windows_stay_in_their_profile() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let first = vec![Tab::new(app::next_tab_id(&mut cx), "https://a.test/")];
+        let a = app::open_window(&mut cx, first, None);
+        let tabs =
+            vec![Tab::new(app::next_tab_id(&mut cx), "https://work.test/"), Tab::new(app::next_tab_id(&mut cx), "")];
+        let b = app::open_window_in(&mut cx, "p2".into(), tabs, None);
+        cx.run_until_idle();
+        with(&mut cx, b, |w, cx| {
+            assert_eq!(w.tab(2).unwrap().profile, nd::webview::Profile::Named("p2".into()));
+            w.close_tab(2, cx);
+        });
+        with(&mut cx, a, |w, cx| {
+            w.reopen(cx);
+            assert_eq!(w.tab_count(), 1, "another profile's closed tab does not come back here");
+        });
+        with(&mut cx, b, |w, cx| {
+            w.reopen(cx);
+            assert!(w.tabs().iter().any(|t| t.url == "https://work.test/"));
+        });
+        assert_eq!(app::windows_of(&cx, "p2").len(), 1);
     }
 
     /// Two windows, so the one that closes leaves the registry; `a` has two live tabs.

@@ -10,6 +10,9 @@ Lynk is an Arc-style Chromium browser in Rust on NativeDesktop (`nd`, source at
    the waves and lanes. [docs/nd-parity.md](docs/nd-parity.md): the boxes that define done.
 3. The spec for a feature: `docs/sidebar.md`, `docs/omnibox.md`, `docs/native-pages.md`, and the
    old TypeScript app in `src/`. `src/` and `PLAN.md` are history; never edit or build them.
+4. For anything visible: [docs/inspiration.md](docs/inspiration.md) and
+   [docs/reference-search-browser.md](docs/reference-search-browser.md), the Search browser's
+   tokens, motion and surfaces beside Arc.
 
 ## Build, run, gate
 

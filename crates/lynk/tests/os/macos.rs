@@ -103,9 +103,12 @@ pub fn launch(options: LaunchOptions) -> App {
     app
 }
 
+/// Brings the app forward and waits until macOS has it in front. The accessibility call fails
+/// until the app has registered with the window server, and succeeds while another app (Finder,
+/// after the last test's app quit) keeps the front, so it retries until the front app is this one.
 fn activate(app: &App) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ndshell::input::activate(app.pid()) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !(ndshell::input::activate(app.pid()) && front_pid() == Some(app.pid())) {
         assert!(Instant::now() < deadline, "the app would not come forward; in front: {}", front_app());
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -129,6 +132,22 @@ pub fn in_front(app: &App) {
         ndshell::input::activate(app.pid());
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// The top of a process's main thread stack, sampled for a second: where a hung app is stuck.
+pub fn main_thread_of(pid: u32) -> String {
+    let out = Command::new("sample").args([&pid.to_string(), "1"]).output();
+    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let main = text.lines().skip_while(|l| !l.contains("com.apple.main-thread")).take(60);
+    main.collect::<Vec<_>>().join("\n")
+}
+
+/// The pid of the app macOS has in front. `lsappinfo` prints it as `"pid"=N` for a bundled app
+/// and `pid = N` for a bare binary like the test's.
+fn front_pid() -> Option<u32> {
+    let info = front_app();
+    let at = info.find("pid")? + 3;
+    info[at..].trim_start_matches(['"', ' ', '=']).split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 
 /// The app macOS has in front, by name and pid.
@@ -165,6 +184,41 @@ pub fn click(_: &App, at: (f64, f64)) {
 
 pub fn move_to(_: &App, at: (f64, f64)) {
     ndshell::input::move_to(at);
+}
+
+/// Drags the left button from `from` by `(dx, dy)` in `steps` moves.
+pub fn drag(_: &App, from: (f64, f64), dx: f64, dy: f64, steps: u32) {
+    ndshell::input::drag(from, dx, dy, steps);
+}
+
+/// Scrolls the wheel over `at` by `dy` points, negative down.
+pub fn scroll(_: &App, at: (f64, f64), dy: i32, steps: u32) {
+    ndshell::input::scroll(at, dy, steps);
+}
+
+/// Clicks the button titled `title` in the app's alert, sheet or window.
+pub fn click_button(app: &App, title: &str) {
+    let script = format!(
+        r#"tell application "System Events" to tell (first process whose unix id is {pid})
+            repeat with w in windows
+                if exists button "{title}" of w then
+                    click button "{title}" of w
+                    return
+                end if
+                if exists sheet 1 of w then
+                    if exists button "{title}" of sheet 1 of w then
+                        click button "{title}" of sheet 1 of w
+                        return
+                    end if
+                end if
+            end repeat
+            error "no button {title}"
+        end tell"#,
+        pid = app.pid()
+    );
+    let status = Command::new("osascript").args(["-e", &script]).status().unwrap();
+    assert!(status.success(), "no {title} button");
+    std::thread::sleep(Duration::from_millis(500));
 }
 
 /// How many windows the app has on every layer, however small.

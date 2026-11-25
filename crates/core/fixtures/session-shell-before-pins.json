@@ -1,0 +1,65 @@
+{
+  "version": 3,
+  "data": {
+    "windows": [
+      {
+        "id": "w1",
+        "tabs": [
+          {
+            "id": "t2",
+            "url": "http://127.0.0.1:8765/alpha.html",
+            "title": "Alpha"
+          },
+          {
+            "id": "t3",
+            "url": "http://127.0.0.1:8765/beta.html",
+            "title": ""
+          }
+        ],
+        "activeId": "t2",
+        "width": 1280.0,
+        "height": 800.0,
+        "x": 512.0,
+        "y": 160.0,
+        "spaces": {
+          "shown": "s1",
+          "sidebars": {
+            "s1": {
+              "pins": [],
+              "items": [
+                {
+                  "type": "tab",
+                  "id": "t2"
+                },
+                {
+                  "type": "tab",
+                  "id": "t3"
+                }
+              ],
+              "lastActive": ""
+            }
+          }
+        },
+        "mru": [
+          "t2"
+        ]
+      }
+    ],
+    "nextTabId": 4,
+    "nextWindowId": 2,
+    "zoomByHost": {},
+    "spaces": [
+      {
+        "id": "s1",
+        "name": "Personal",
+        "theme": {
+          "hue": 220,
+          "accentHue": 260
+        }
+      }
+    ],
+    "spaceRules": [],
+    "nextItemId": 2,
+    "archive": []
+  }
+}

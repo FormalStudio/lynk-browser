@@ -15,6 +15,7 @@ pub mod history;
 pub mod omnibox;
 pub mod page;
 pub mod process;
+pub mod profile;
 pub mod session;
 pub mod shell;
 pub mod sidebar;
@@ -40,19 +41,32 @@ pub fn run() -> nd::Result<()> {
     })
 }
 
-/// Brings back the session's windows, with `urls` as new tabs in the front one. With no session
-/// to restore, opens one window on `urls`, one tab each; with none, on `LYNK_URL` or the new tab
-/// page.
+/// Brings back the windows of every profile open as the app last quit, with `urls` as new tabs
+/// in the front one. With no session to restore, opens one window on `urls`, one tab each; with
+/// none, on `LYNK_URL` or the new tab page.
 pub fn init(cx: &mut App, mut urls: Vec<String>) {
     app::install(cx);
     cx.bind_keys(actions::bindings());
-    let restored = session::open(cx, &nd::system::app_dirs().data());
+    profile::install(cx, &nd::system::app_dirs().data());
+    session::install(cx);
+    for id in profile::ids(cx) {
+        let dir = profile::data_dir(cx, &id);
+        session::raise_tab_ids(cx, &dir);
+    }
+    let open = profile::open_ids(cx);
+    let mut restored = Vec::new();
+    for id in &open {
+        let dir = profile::data_dir(cx, id);
+        restored.extend(session::open(cx, id, &dir));
+    }
     if restored.is_empty() {
         if urls.is_empty() {
             urls.push(std::env::var("LYNK_URL").unwrap_or_default());
         }
         let tabs = urls.into_iter().map(|url| tab::Tab::new(app::next_tab_id(cx), url)).collect();
-        app::open_window(cx, tabs, None);
+        // `profiles.json` always has a profile open, whose session `open` above started.
+        let first = open.into_iter().next().unwrap_or_else(|| lynk_core::profiles::DEFAULT_ID.to_owned());
+        app::open_window_in(cx, first, tabs, None);
     } else {
         for window in restored {
             app::open_restored(cx, window);

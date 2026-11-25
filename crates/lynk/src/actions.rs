@@ -60,6 +60,7 @@ actions!(
         NextTab,
         PreviousTab,
         TogglePin,
+        ResetPinnedPage,
         ToggleMute,
         SleepTab,
         CloseOtherTabs,
@@ -75,8 +76,16 @@ actions!(
         ClearBrowsingData,
         Print,
         SelectLastTab,
+        NewProfile,
+        RenameProfile,
+        DeleteProfile,
     ]
 );
+
+/// Brings a profile forward by id, from the foot's profile menu or the command bar.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = lynk, no_json)]
+pub struct SwitchProfile(pub String);
 
 /// The tab at this place in the window, Cmd+1 to Cmd+8.
 #[derive(Clone, PartialEq, Debug, Action)]
@@ -278,8 +287,8 @@ pub const CONTEXT_KEYS: &[fn() -> KeyBinding] = &[crate::find::close_key];
 
 pub const COMMANDS: &[Command] = &[
     Command::new::<NewTab>("New Tab").key("new-tab").menu(MenuId::File).handler(crate::omnibox::new_tab),
-    Command::new::<NewWindow>("New Window").key("new-window").menu(MenuId::File).handler(|_, _, _, cx| {
-        app::open_window(cx, Vec::new(), None);
+    Command::new::<NewWindow>("New Window").key("new-window").menu(MenuId::File).handler(|w, _, _, cx| {
+        app::open_window_in(cx, w.profile.clone(), Vec::new(), None);
     }),
     Command::new::<NewPrivateWindow>("New Private Window").key("private").menu(MenuId::File),
     Command::new::<OpenAddress>("Open Address Bar")
@@ -371,8 +380,22 @@ pub const COMMANDS: &[Command] = &[
         .key("prev-tab")
         .menu(MenuId::Tabs)
         .handler(|w, _, _, cx| w.cycle(-1, cx)),
-    Command::new::<TogglePin>("Pin Tab").menu(MenuId::Tabs).flips("Unpin Tab", |w, id, _| w.is_pinned(id)),
-    Command::new::<ToggleMute>("Mute Tab"),
+    Command::new::<TogglePin>("Pin Tab")
+        .key("pin-tab")
+        .menu(MenuId::Tabs)
+        .flips("Unpin Tab", |w, id, _| w.is_pinned(id))
+        .handler(|w, id, _, cx| w.set_pinned(id, !w.is_pinned(id), cx)),
+    Command::new::<ResetPinnedPage>("Reset to Pinned Page")
+        .menu(MenuId::Tabs)
+        .enabled(|w, id, _| w.can_reset_pin(id))
+        .handler(|w, id, _, cx| w.reset_pin(id, cx)),
+    Command::new::<ToggleMute>("Mute Tab")
+        .flips("Unmute Tab", |w, id, _| w.tab(id).is_some_and(|t| t.muted))
+        .enabled(has_address)
+        .handler(|w, id, _, cx| {
+            let muted = w.tab(id).is_some_and(|t| t.muted);
+            w.set_muted(id, !muted, cx);
+        }),
     Command::new::<SleepTab>("Put Tab to Sleep")
         .menu(MenuId::Tabs)
         .enabled(|w, id, _| w.can_sleep(id))
@@ -411,6 +434,11 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<ShowHistory>("Show All History").key("history").menu(MenuId::History),
     Command::new::<ClearBrowsingData>("Clear Browsing Data\u{2026}").key("clear-data").menu(MenuId::History),
     Command::new::<Print>("Print\u{2026}"),
+    Command::new::<NewProfile>("New Profile\u{2026}").handler(crate::profile::new_profile),
+    Command::new::<RenameProfile>("Rename Profile\u{2026}").handler(crate::profile::rename_profile),
+    Command::new::<DeleteProfile>("Delete Profile\u{2026}")
+        .enabled(|w, _, _| w.profile != lynk_core::profiles::DEFAULT_ID)
+        .handler(crate::profile::delete_profile),
     Command::new::<SelectLastTab>("Select Last Tab").handler(|w, _, _, cx| {
         if let Some(last) = w.tab_count().checked_sub(1) {
             w.select_at(last, cx);

@@ -84,8 +84,21 @@ the Rust build, and the nix config switches on every host.
 
 ## Wave 5: beyond parity
 
-Arc features the 0.5.11 app never had: spaces with their own pinned sets and themes, folders in
-the sidebar, split view, auto-archive of stale tabs, peek for links out of pinned tabs, a small
-window for links opened from other apps, registering as the default browser, and everything in
-[inspiration.md](inspiration.md). The owner approved all of it on 2026-11-24, to start once the
-browser is usable and stable on macOS and Linux. Each is a lane of its own.
+Arc features the 0.5.11 app never had, and everything in [inspiration.md](inspiration.md). The
+owner approved all of it on 2026-11-24 and repeated on 2026-11-25 that the inspiration items are
+wanted features. Lanes start as the basic browser (pins, tab persistence, profiles, extensions)
+lands on macOS and Linux; a lane that already owns the surface takes its item early.
+
+| Lane | Boxes | Inspiration |
+| --- | --- | --- |
+| `settings-design`, with the settings tab | Settings that stay small: the layout, search and grouping of the post | section 1 |
+| `sidebar-organise`, with pins | Drag and drop to pin, named separators, generated separators, typed folders and the folder popover | sections 2 and 6 |
+| `layouts-themes` | The top-tabs layout beside the sidebar layout in one design language, themes | section 3 |
+| `spaces` | Spaces with their own pinned sets and themes, one foot button per space, Cmd+1 to Cmd+9, a profile per space | section 3 |
+| `switcher-link-window` | The visual tab switcher, a small window for links opened from other apps, registering as the default browser | section 4 |
+| `peek` | Peek by force click (a long press where there is no force), peek for links out of pinned tabs | section 5 |
+| `split` | Split tabs | section 6 |
+| `archive` | Auto-archive of stale tabs | none |
+
+Each lane adds its boxes to `nd-parity.md` before it writes code, with what nd has to provide
+taken from "What nd would have to provide" in the inspiration notes.

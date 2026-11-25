@@ -5,7 +5,7 @@
 use nd::core::WindowId;
 use nd::prelude::*;
 
-use crate::actions::{self, CONTEXT, MoveTabToWindow, SelectTab, SelectTabAt};
+use crate::actions::{self, CONTEXT, MoveTabToWindow, SelectTab, SelectTabAt, SwitchProfile};
 use crate::app;
 use crate::page;
 use crate::sidebar;
@@ -67,7 +67,8 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|win, a: &SelectTabAt, _, cx| win.select_at(a.0, cx)))
             .on_action(cx.listener(|win, a: &SelectTab, _, cx| win.select(a.0, cx)))
             .on_action(cx.listener(|win, a: &MoveTabToWindow, _, cx| move_tab(win, win.active, Some(a.0), cx)))
-            .on_action(cx.listener(actions::run_for_tab));
+            .on_action(cx.listener(actions::run_for_tab))
+            .on_action(cx.listener(|win, a: &SwitchProfile, window, cx| crate::profile::switch(win, a, window, cx)));
         actions::listen_all(root, cx)
     }
 }
@@ -177,18 +178,20 @@ pub fn view_source(win: &mut BrowserWindow, id: TabId, _: &mut Window, cx: &mut 
 
 pub(crate) fn move_tab(win: &mut BrowserWindow, id: TabId, target: Option<WindowId>, cx: &mut Context<BrowserWindow>) {
     let target = match target {
-        // A window on its way out would take the tab with it.
-        Some(id) => match app::window(cx, id).filter(|w| !w.read(cx).pending_close()) {
-            Some(entity) => Some(entity),
-            None => return,
-        },
+        // A window on its way out would take the tab with it, and a page never crosses profiles.
+        Some(id) => {
+            match app::window(cx, id).filter(|w| !w.read(cx).pending_close() && w.read(cx).profile == win.profile) {
+                Some(entity) => Some(entity),
+                None => return,
+            }
+        }
         None => None,
     };
     let Some(tab) = win.take(id, cx) else { return };
     match target {
         Some(entity) => entity.update(cx, |w, cx| w.adopt(tab, cx)),
         None => {
-            app::open_window_around(cx, tab);
+            app::open_window_around(cx, win.profile.clone(), tab);
         }
     }
 }

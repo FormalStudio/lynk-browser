@@ -162,6 +162,14 @@ pub fn right_edge(app: &App, win: &Win, width: f64, step: usize) -> Vec<[u8; 3]>
 /// Hyprland gives the keyboard to the window under a click, so there is no app to bring forward.
 pub fn in_front(_: &App) {}
 
+/// Where a hung process's main thread waits, as the kernel reports it; reading its stack needs
+/// ptrace, which Yama allows only on the test's own children.
+pub fn main_thread_of(pid: u32) -> String {
+    let wchan = std::fs::read_to_string(format!("/proc/{pid}/wchan")).unwrap_or_default();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    format!("main thread of {pid} waits in {wchan:?}, stat {stat}")
+}
+
 impl App {
     pub fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         self.display.command(program)
@@ -285,6 +293,34 @@ pub fn release(app: &App, _: (f64, f64)) {
     let mut input = app.input.borrow_mut();
     input.button(false);
     input.sync().unwrap();
+}
+
+/// Drags the left button from `from` by `(dx, dy)` in `steps` moves.
+pub fn drag(app: &App, from: (f64, f64), dx: f64, dy: f64, steps: u32) {
+    app.input.borrow_mut().drag(from, dx, dy, steps, Duration::from_millis(16)).unwrap();
+}
+
+/// Scrolls the wheel over `at` by `dy` points, negative down as on macOS, in wheel notches.
+pub fn scroll(app: &App, at: (f64, f64), dy: i32, _steps: u32) {
+    app.input.borrow_mut().scroll(at.0, at.1, -dy / 100).unwrap();
+    std::thread::sleep(Duration::from_millis(120));
+}
+
+/// Clicks the button titled `title` in one of the app's windows: GPUI draws alerts and dialogs
+/// on Linux, so the automation tree has them.
+pub fn click_button(app: &App, title: &str) {
+    let tree = app.tree(None).unwrap();
+    let (window, button) = tree
+        .windows
+        .iter()
+        .find_map(|w| w.root.iter().find(|n| format!("{:?}", n.role) == "Button" && n.name == title).map(|n| (w, n)))
+        .unwrap_or_else(|| panic!("no {title} button"));
+    let r = button.bounds.expect("the button's bounds");
+    let client = clients(app).into_iter().find(|c| c["title"].as_str() == Some(window.title.as_str()));
+    let at =
+        client.as_ref().map_or((0., 0.), |c| (c["at"][0].as_f64().unwrap_or(0.), c["at"][1].as_f64().unwrap_or(0.)));
+    click(app, (at.0 + f64::from(r.origin.x + r.size.width / 2.), at.1 + f64::from(r.origin.y + r.size.height / 2.)));
+    std::thread::sleep(Duration::from_millis(500));
 }
 
 pub fn right_click(app: &App, at: (f64, f64)) {

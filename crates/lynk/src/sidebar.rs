@@ -1,13 +1,16 @@
-//! The sidebar: the controls row with the window's own buttons, the tab list that scrolls, and
-//! the foot. Plain rows with their menus; pinned tiles and drag come later.
+//! The sidebar: the controls row with the window's own buttons, the pinned tiles, the tab list
+//! that scrolls, and the foot. Rows and tiles drag as one kind: a row dropped on the tiles pins
+//! its tab, a tile dropped on the list unpins it, and tiles reorder among themselves.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use lynk_core::session::{tab_id, tab_number};
+use lynk_core::tabstate::tile_letter;
 use nd::core::WindowId;
 use nd::platform::{Target, target};
 use nd::prelude::*;
-use nd::virtual_list::{SelectEvent, Selection, list};
+use nd::virtual_list::{RowDropped, SelectEvent, Selection, list};
 
 use crate::actions;
 use crate::app;
@@ -55,6 +58,20 @@ const PRESSED_SCALE: f32 = 0.98;
 /// A sleeping tab's row, the resting New tab row and a resting close glyph.
 const ASLEEP: f32 = 0.5;
 const QUIET: f32 = 0.6;
+/// The pinned grid (docs/sidebar.md): tiles at least 40 wide and 0.74 as tall, 6 apart, three
+/// columns in a window narrower than about 900, four from there.
+const TILE_MIN: f32 = 40.;
+const TILE_ASPECT: f32 = 0.74;
+const TILE_GAP: f32 = 6.;
+const TILE_RADIUS: f32 = 10.;
+const TILE_ICON: f32 = 20.;
+/// The tab on show is the brighter pill: its glass tinted this much white.
+const RAISED_TINT: f32 = 0.35;
+const FOUR_COLUMNS_FROM: f64 = 900.;
+/// Between the tiles and the first row.
+const PINS_BOTTOM: f32 = 8.;
+/// What rows and tiles drag as, each carrying its tab id.
+const TAB_KIND: &str = "tab";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SidebarRow {
@@ -92,8 +109,10 @@ fn set_hovered(cx: &mut App, win: WindowId, id: Option<TabId>) {
 pub type Slot = fn(&BrowserWindow, &mut Window, &mut Context<BrowserWindow>) -> Option<AnyElement>;
 
 /// The foot, leading to trailing: settings, the padlock, zoom (while not 100%), blocked pop-ups,
-/// a secondary window's own menu, the extensions (the puzzle, then pinned actions), downloads.
-pub const FOOT: &[Slot] = &[settings, crate::site_info::padlock, crate::zoom::glyph, window_menu];
+/// a secondary window's own menu, the profile, the extensions (the puzzle, then pinned actions),
+/// downloads.
+pub const FOOT: &[Slot] =
+    &[settings, crate::site_info::padlock, crate::zoom::glyph, window_menu, crate::profile::glyph];
 
 fn settings(_: &BrowserWindow, _: &mut Window, _: &mut Context<BrowserWindow>) -> Option<AnyElement> {
     Some(
@@ -117,7 +136,7 @@ fn window_menu(win: &BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWind
         use actions::*;
         let Some(win) = app::window(cx, me) else { return menu };
         let win = win.read(cx);
-        let others: Vec<(WindowId, String)> = app::windows(cx)
+        let others: Vec<(WindowId, String)> = app::windows_of(cx, &win.profile)
             .into_iter()
             .filter(|(id, _)| *id != me)
             .map(|(id, w)| (id, w.read(cx).window_label()))
@@ -154,6 +173,7 @@ impl BrowserWindow {
         let rows: Vec<(SidebarRow, u64)> = self
             .tabs()
             .into_iter()
+            .filter(|t| !self.is_pinned(t.id))
             .map(|t| {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 (t.label(), &t.favicon, t.rt.loading, t.is_asleep(), self.active == t.id, hovered == Some(t.id))
@@ -163,7 +183,8 @@ impl BrowserWindow {
             .chain((target() != Target::Linux).then_some((SidebarRow::NewTab, 0)))
             .collect();
         self.rows.set_items_versioned(rows, cx);
-        self.rows.set_selected(vec![SidebarRow::Tab(self.active)], cx);
+        let shown = if self.is_pinned(self.active) { Vec::new() } else { vec![SidebarRow::Tab(self.active)] };
+        self.rows.set_selected(shown, cx);
     }
 
     pub fn sidebar(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -186,6 +207,20 @@ impl BrowserWindow {
             .estimated_row_height(px(ROW_HEIGHT))
             .selection(Selection::single())
             .selectable(|row, _| matches!(row, SidebarRow::Tab(_)))
+            .drag_rows(TAB_KIND, |row| match row {
+                SidebarRow::Tab(id) => Some(tab_id(*id).into()),
+                SidebarRow::NewTab => None,
+            })
+            .accepts_drops([TAB_KIND])
+            .on_drop(cx.listener(|win, e: &RowDropped<SidebarRow>, _, cx| {
+                let Some(id) = tab_number(&e.item.id) else { return };
+                // A tile dropped on a row lands in that row's place, anywhere else at the end.
+                let at = match e.key {
+                    Some(SidebarRow::Tab(row)) => win.index_of(row),
+                    _ => None,
+                };
+                win.unpin_to(id, at.unwrap_or(usize::MAX), cx);
+            }))
             .on_select(cx.listener(|win, e: &SelectEvent<SidebarRow>, window, cx| match e.key {
                 // A click on the row on show opens the command bar on its address.
                 SidebarRow::Tab(id) if id == win.active => {
@@ -204,6 +239,7 @@ impl BrowserWindow {
             .when(!mac, |col| col.pt(px(INSET)))
             .context_menu(|menu, _, _| column_menu(menu))
             .child(controls)
+            .children(self.pinned(cx))
             .child(rows)
             .into_any_element()
     }
@@ -229,6 +265,105 @@ impl BrowserWindow {
             foot = foot.child(div().flex_1()).child(plus);
         }
         foot.into_any_element()
+    }
+
+    /// Arc's favourites grid, or nothing while no tab is pinned.
+    fn pinned(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let pins: Vec<TabId> = self.tree().pins.iter().filter_map(|p| tab_number(p)).collect();
+        if pins.is_empty() {
+            return None;
+        }
+        let columns = if self.frame.width < FOUR_COLUMNS_FROM { 3 } else { 4 };
+        let tiles: Vec<Tile> = pins.iter().filter_map(|id| Some(tile(tab_id(*id), self.tile(*id, cx)?))).collect();
+        let grid = tile_grid("pins")
+            .max_columns(columns)
+            .min_tile_width(TILE_MIN)
+            .aspect(TILE_ASPECT)
+            .gap(TILE_GAP)
+            .reflow(Animation::ease_out(std::time::Duration::from_millis(200)))
+            .tiles(tiles)
+            .draggable_tiles(TAB_KIND)
+            .accepts_drops([TAB_KIND])
+            .on_move(cx.listener(|win, e: &TileMoved, _, cx| {
+                if let Some(id) = tab_number(&e.id) {
+                    win.pin_at(id, e.index, cx);
+                }
+            }))
+            .on_drop(cx.listener(|win, e: &Dropped, _, cx| {
+                if let (Some(id), Some(slot)) = (tab_number(&e.item.id), &e.slot) {
+                    win.pin_at(id, slot.index, cx);
+                }
+            }));
+        Some(div().id("pinned").flex_none().pb(px(PINS_BOTTOM)).child(grid).into_any_element())
+    }
+
+    /// One pinned tile: the site's icon, or its letter until there is one. The tab on show is
+    /// the raised pill with its letter in full ink.
+    fn tile(&self, id: TabId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tab = self.tab(id)?;
+        let me = self.id;
+        let active = self.active == id;
+        let mac = target() == Target::MacOs;
+        let ink = cx.theme().text.primary;
+        let face = match &tab.favicon {
+            Some(url) => image(url.to_string())
+                .size(px(TILE_ICON))
+                .on_error(cx.listener(move |win, _: &ImageFailed, _, cx| {
+                    if let Some(tab) = win.tab_mut(id) {
+                        tab.favicon = None;
+                    }
+                    win.changed(cx);
+                }))
+                .into_any_element(),
+            None => {
+                let letter = label(tile_letter(&tab.label())).id(format!("pin-letter-{id}"));
+                if active { letter } else { letter.secondary() }.into_any_element()
+            }
+        };
+        let face = div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(tab.is_asleep(), |f| f.opacity(ASLEEP))
+            .child(face);
+        let body = if mac {
+            glass()
+                .size_full()
+                .rounded(px(TILE_RADIUS))
+                // Clear glass over the light sidebar reads as a dark slab, so every tile is Regular
+                // and the shown one is raised by its tint.
+                .variant(GlassVariant::Regular)
+                .when(active, |g| g.tint(hsla(0., 0., 1., RAISED_TINT)))
+                .interactive()
+                .child(face)
+                .into_any_element()
+        } else {
+            div()
+                .size_full()
+                .rounded(px(TILE_RADIUS))
+                .when(active, |t| t.bg(ink.opacity(SHOWN_FILL)))
+                .when(!active, |t| t.hover(|s| s.bg(ink.opacity(HOVER_FILL))))
+                .child(face)
+                .into_any_element()
+        };
+        Some(
+            div()
+                .id(format!("pin-{id}"))
+                .role(nd::core::semantic::Role::Button, tab.label())
+                .size_full()
+                .active(|pose| pose.scale(PRESSED_SCALE))
+                .on_tap(cx.listener(move |win, _: &TapEvent, window, cx| {
+                    if win.active == id {
+                        cx.dispatch_action(window.id(), &actions::OpenAddress);
+                    } else {
+                        win.select(id, cx);
+                    }
+                }))
+                .context_menu(move |menu, _, cx| pin_menu(menu, me, id, cx))
+                .child(body)
+                .into_any_element(),
+        )
     }
 
     fn row(&mut self, row: SidebarRow, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -328,8 +463,21 @@ fn close_button(id: TabId, label: String, ink: Hsla, cx: &mut Context<BrowserWin
         .into_any_element()
 }
 
-/// A tab row's menu, acting on the row's tab. Pin and mute arrive with their lanes, so they show
-/// disabled.
+/// A pinned tile's menu: the few commands that make sense for a page kept on purpose.
+fn pin_menu(menu: ContextMenu, win: WindowId, id: TabId, cx: &App) -> ContextMenu {
+    use actions::*;
+    let Some(win) = app::window(cx, win) else { return menu };
+    let win = win.read(cx);
+    let item = |command| item_for_tab(command, win, id, cx);
+    menu.entry(item(command_for::<ResetPinnedPage>()))
+        .entry(item(command_for::<TogglePin>()))
+        .entry(item(command_for::<ToggleMute>()))
+        .entry(item(command_for::<SleepTab>()))
+        .separator()
+        .entry(item(command_for::<CloseTab>()))
+}
+
+/// A tab row's menu, acting on the row's tab.
 fn row_menu(menu: ContextMenu, win: WindowId, id: TabId, cx: &App) -> ContextMenu {
     use actions::*;
     let Some(win) = app::window(cx, win) else { return menu };

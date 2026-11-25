@@ -134,6 +134,9 @@ pub const COMMANDS: &[OmniCommand] = &[
     cmd("webstore", "Chrome Web Store", "web-browser-symbolic", None, ""),
     cmd("layout", "Switch Layout", "sidebar-show-symbolic", Some("layout"), "sidebar compact"),
     cmd("settings", "Settings", "preferences-system-symbolic", Some("settings"), "preferences"),
+    cmd("new-profile", "New Profile\u{2026}", "avatar-default-symbolic", None, "person account"),
+    cmd("rename-profile", "Rename Profile\u{2026}", "avatar-default-symbolic", None, "person account"),
+    cmd("delete-profile", "Delete Profile\u{2026}", "edit-delete-symbolic", None, "person account remove"),
     cmd("quit", "Quit", "window-close-symbolic", Some("quit"), "exit"),
 ];
 
@@ -233,6 +236,10 @@ pub struct OmniInput<'a> {
     /// The site commands are left out for a page with no site.
     pub blocking: Option<BlockingFacts>,
     pub favicon: &'a dyn Fn(&str) -> Option<String>,
+    /// The profiles other than the window's, `(id, name)`, each offered as "Switch to <name>".
+    pub profiles: &'a [(String, String)],
+    /// The window's profile is `Default`, which cannot be deleted.
+    pub default_profile: bool,
     /// Hints and chords for macOS rather than Linux.
     pub mac: bool,
 }
@@ -435,7 +442,7 @@ fn command_rows(input: &OmniInput<'_>, lowered: &str) -> Vec<OmniRow> {
         if (c.id == "blocking" || c.id == "hide-element") && site.is_empty() {
             continue;
         }
-        if c.id == "restore-hidden" && hidden == 0 {
+        if (c.id == "restore-hidden" && hidden == 0) || (c.id == "delete-profile" && input.default_profile) {
             continue;
         }
         let title = command_title_for(c.id, input);
@@ -451,6 +458,19 @@ fn command_rows(input: &OmniInput<'_>, lowered: &str) -> Vec<OmniRow> {
             icon_data: None,
             hint: c.keys.and_then(|k| chord(k, input.mac)).map(|k| shortcut_label(k, input.mac)),
             completion: None,
+        });
+    }
+    for (id, name) in input.profiles {
+        let title = format!("Switch to {name}");
+        if !lowered.is_empty() && !format!("{title} profile").to_lowercase().contains(lowered) {
+            continue;
+        }
+        rows.push(OmniRow {
+            id: format!("profile:{id}"),
+            title,
+            icon_name: Some("avatar-default-symbolic"),
+            hint: Some("Profile".into()),
+            ..OmniRow::default()
         });
     }
     rows
@@ -479,6 +499,8 @@ mod tests {
             reading: false,
             blocking: None,
             favicon: &no_icon,
+            profiles: &[],
+            default_profile: true,
             mac: false,
         }
     }
@@ -703,5 +725,18 @@ mod tests {
         assert_eq!(find(&omni_rows(&huge), "url").unwrap().hint.as_deref(), Some("Search"));
         assert_eq!(completion_for(&long, &[history[0].url.clone()]), None);
         assert_eq!(completion_for("bü", &[history[0].url.clone()]).map(|c| c.text), Some("bücher.de".into()));
+    }
+
+    #[test]
+    fn other_profiles_are_offered_by_name_and_default_is_never_deleted() {
+        let profiles = [("p2".to_owned(), "Work \u{1F680}".to_owned())];
+        let rows = omni_rows(&OmniInput { mode: OmniMode::Switcher, query: "work", profiles: &profiles, ..base() });
+        assert_eq!(ids(&rows).last(), Some(&"profile:p2"));
+        assert_eq!(rows.last().unwrap().title, "Switch to Work \u{1F680}");
+        let rows = omni_rows(&OmniInput { mode: OmniMode::Switcher, query: "profile", ..base() });
+        assert_eq!(ids(&rows)[1..], ["cmd:new-profile", "cmd:rename-profile"]);
+        let rows =
+            omni_rows(&OmniInput { mode: OmniMode::Switcher, query: "profile", default_profile: false, ..base() });
+        assert!(ids(&rows).contains(&"cmd:delete-profile"));
     }
 }

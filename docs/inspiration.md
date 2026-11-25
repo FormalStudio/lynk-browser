@@ -1,7 +1,9 @@
 # Inspiration: bookmarked posts
 
-Seven X posts the owner bookmarked on 2026-11-23 and 2026-11-24 for features, design and ideas. Nothing here is
-scheduled or built. Each item names where it would live (Lynk, nd, or both) and what it needs to
+Seven X posts the owner bookmarked on 2026-11-23 and 2026-11-24 for features, design and ideas. These are
+features the owner wants built, not optional reading: each is scheduled as a lane in wave 5 of
+[delivery-plan.md](delivery-plan.md), and lanes that touch the same surface earlier (settings, the
+sidebar, pins) follow the design here from the start. Each item names where it would live (Lynk, nd, or both) and what it needs to
 work on macOS, Linux and Windows. Read from the posts' images and from one frame per second of
 each video; the authors' profile pages could not be loaded (X rate limit), so product names come
 from what is visible on screen.
@@ -17,6 +19,9 @@ from what is visible on screen.
 | 5 | [oleksiibe, 2026-11-05](https://x.com/oleksiibe/status/2118418649816220116) | unnamed CEF browser | 19 s of a visual tab switcher and a small link window |
 | 6 | [oleksiibe, 2026-10-20](https://x.com/oleksiibe/status/2112601852399280358) | same browser | 17 s of trackpad gestures with force click |
 | 7 | [mcign69, 2026-11-24](https://x.com/mcign69/status/2125047872684982713) | "Ask", plum theme | 3 stills: split tabs, typed folders, folder popover |
+
+Post 1's browser is Search (searchbrowser.app, open source); its look, motion and source are
+studied in [reference-search-browser.md](reference-search-browser.md).
 
 ## 1. Settings that stay small (post 1)
 

@@ -97,7 +97,7 @@ fn set(win: &mut BrowserWindow, id: TabId, url: &str, factor: f64, cx: &mut Cont
         win.set_zoom(id, factor);
         return;
     }
-    app::remember_zoom(cx, url, factor);
+    app::remember_zoom(cx, &win.profile, url, factor);
     win.apply_zoom_everywhere(cx);
     let me = win.id;
     for (other, entity) in app::windows(cx) {
@@ -129,7 +129,8 @@ pub fn page_zoomed(win: &mut BrowserWindow, id: TabId, e: &ZoomChanged, cx: &mut
     let Some(tab) = win.tab_mut(id) else { return };
     tab.rt.zoom = e.factor;
     let url = tab.url.clone();
-    app::remember_zoom(cx, &url, e.factor);
+    let profile = win.profile.clone();
+    app::remember_zoom(cx, &profile, &url, e.factor);
     cx.notify();
 }
 

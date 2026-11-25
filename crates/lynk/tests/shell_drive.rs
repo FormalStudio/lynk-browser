@@ -686,9 +686,28 @@ mod key {
 
 /// A key through the HID system, which reaches a Chrome-style page's own window as typing does;
 /// the automation socket's keys reach only the app's.
-fn hid(code: u16, modifiers: &[Modifier]) {
-    ndshell::input::key(code, modifiers);
+fn hid(app: &AppHandle, code: u16, modifiers: &[Modifier]) {
+    key_now(app, code, modifiers);
     std::thread::sleep(Duration::from_millis(600));
+}
+
+/// A key at the HID tap, with no wait after it.
+fn key_now(app: &AppHandle, code: u16, modifiers: &[Modifier]) {
+    still_in_front(app);
+    ndshell::input::key(code, modifiers);
+}
+
+/// Text at the HID tap, with no wait after it.
+fn type_now(app: &AppHandle, text: &str) {
+    still_in_front(app);
+    ndshell::input::type_text(text);
+}
+
+/// HID keys go to whichever app macOS has in front. An app that took the front since the case
+/// brought this one forward would take them instead, so the case fails naming it.
+#[track_caller]
+fn still_in_front(app: &AppHandle) {
+    assert!(front_pid() == Some(app.pid()), "another app took the front before a key; in front: {}", front_app());
 }
 
 /// The app's windows on screen, popovers and bubbles left out. A Chrome-style page adds a
@@ -719,21 +738,21 @@ fn real_fullscreen_page_and_browser() {
         (0., 0., w, h),
         "the page fills the fullscreen window"
     );
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| width_of(a) == Some(width) && has(a, "controls-row"));
     // The browser's: macOS's own Enter Full Screen, the sidebar kept.
-    hid(key::F, &[Modifier::Control, Modifier::Command]);
+    hid(&app, key::F, &[Modifier::Control, Modifier::Command]);
     until(&app, "browser fullscreen", 10, settled_fullscreen);
     assert!(has(&app, "controls-row"));
     // The page's fullscreen inside it, left with Esc, leaves the window as the user had it.
     click_page(&app, 100.);
     until(&app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
     // A wrong exit would start within this.
     std::thread::sleep(Duration::from_millis(1500));
     assert!(settled_fullscreen(&app), "the window stays in the user's fullscreen");
-    hid(key::F, &[Modifier::Control, Modifier::Command]);
+    hid(&app, key::F, &[Modifier::Control, Modifier::Command]);
     until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
 }
 
@@ -750,7 +769,7 @@ fn real_fullscreen_is_reported_once_the_move_is_over() {
     until(&app, "the page", 30, |a| titles(a) == ["Full"]);
     let width = front_window(&app).bounds.2;
     in_front(&app);
-    ndshell::input::key(key::F, &[Modifier::Control, Modifier::Command]);
+    key_now(&app, key::F, &[Modifier::Control, Modifier::Command]);
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut grown_while_moving = false;
     while !settled_fullscreen(&app) {
@@ -761,10 +780,10 @@ fn real_fullscreen_is_reported_once_the_move_is_over() {
     assert!(grown_while_moving, "the frame grew before the move was over");
     click_page(&app, 100.);
     until(&app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
     assert!(settled_fullscreen(&app), "the window stays in the user's fullscreen");
-    hid(key::F, &[Modifier::Control, Modifier::Command]);
+    hid(&app, key::F, &[Modifier::Control, Modifier::Command]);
     until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
 }
 
@@ -782,7 +801,7 @@ fn real_dev_tools_from_the_page() {
         // Focus in the page, where Chrome sees the chord first.
         click_page(&app, 500.);
         let before = on_screen(&app);
-        hid(code, modifiers);
+        hid(&app, code, modifiers);
         until(&app, &format!("devtools from {name}"), 10, |a| on_screen(a) == before + 1);
     }
 }
@@ -805,14 +824,14 @@ fn real_chrome_only_keys_open_nothing() {
     let at = row_at(&app, 0);
     ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
     until(&app, "the row menu counted", 5, |a| windows(a) > before);
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     until(&app, "the row menu gone", 5, |a| windows(a) == before);
     click_page(&app, 500.);
     // Caret browsing, the task manager and help: Chrome UI with no place in Lynk.
     for (name, code, modifiers) in
         [("F7", key::F7, &[][..]), ("Shift+Esc", key::ESCAPE, &[Modifier::Shift][..]), ("F1", key::F1, &[][..])]
     {
-        hid(code, modifiers);
+        hid(&app, code, modifiers);
         std::thread::sleep(Duration::from_millis(900));
         assert_eq!(windows(&app), before, "{name} opened a window, dialog or panel");
         assert_eq!(titles(&app), ["Alpha"], "{name} opened a tab");
@@ -1138,10 +1157,10 @@ fn pick_menu(app: &AppHandle, at: (f32, f32), item: &str) {
     ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
     std::thread::sleep(Duration::from_millis(600));
     for c in item.to_ascii_lowercase().chars() {
-        ndshell::input::key(key_of(c), &[]);
+        key_now(app, key_of(c), &[]);
         std::thread::sleep(Duration::from_millis(60));
     }
-    hid(36, &[]);
+    hid(app, 36, &[]);
 }
 
 /// The title of the app's first window, which is the shown tab's.
@@ -1209,7 +1228,7 @@ fn real_tab_row_menu() {
     let at = row_at(&app, 0);
     ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
     std::thread::sleep(Duration::from_millis(600));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     assert_eq!(shown_title(&app), "Beta", "the shown tab after a menu on another row");
     // The row's menu acts on its own tab, not the one on show.
     let duplicate = rows(&app)[1].0.clone();
@@ -1220,8 +1239,8 @@ fn real_tab_row_menu() {
     let n = app.get_by_test_id("new-tab-row").bounding_box().unwrap().unwrap();
     pick_menu(&app, (n.x + n.width / 2., n.y + n.height + 120.), "New Tab");
     until(&app, "the bar from the column menu", 10, |a| bar_field(a).is_some());
-    type_real(&format!("{base}/beta"));
-    hid(key::RETURN, &[]);
+    type_real(&app, &format!("{base}/beta"));
+    hid(&app, key::RETURN, &[]);
     until(&app, "a tab from the column menu", 10, |a| titles(a).len() == 2);
 }
 
@@ -1258,7 +1277,7 @@ fn real_fifty_tabs_opened_and_closed_at_speed() {
     // Each through the command bar, typed as soon as the bar shows.
     for n in 0..50 {
         open_bar(&app, key::T);
-        ndshell::input::type_text(&format!("{base}/beta?{n}\n"));
+        type_now(&app, &format!("{base}/beta?{n}\n"));
     }
     until(&app, "the fifty tabs", 60, |a| live_pages(a) == Some(51));
     let keys = app.keyboard();
@@ -2014,7 +2033,7 @@ fn bar_field(app: &AppHandle) -> Option<String> {
 #[track_caller]
 fn open_bar(app: &AppHandle, code: u16) {
     in_front(app);
-    hid(code, &[Modifier::Command]);
+    hid(app, code, &[Modifier::Command]);
     bar_wait(app, true);
 }
 
@@ -2047,13 +2066,13 @@ fn bar_wait(app: &AppHandle, open: bool) {
 }
 
 /// Types at the HID tap, character by character, as a keyboard would.
-fn type_real(text: &str) {
-    ndshell::input::type_text(text);
+fn type_real(app: &AppHandle, text: &str) {
+    type_now(app, text);
     std::thread::sleep(Duration::from_millis(400));
 }
 
 /// Pastes `text` with Cmd+V, from the real pasteboard.
-fn paste(text: &str) {
+fn paste(app: &AppHandle, text: &str) {
     let mut copy = std::process::Command::new("pbcopy")
         .env("LANG", "en_US.UTF-8")
         .stdin(std::process::Stdio::piped())
@@ -2061,7 +2080,7 @@ fn paste(text: &str) {
         .unwrap();
     copy.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
     assert!(copy.wait().unwrap().success());
-    hid(key::V, &[Modifier::Command]);
+    hid(app, key::V, &[Modifier::Command]);
 }
 
 /// Opens `url` in a new tab through the bar, as typed.
@@ -2069,8 +2088,8 @@ fn paste(text: &str) {
 fn open_in_new_tab(app: &AppHandle, url: &str) {
     let before = titles(app).len();
     open_bar(app, key::T);
-    type_real(url);
-    hid(key::RETURN, &[]);
+    type_real(app, url);
+    hid(app, key::RETURN, &[]);
     bar_closed(app);
     until(app, "the new tab", 15, |a| titles(a).len() == before + 1);
 }
@@ -2080,7 +2099,7 @@ fn open_in_new_tab(app: &AppHandle, url: &str) {
 fn address(app: &AppHandle) -> String {
     open_bar(app, key::L);
     let field = bar_field(app).unwrap_or_default();
-    hid(key::ESCAPE, &[]);
+    hid(app, key::ESCAPE, &[]);
     bar_closed(app);
     field
 }
@@ -2089,8 +2108,8 @@ fn address(app: &AppHandle) -> String {
 #[track_caller]
 fn go_to(app: &AppHandle, text: &str) {
     open_bar(app, key::L);
-    type_real(text);
-    hid(key::RETURN, &[]);
+    type_real(app, text);
+    hid(app, key::RETURN, &[]);
     bar_closed(app);
 }
 
@@ -2110,7 +2129,7 @@ fn real_command_bar_keeps_keys_typed_during_a_load() {
         until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
         open_bar(&app, key::L);
         let typed = format!("{base}/alpha?{n}");
-        ndshell::input::type_text(&typed);
+        type_now(&app, &typed);
         let deadline = Instant::now() + Duration::from_secs(5);
         while bar_field(&app).and_then(|f| f.split('|').next().map(str::to_owned)).as_deref() != Some(typed.as_str()) {
             assert!(
@@ -2121,7 +2140,7 @@ fn real_command_bar_keeps_keys_typed_during_a_load() {
             );
             std::thread::sleep(Duration::from_millis(100));
         }
-        hid(key::ESCAPE, &[]);
+        hid(&app, key::ESCAPE, &[]);
         bar_closed(&app);
     }
     assert_eq!(titles(&app).len(), 1, "no search for keys the page took");
@@ -2151,17 +2170,17 @@ fn real_command_bar_long_address_edits_at_the_caret() {
     let address = bar_typed(&app);
     assert!(address.len() >= 300, "the bar holds the address: {address:?}");
     shot(&app, "bar-long-selected");
-    hid(key::RIGHT, &[Modifier::Command]);
+    hid(&app, key::RIGHT, &[Modifier::Command]);
     shot(&app, "bar-long-end");
-    type_real("x");
+    type_real(&app, "x");
     assert_eq!(bar_typed(&app), format!("{address}x"), "Cmd+Right, then typing, adds at the end");
-    hid(key::LEFT, &[Modifier::Command]);
-    type_real("y");
-    hid(key::RIGHT, &[]);
-    type_real("z");
-    hid(key::LEFT, &[]);
-    hid(key::LEFT, &[]);
-    type_real("w");
+    hid(&app, key::LEFT, &[Modifier::Command]);
+    type_real(&app, "y");
+    hid(&app, key::RIGHT, &[]);
+    type_real(&app, "z");
+    hid(&app, key::LEFT, &[]);
+    hid(&app, key::LEFT, &[]);
+    type_real(&app, "w");
     assert_eq!(
         bar_typed(&app),
         format!("yw{}z{}x", &address[..1], &address[1..]),
@@ -2170,11 +2189,11 @@ fn real_command_bar_long_address_edits_at_the_caret() {
     shot(&app, "bar-long-home");
 
     let pasted = format!("{base}/beta?{}", "p".repeat(2000 - base.len() - 6));
-    hid(key::A, &[Modifier::Command]);
-    paste(&pasted);
+    hid(&app, key::A, &[Modifier::Command]);
+    paste(&app, &pasted);
     until(&app, "the pasted address", 5, |a| bar_typed(a) == pasted);
     shot(&app, "bar-long-pasted");
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
     quit(&app);
 }
@@ -2193,13 +2212,13 @@ fn real_command_bar_opens_sites() {
     // Cmd+T is a bar, not a tab: Escape mid-typing leaves no blank tab behind, and neither does
     // Return on an empty field.
     open_bar(&app, key::T);
-    type_real("half typ");
+    type_real(&app, "half typ");
     shot(&app, "bar-typing");
     assert_eq!(bar_field(&app).as_deref(), Some("half typ"));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
     open_bar(&app, key::T);
-    hid(key::RETURN, &[]);
+    hid(&app, key::RETURN, &[]);
     bar_closed(&app);
     assert_eq!(titles(&app), ["Alpha"], "no dead blank tab");
 
@@ -2241,16 +2260,16 @@ fn real_command_bar_opens_sites() {
 
     // Pasted text keeps no trailing newline, and a 2000 character address goes in whole.
     open_bar(&app, key::L);
-    paste(&format!("{base}/beta?pasted\n"));
-    hid(key::RETURN, &[]);
+    paste(&app, &format!("{base}/beta?pasted\n"));
+    hid(&app, key::RETURN, &[]);
     bar_closed(&app);
     until(&app, "the pasted address", 15, |a| address(a) == format!("{base}/beta?pasted"));
     let long = format!("{base}/beta?{}", "q".repeat(2000 - base.len() - 6));
     assert_eq!(long.len(), 2000);
     open_bar(&app, key::L);
-    paste(&long);
+    paste(&app, &long);
     shot(&app, "bar-long-url");
-    hid(key::RETURN, &[]);
+    hid(&app, key::RETURN, &[]);
     bar_closed(&app);
     until(&app, "the long address", 15, |a| address(a) == long);
 
@@ -2271,12 +2290,12 @@ fn real_command_bar_opens_sites() {
     real_click(&app, x, y);
     bar_wait(&app, true);
     assert_eq!(bar_field(&app), Some(format!("{base}/beta")));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
 
     // A second Cmd+L puts the bar away.
     open_bar(&app, key::L);
-    hid(key::L, &[Modifier::Command]);
+    hid(&app, key::L, &[Modifier::Command]);
     bar_closed(&app);
     drop(app);
 
@@ -2284,8 +2303,8 @@ fn real_command_bar_opens_sites() {
     let app = launch("");
     until(&app, "the new tab page", 30, |a| has(a, "new-tab-page"));
     open_bar(&app, key::T);
-    type_real(&format!("{base}/beta"));
-    hid(key::RETURN, &[]);
+    type_real(&app, &format!("{base}/beta"));
+    hid(&app, key::RETURN, &[]);
     until(&app, "Beta in the blank tab", 15, |a| titles(a) == ["Beta"]);
 }
 
@@ -2300,7 +2319,7 @@ fn real_command_bar_survives_an_app_switch() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     open_bar(&app, key::T);
-    type_real("lynk-");
+    type_real(&app, "lynk-");
     let finder = std::process::Command::new("pgrep").args(["-x", "Finder"]).output().unwrap();
     let finder: u32 = String::from_utf8_lossy(&finder.stdout).trim().parse().expect("Finder runs");
     ndshell::input::activate(finder);
@@ -2313,9 +2332,9 @@ fn real_command_bar_survives_an_app_switch() {
     // The bar's panel takes key back, not the window under it.
     ndshell::input::activate(app.pid());
     std::thread::sleep(Duration::from_millis(600));
-    type_real("back");
+    type_real(&app, "back");
     assert_eq!(bar_field(&app).as_deref(), Some("lynk-back"), "the field has the keys again");
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
     assert_eq!(titles(&app), ["Alpha"]);
 }
@@ -2335,14 +2354,14 @@ fn real_command_bar_keeps_the_keys_while_a_window_behind_loads() {
     press(&app, "cmd-n");
     until(&app, "a second window", 10, |a| window_count(a) == 2);
     open_bar(&app, key::T);
-    type_real("lynk-");
+    type_real(&app, "lynk-");
     let behind_loaded =
         |a: &AppHandle| a.tree(None).is_ok_and(|t| t.windows.iter().any(|w| window_titles(w) == ["Beta"]));
     until(&app, "the window behind on its new site", 20, behind_loaded);
     std::thread::sleep(Duration::from_secs(1));
-    type_real("back");
+    type_real(&app, "back");
     assert_eq!(bar_field(&app).as_deref(), Some("lynk-back"), "the bar in front kept the keys");
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
 }
 
@@ -2378,36 +2397,36 @@ fn real_command_bar_suggests() {
     // Inline completion from history: the host and its port, shown selected after what was typed.
     let port = base.rsplit(':').next().unwrap().to_owned();
     open_bar(&app, key::T);
-    type_real("127.0.0");
+    type_real(&app, "127.0.0");
     until(&app, "the completed host", 5, |a| bar_field(a) == Some(format!("127.0.0|.1:{port}")));
     // Backspace takes the completion away, and it stays away until the next letter.
-    hid(key::BACKSPACE, &[]);
+    hid(&app, key::BACKSPACE, &[]);
     until(&app, "the completion gone", 5, |a| bar_field(a).as_deref() == Some("127.0.0"));
-    type_real(".");
+    type_real(&app, ".");
     until(&app, "completing again", 5, |a| bar_field(a) == Some(format!("127.0.0.|1:{port}")));
     // Tab takes it; then a path finishes from history.
-    hid(key::TAB, &[]);
+    hid(&app, key::TAB, &[]);
     until(&app, "the host taken", 5, |a| bar_field(a).as_deref() == Some(host.as_str()));
-    type_real("/pl");
+    type_real(&app, "/pl");
     until(&app, "the path completed", 5, |a| bar_field(a) == Some(format!("{host}/pl|ain")));
     let rows = bar_rows(&app);
     assert!(rows.first().is_some_and(|r| r.starts_with(&format!("{host}/plain"))), "{rows:?}");
-    hid(key::RETURN, &[]);
+    hid(&app, key::RETURN, &[]);
     bar_closed(&app);
     until(&app, "the completed address in a new tab", 15, |a| titles(a) == ["Plain", "Beta", "Plain"]);
 
     // An open tab is offered as a switch: Down, then Return, shows it instead of opening it again.
     open_bar(&app, key::L);
-    type_real("Bet");
+    type_real(&app, "Bet");
     until(&app, "the open tab offered", 5, |a| {
         bar_rows(a).iter().any(|r| r.starts_with("Beta") && r.ends_with("Switch to Tab"))
     });
     let rows = bar_rows(&app);
     let at = rows.iter().position(|r| r.ends_with("Switch to Tab")).unwrap();
     for _ in 0..at {
-        hid(key::DOWN, &[]);
+        hid(&app, key::DOWN, &[]);
     }
-    hid(key::RETURN, &[]);
+    hid(&app, key::RETURN, &[]);
     bar_closed(&app);
     until(&app, "Beta shown", 10, |a| shown_title(a) == "Beta");
     assert_eq!(titles(&app), ["Plain", "Beta", "Plain"], "switched, not opened again");
@@ -2416,7 +2435,7 @@ fn real_command_bar_suggests() {
     open_bar(&app, key::K);
     let rows = bar_rows(&app);
     assert!(rows.first().is_some_and(|r| r.starts_with("Plain") && r.ends_with("Switch to Tab")), "{rows:?}");
-    hid(key::RETURN, &[]);
+    hid(&app, key::RETURN, &[]);
     bar_closed(&app);
     until(&app, "back to the tab before", 10, |a| shown_title(a) == "Plain");
 
@@ -2434,9 +2453,9 @@ fn real_command_bar_suggests() {
 
     // Typing fast while the rows come back from history keeps every letter, in order.
     open_bar(&app, key::T);
-    type_real(&format!("{host}/beta?fast-typing"));
+    type_real(&app, &format!("{host}/beta?fast-typing"));
     assert_eq!(bar_field(&app), Some(format!("{host}/beta?fast-typing")));
-    hid(key::ESCAPE, &[]);
+    hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
 }
 
@@ -2475,29 +2494,29 @@ fn real_command_bar_looks() {
             let name = |what: &str| format!("bar-{appearance}-{width}-{what}");
             open_bar(&app, key::T);
             report_shot(&app, &name("empty"));
-            type_real("bet");
+            type_real(&app, "bet");
             report_shot(&app, &name("few"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             open_bar(&app, key::K);
             report_shot(&app, &name("many"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             press(&app, "cmd-3");
             open_bar(&app, key::L);
             report_shot(&app, &name("long-url"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             press(&app, "cmd-1");
             open_bar(&app, key::T);
-            type_real("\u{645}\u{631}\u{62d}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}");
+            type_real(&app, "\u{645}\u{631}\u{62d}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}");
             report_shot(&app, &name("rtl"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
             open_bar(&app, key::T);
-            type_real("\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{691c}\u{7d22} \u{30c6}\u{30b9}\u{30c8}");
+            type_real(&app, "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{691c}\u{7d22} \u{30c6}\u{30b9}\u{30c8}");
             report_shot(&app, &name("cjk"));
-            hid(key::ESCAPE, &[]);
+            hid(&app, key::ESCAPE, &[]);
             bar_closed(&app);
         }
     }
@@ -2715,7 +2734,7 @@ fn real_drag_between_the_list_and_the_pins() {
 #[track_caller]
 fn run_command(app: &AppHandle, typed: &str, row: &str) {
     open_bar(app, key::K);
-    type_real(typed);
+    type_real(app, typed);
     let deadline = Instant::now() + Duration::from_secs(10);
     let at = loop {
         let rows = bar_rows(app);
@@ -2726,10 +2745,10 @@ fn run_command(app: &AppHandle, typed: &str, row: &str) {
         std::thread::sleep(Duration::from_millis(150));
     };
     for _ in 0..at {
-        hid(key::DOWN, &[]);
+        hid(app, key::DOWN, &[]);
         std::thread::sleep(Duration::from_millis(80));
     }
-    hid(key::RETURN, &[]);
+    hid(app, key::RETURN, &[]);
     bar_closed(app);
 }
 
@@ -2739,9 +2758,9 @@ fn new_profile(app: &AppHandle, name: &str) {
     let before = window_count(app);
     run_command(app, "new profile", "New Profile");
     until(app, "the name field", 10, |a| has(a, "profile-name"));
-    paste(name);
+    paste(app, name);
     std::thread::sleep(Duration::from_millis(300));
-    hid(key::RETURN, &[]);
+    hid(app, key::RETURN, &[]);
     until(app, "a window in the new profile", 20, |a| window_count(a) == before + 1);
 }
 
@@ -2812,9 +2831,9 @@ fn real_two_profiles_keep_their_cookies_apart() {
     run_command(&app, "switch to default", "Switch to Default");
     // Keys typed the moment the switched-to window comes forward can land before its bar does.
     open_bar(&app, key::T);
-    paste(&format!("{base}/cookie"));
+    paste(&app, &format!("{base}/cookie"));
     std::thread::sleep(Duration::from_millis(300));
-    hid(key::RETURN, &[]);
+    hid(&app, key::RETURN, &[]);
     bar_closed(&app);
     until(&app, "Default sent its cookie", 15, |a| all_titles(a) == ["Cookie none", "Cookie who=one"]);
     let profiles = profiles_in(&dir);
@@ -2959,8 +2978,8 @@ fn real_pins_and_profiles_captures() {
             press(&app, "escape");
             run_command(&app, "new profile", "New Profile");
             until(&app, "the name field", 10, |a| has(a, "profile-name"));
-            type_real("default");
-            hid(key::RETURN, &[]);
+            type_real(&app, "default");
+            hid(&app, key::RETURN, &[]);
             until(&app, "the name refused", 10, |a| has(a, "profile-name-error"));
             shot(&app, &format!("profiles-name-taken-{appearance}-{width}"));
             press(&app, "escape");

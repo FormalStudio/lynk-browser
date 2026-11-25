@@ -264,10 +264,11 @@ pub fn windows(app: &App) -> Vec<Win> {
         .collect()
 }
 
-/// How many of the app's windows are menus or popovers: Hyprland lists them among its clients with
-/// no layer of their own, so this counts every window.
-pub fn windows_above(app: &App) -> usize {
-    windows(app).len()
+/// How many menus the app shows: GPUI draws them inside the window, and nd puts them in the
+/// automation tree.
+pub fn open_menus(app: &App) -> usize {
+    let Ok(tree) = app.tree(None) else { return 0 };
+    tree.windows.iter().flat_map(|w| w.root.iter()).filter(|n| format!("{:?}", n.role) == "Menu").count()
 }
 
 /// How many windows the app has, however small: the compositor lists X dialogs among its clients.

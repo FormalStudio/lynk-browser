@@ -246,8 +246,8 @@ pub fn alert_button_shown(app: &App, title: &str) -> bool {
     String::from_utf8_lossy(&out.stdout).trim() == "yes"
 }
 
-/// How many of the app's windows sit above the normal layer: its open menus and popovers.
-pub fn windows_above(app: &App) -> usize {
+/// How many menus and popovers the app shows: its windows above the normal layer.
+pub fn open_menus(app: &App) -> usize {
     let pid = app.pid();
     ndshell::window_list::every_layer_of_pid(pid).len() - ndshell::window_list::of_pid(pid).len()
 }

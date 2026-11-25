@@ -1483,12 +1483,12 @@ fn real_put_tab_to_sleep_and_wake() {
 fn pick_menu(app: &App, at: (f32, f32), item: &str) {
     os::in_front(app);
     let (wx, wy, _, _) = front_window(app).bounds;
-    let before = os::windows_above(app);
+    let before = os::open_menus(app);
     os::right_click(app, (wx + f64::from(at.0), wy + f64::from(at.1)));
-    // Typed only once the menu's own window is up: letters sent to a menu still opening are lost,
+    // Typed only once the menu is up: letters sent to a menu still opening are lost,
     // and type-select then lands on another item.
     let deadline = Instant::now() + Duration::from_secs(10);
-    while os::windows_above(app) <= before {
+    while os::open_menus(app) <= before {
         assert!(Instant::now() < deadline, "the menu for {item} never opened");
         std::thread::sleep(Duration::from_millis(50));
     }

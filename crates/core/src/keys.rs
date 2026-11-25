@@ -140,11 +140,13 @@ pub fn normalize_chord(chord: &str) -> Option<String> {
     if key.is_empty() || MODIFIERS.contains(&key.as_str()) || mods.iter().any(|m| !MODIFIERS.contains(&m.as_str())) {
         return None;
     }
-    let function_key = key.len() > 1 && key.starts_with('f') && key[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n));
+    let function_key =
+        key.len() > 1 && key.starts_with('f') && key[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n));
     if mods.is_empty() && !function_key {
         return None;
     }
-    let mut out: Vec<String> = MODIFIERS.iter().filter(|m| mods.iter().any(|x| x == *m)).map(|m| (*m).to_owned()).collect();
+    let mut out: Vec<String> =
+        MODIFIERS.iter().filter(|m| mods.iter().any(|x| x == *m)).map(|m| (*m).to_owned()).collect();
     out.push(if function_key { key.to_uppercase() } else { key.clone() });
     Some(out.join("+"))
 }
@@ -177,8 +179,17 @@ fn canonical(chord: &str, mac: bool) -> Option<String> {
 fn reserved(mac: bool) -> &'static [&'static str] {
     if mac {
         &[
-            "primary+q", "primary+h", "primary+m", "primary+tab", "primary+space", "primary+c", "primary+v",
-            "primary+x", "primary+a", "primary+z", "primary+shift+z",
+            "primary+q",
+            "primary+h",
+            "primary+m",
+            "primary+tab",
+            "primary+space",
+            "primary+c",
+            "primary+v",
+            "primary+x",
+            "primary+a",
+            "primary+z",
+            "primary+shift+z",
         ]
     } else {
         &["alt+F4", "alt+tab", "primary+c", "primary+v", "primary+x", "primary+a", "primary+z", "primary+y"]

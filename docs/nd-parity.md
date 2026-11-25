@@ -191,7 +191,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Extension tabs, windows and options pages open as app tabs, not Chromium windows
 - [ ] Uninstalling closes its pages; a window left without tabs gets an empty tab
 - [ ] [mac] 1Password: installs from the store, its icon opens its popup, it fills a login; the build is signed with the Developer ID (`Developer ID Application: CanaryCoders SL (8E7JB82GJK)`) so 1Password trusts it
-- [ ] [linux] 1Password on Hyprland: native messaging works with the root-owned binary from the Nix store and `/etc/1password/custom_allowed_browsers` listing `lynk-browser`; its icon opens its popup and it fills a login
+- [ ] [linux] 1Password on Hyprland: native messaging works with the root-owned binary from the fspec store (`/opt/fspec/store`) and `/etc/1password/custom_allowed_browsers` listing `lynk-browser`; its icon opens its popup and it fills a login
 - [ ] 1Password used right after launch (popup and fill in the first seconds) works on every cold start, as in Chrome; the old app and Electron browsers broke here (user report 2026-10-20)
 - [ ] Dark Reader installs from the store and darkens a page; its popup toggles it; the setting survives a restart
 
@@ -237,7 +237,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] [mac] Icon Composer layered icon (background `#0c1736`, the two layers in `assets/icon`); [linux] the Pantheon-style tile
 - [x] [mac] `nd package mac`: the app with the CEF framework and its five helpers, signed with the Developer ID (`nd package mac --dir crates/lynk`, then `codesign --verify --deep --strict` and `spctl -a -vv` "accepted, Notarized Developer ID"; the app loads a page)
 - [x] [linux] `nd package linux` AppImage with the CEF runtime beside the binary (`nd package linux --dir crates/lynk --binary <g815 release>/lynk`, then `ndshell shot` of the AppImage in headless Hyprland on g815 loads a page)
-- [ ] Nix package: the nd build from the flake, root-owned in the store, replacing the `requireFile` AppImage derivation in `~/.config/nix`, rebuilt on every host
+- [ ] fspec package: a `pkg("lynk", ...)` in `~/.config/formalspec` built from the published AppImage, root-owned in `/opt/fspec/store` (no host runs Nix any more), applied on every Linux host
 
 ## Windows
 Every unmarked line above holds on Windows too, checked on real Windows (g815 booted into Windows). These are the Windows-only ones (the old `nb/windows` branch and `scripts/site-shots-windows.ts` are the spec).

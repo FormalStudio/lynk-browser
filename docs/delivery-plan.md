@@ -62,7 +62,7 @@ session.
 | `extensions` | Web Store install with the app's dialog, puzzle popover, pinned actions, popups, extension tabs, Dark Reader; then 1Password on macOS once `package` has the signed build |
 | `blocking-tools` | adblock-rust on the request filter, cosmetic filters and scriptlets, the padlock's ad switch and count, element hider, reading mode, floating video and a page's own picture in picture with "Back to tab", print, save page, view source, DevTools docked in the tab's own page area (bottom or right, resizable, undockable to a window, as in Chrome), never a loose floating window; required by the owner 2026-11-24 |
 | `windows-session` | Session restore, settings window, private windows, popup windows, permissions and the padlock popover, blocked pop-ups, external protocols |
-| `package` | `nd package mac` signed with the Developer ID (1Password trusts the signature), AppImage, the Nix package from the flake, root-owned in the store (1Password on Linux needs it) |
+| `package` | `nd package mac` signed with the Developer ID (1Password trusts the signature), AppImage, the fspec store package built from it, root-owned (1Password on Linux needs it) |
 
 ## Wave 3: the Arc surface (two agents, then one)
 
@@ -70,7 +70,7 @@ session.
 | --- | --- |
 | `sidebar-polish` | Pinned tile grid, Liquid Glass tiles, tab and tile drag (reorder, pin, between windows), menus on rows and tiles, edge reveal with the traffic lights, speaker and sleep states, Linux window controls from `gtk-decoration-layout` and the page card |
 | `compact` | The compact layout, the layout switch, 720 to 1440 pt with nothing overlapping |
-| `linux-1password`, after the two above | 1Password on Hyprland with native messaging and the Nix build, the Linux Web Store prompt, the run on e1504g in the user's session |
+| `linux-1password`, after the two above | 1Password on Hyprland with native messaging and the fspec store package, the Linux Web Store prompt, the run on e1504g in the user's session |
 
 ## Wave 4: ship (two agents)
 

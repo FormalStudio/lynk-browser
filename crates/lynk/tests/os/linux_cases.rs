@@ -766,6 +766,13 @@ fn real_quit_mid_load_with_devtools_and_two_windows() {
     until(&app, "DevTools", 15, |a| os::windows(a).len() == 2 || has(a, "devtools"));
     quit_by(&app, Quit::Term);
 
+    // DevTools is Chromium's own window and has the keyboard: Ctrl+Q still quits.
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    hid(&app, key::F12, &[]);
+    until(&app, "DevTools", 15, |a| os::windows(a).len() == 2);
+    quit_by(&app, Quit::Key);
+
     let profile = profile("quit-two-windows");
     let app = launch_on(&profile, &[format!("{base}/alpha")]);
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);

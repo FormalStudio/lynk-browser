@@ -846,9 +846,13 @@ fn real_dev_tools_divider_stops_at_both_limits() {
         shot(&app, &format!("devtools-pressed-{appearance}"));
         os::release(&app, at);
         assert!(has(&app, "devtools-bar"));
-        app.get_by_test_id("devtools-undock").focus().unwrap();
-        std::thread::sleep(Duration::from_millis(300));
-        shot(&app, &format!("devtools-focused-{appearance}"));
+        // GPUI's buttons on Linux take no keyboard focus.
+        #[cfg(target_os = "macos")]
+        {
+            app.get_by_test_id("devtools-undock").focus().unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            shot(&app, &format!("devtools-focused-{appearance}"));
+        }
 
         // Below the page: grabbed 3 pt off the line on the DevTools' side, past the top, then past
         // the bottom. The page's side of the grab is the page's own window on Linux.
@@ -3503,7 +3507,7 @@ fn real_rename_and_reopen_a_closed_profile() {
 
     os::close_window(&app, &front_window(&app));
     until(&app, "Office's window closed", 15, |a| window_count(a) == 1);
-    assert!(!profiles_in(&dir)[1].2, "a profile with no window is closed");
+    until(&app, "a profile with no window is closed", 5, |_| !profiles_in(&dir)[1].2);
     open_bar(&app, key::T);
     type_real(&app, "press");
     std::thread::sleep(Duration::from_secs(1));

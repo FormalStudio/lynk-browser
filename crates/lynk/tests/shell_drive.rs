@@ -1106,6 +1106,7 @@ fn real_dev_tools_leave_their_tab_as_it_was() {
         open_bar(app, key::L);
         let field = bar_field(app).unwrap_or_default();
         assert!(field.contains(&address) && !field.contains("devtools"), "the bar {when}: {field}");
+        shot(app, &format!("devtools-left-{}", when.rsplit(' ').next().unwrap_or(when)));
         // Commands come up only when they would run.
         type_real(app, "back");
         until(app, "the Back command", 10, |a| bar_rows(a).iter().any(|r| r.starts_with("Back")));

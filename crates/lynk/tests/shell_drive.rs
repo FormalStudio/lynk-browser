@@ -3725,3 +3725,187 @@ fn real_a_row_dragged_in_the_list_marks_its_slot() {
     });
     quit(&app);
 }
+
+/// The first window's list top to bottom: a tab as its title, a separator as `| <name>`.
+fn sidebar_order(app: &AppHandle) -> Vec<String> {
+    let Ok(tree) = app.tree(None) else { return Vec::new() };
+    let window = &tree.windows[0];
+    let name_of = |id: &str| {
+        window
+            .root
+            .iter()
+            .find(|n| n.test_id.as_deref() == Some(&format!("separator-title-{id}")))
+            .map_or(String::new(), |n| n.name.clone())
+    };
+    let mut rows: Vec<(f32, String)> = window
+        .root
+        .iter()
+        .filter(|n| n.visible)
+        .filter_map(|n| {
+            let y = n.bounds?.origin.y;
+            let id = n.test_id.as_deref()?;
+            if id.starts_with("tab-title-") {
+                Some((y, n.name.clone()))
+            } else if let Some(sep) = id.strip_prefix("separator-")
+                && !sep.starts_with("title-")
+                && sep != "name"
+            {
+                Some((y, format!("| {}", name_of(sep)).trim_end().to_owned()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
+/// The centre of the first window's separator row named `name` (`""` for an unnamed one), in
+/// window points.
+fn separator_at(app: &App, name: &str) -> (f32, f32) {
+    let tree = app.tree(None).unwrap();
+    let window = &tree.windows[0];
+    let order = sidebar_order(app);
+    let wanted = format!("| {name}").trim_end().to_owned();
+    let nth = order.iter().filter(|r| r.starts_with('|')).position(|r| *r == wanted).expect("the separator");
+    let mut seps: Vec<_> = window
+        .root
+        .iter()
+        .filter(|n| {
+            n.test_id
+                .as_deref()
+                .and_then(|t| t.strip_prefix("separator-"))
+                .is_some_and(|s| !s.starts_with("title-") && s != "name")
+        })
+        .filter_map(|n| n.bounds)
+        .collect();
+    seps.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
+    let r = seps[nth];
+    (r.origin.x + r.size.width / 2., r.origin.y + r.size.height / 2.)
+}
+
+/// Waits for the first window's list to read `want`, naming what it read when it does not.
+#[track_caller]
+fn until_order(app: &App, what: &str, want: &[&str]) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sidebar_order(app) != want {
+        if Instant::now() > deadline {
+            shot(app, "order-timeout");
+            panic!("timed out waiting for {what}: the list reads {:?}, not {want:?}", sidebar_order(app));
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// Named separators: one added under a tab from its menu opens with its name field focused and
+/// Enter keeps the name, Esc leaves an unnamed rule, the bar renames and deletes the one nearest
+/// above the shown tab, a separator drags like a row, and all of it comes back after a restart.
+#[test]
+fn real_named_separators() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = profile("separators");
+    let app = launch_on(&dir, &[format!("{base}/alpha"), format!("{base}/beta"), format!("{base}/press")]);
+    until(&app, "three rows", 30, |a| titles(a).len() == 3);
+    for (n, title) in ["Alpha", "Beta", "Press"].into_iter().enumerate() {
+        press(&app, &format!("cmd-{}", n + 1));
+        until(&app, title, 15, |a| shown_title(a) == title);
+    }
+    press(&app, "cmd-1");
+
+    pick_menu(&app, row_at(&app, 0), "Add Separator");
+    until(&app, "the name field", 10, |a| has(a, "separator-name"));
+    type_real(&app, "Reading");
+    hid(&app, key::ENTER, &[]);
+    until_order(&app, "the named separator", &["Alpha", "| Reading", "Beta", "Press"]);
+    shot(&app, "separator-named");
+
+    pick_menu(&app, row_at(&app, 1), "Add Separator");
+    until(&app, "the second name field", 10, |a| has(a, "separator-name"));
+    hid(&app, key::ESCAPE, &[]);
+    until_order(&app, "an unnamed rule", &["Alpha", "| Reading", "Beta", "|", "Press"]);
+
+    press(&app, "cmd-3");
+    until(&app, "Press shown", 10, |a| shown_title(a) == "Press");
+    run_command(&app, "rename separator", "Rename Separator");
+    until(&app, "the rename field", 10, |a| has(a, "separator-name"));
+    type_real(&app, "Later");
+    hid(&app, key::ENTER, &[]);
+    until_order(&app, "the rule named", &["Alpha", "| Reading", "Beta", "| Later", "Press"]);
+
+    // The separator drags to the end of the list, past the tabs.
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let global = |p: (f32, f32)| (wx + f64::from(p.0), wy + f64::from(p.1));
+    let from = global(separator_at(&app, "Reading"));
+    let last = row_at(&app, 2);
+    let to = global((last.0, last.1 + 14.));
+    os::hold(&app, from);
+    for i in 1..=20 {
+        let t = f64::from(i) / 20.;
+        let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+        os::drag_move(&app, at);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    std::thread::sleep(Duration::from_millis(400));
+    shot(&app, "separator-drag");
+    os::release(&app, to);
+    until_order(&app, "the separator at the end", &["Alpha", "Beta", "| Later", "Press", "| Reading"]);
+
+    run_command(&app, "delete separator", "Delete Separator");
+    until_order(&app, "Later deleted", &["Alpha", "Beta", "Press", "| Reading"]);
+    quit(&app);
+    drop(app);
+
+    let app = launch_on(&dir, &[]);
+    until(&app, "three rows again", 30, |a| titles(a).len() == 3);
+    until_order(&app, "the separator after a restart", &["Alpha", "Beta", "Press", "| Reading"]);
+    quit(&app);
+}
+
+/// Tidy Tabs groups the loose tabs by site under named separators, the same rows as the ones
+/// made by hand; Undo Tidy puts the list back, and once the list changes it is no longer offered.
+#[test]
+fn real_tidy_tabs_groups_by_site_and_undoes() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let other = base.replace("127.0.0.1", "localhost");
+    let app = launch_with(&[
+        format!("{base}/alpha"),
+        format!("{other}/beta"),
+        format!("{base}/plain"),
+        format!("{other}/press"),
+    ]);
+    until(&app, "four rows", 30, |a| titles(a).len() == 4);
+    for (n, title) in ["Alpha", "Beta", "Plain", "Press"].into_iter().enumerate() {
+        press(&app, &format!("cmd-{}", n + 1));
+        until(&app, title, 15, |a| shown_title(a) == title);
+    }
+    let untidy = sidebar_order(&app);
+    assert_eq!(untidy, ["Alpha", "Beta", "Plain", "Press"]);
+    let (here, there) = (base.trim_start_matches("http://"), other.trim_start_matches("http://"));
+    let tidied =
+        [format!("| {here}"), "Alpha".into(), "Plain".into(), format!("| {there}"), "Beta".into(), "Press".into()];
+
+    run_command(&app, "tidy tabs", "Tidy Tabs");
+    until(&app, "the tabs grouped by site", 10, |a| sidebar_order(a) == tidied);
+    shot(&app, "tidy-by-site");
+    run_command(&app, "undo tidy", "Undo Tidy");
+    until(&app, "the list as it was", 10, |a| sidebar_order(a) == untidy);
+
+    run_command(&app, "tidy tabs", "Tidy Tabs");
+    until(&app, "grouped again", 10, |a| sidebar_order(a) == tidied);
+    press(&app, "cmd-w");
+    until(&app, "a tab closed", 10, |a| titles(a).len() == 3);
+    open_bar(&app, key::K);
+    type_real(&app, "undo tidy");
+    std::thread::sleep(Duration::from_millis(600));
+    let rows = bar_rows(&app);
+    assert!(!rows.iter().any(|r| r.starts_with("Undo Tidy")), "undo offered over a change: {rows:?}");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    quit(&app);
+}

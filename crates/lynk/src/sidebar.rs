@@ -1,12 +1,14 @@
 //! The sidebar: the controls row with the window's own buttons, the pinned tiles, the tab list
 //! that scrolls, and the foot. Rows and tiles drag as one kind: a row dropped on the tiles pins
-//! its tab, a tile dropped on the list unpins it, and tiles reorder among themselves.
+//! its tab, a tile dropped on the list unpins it, and tiles reorder among themselves. Separators
+//! are rows of the list too, drawn by `separators`.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use lynk_core::session::{tab_id, tab_number};
 use lynk_core::settings::{LynkSettings, PinStyle};
+use lynk_core::sidebar_tree::{Item, SidebarTree};
 use lynk_core::tabstate::tile_letter;
 use nd::core::WindowId;
 use nd::platform::{Target, target};
@@ -40,12 +42,12 @@ pub fn margin() -> f32 {
 }
 
 /// Inside a row: before the favicon, between favicon and title, after the trailing slot.
-const ROW_LEAD: f32 = 6.;
-const ICON_GAP: f32 = 8.;
-const ROW_TAIL: f32 = 2.;
+pub(crate) const ROW_LEAD: f32 = 6.;
+pub(crate) const ICON_GAP: f32 = 8.;
+pub(crate) const ROW_TAIL: f32 = 2.;
 const FAVICON: f32 = 16.;
 /// Kept on every row, so a title never reflows as the pointer crosses the list.
-const TRAIL_WIDTH: f32 = 24.;
+pub(crate) const TRAIL_WIDTH: f32 = 24.;
 /// The close button's hit area and the load spinner, inside the trailing slot.
 const CLOSE_BOX: f32 = 20.;
 const CLOSE_RADIUS: f32 = 6.;
@@ -80,9 +82,11 @@ const PINS_BOTTOM: f32 = 8.;
 /// What rows and tiles drag as, each carrying its tab id.
 const TAB_KIND: &str = "tab";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SidebarRow {
     Tab(TabId),
+    /// A separator by its id.
+    Separator(SharedString),
     /// The quiet "New tab" row after the tabs. GNOME's idiom is the bare plus in the foot
     /// instead, which is where Linux has it.
     NewTab,
@@ -177,15 +181,29 @@ impl BrowserWindow {
     /// Hands the list its rows, each versioned by what it draws so a change re-renders it.
     pub fn sync_rows(&mut self, cx: &mut Context<Self>) {
         let hovered = hovered_row(cx, self.id);
-        let rows: Vec<(SidebarRow, u64)> = self
-            .tabs()
+        let rows: Vec<(SidebarRow, u64)> = list_rows(self.tree())
             .into_iter()
-            .filter(|t| !self.is_pinned(t.id))
-            .map(|t| {
+            .filter_map(|(row, _)| {
                 let mut h = std::collections::hash_map::DefaultHasher::new();
-                (t.label(), &t.favicon, t.rt.loading, t.is_asleep(), self.active == t.id, hovered == Some(t.id))
-                    .hash(&mut h);
-                (SidebarRow::Tab(t.id), h.finish())
+                match &row {
+                    SidebarRow::Tab(id) => {
+                        let t = self.tab(*id)?;
+                        (
+                            t.label(),
+                            &t.favicon,
+                            t.rt.loading,
+                            t.is_asleep(),
+                            self.active == t.id,
+                            hovered == Some(t.id),
+                        )
+                            .hash(&mut h);
+                    }
+                    SidebarRow::Separator(id) => {
+                        crate::separators::drawn(cx, self.id, id, separator_name(self.tree(), id)).hash(&mut h)
+                    }
+                    SidebarRow::NewTab => {}
+                }
+                Some((row, h.finish()))
             })
             .chain((target() != Target::Linux).then_some((SidebarRow::NewTab, 0)))
             .collect();
@@ -216,12 +234,15 @@ impl BrowserWindow {
             .selectable(|row, _| matches!(row, SidebarRow::Tab(_)))
             .drag_rows(TAB_KIND, |row| match row {
                 SidebarRow::Tab(id) => Some(tab_id(*id).into()),
+                SidebarRow::Separator(id) => Some(id.clone()),
                 SidebarRow::NewTab => None,
             })
             .accepts_drops([TAB_KIND])
             .on_drop(cx.listener(|win, e: &RowDropped<SidebarRow>, _, cx| {
-                if let Some(id) = tab_number(&e.item.id) {
-                    win.drop_in_list(id, e.index, cx);
+                let slot = tree_slot(win.tree(), e.index);
+                match tab_number(&e.item.id) {
+                    Some(id) => win.drop_in_list(id, slot, cx),
+                    None => win.drop_separator(&e.item.id, slot, cx),
                 }
             }))
             .on_select(cx.listener(|win, e: &SelectEvent<SidebarRow>, window, cx| match e.key {
@@ -231,16 +252,17 @@ impl BrowserWindow {
                     win.sync_rows(cx);
                 }
                 SidebarRow::Tab(id) => win.select(id, cx),
-                SidebarRow::NewTab => {}
+                SidebarRow::Separator(_) | SidebarRow::NewTab => {}
             }))
             .flex_1()
             .min_h_0();
+        let me = self.id;
         v_flex()
             .id("sidebar")
             .size_full()
             .px(px(margin))
             .when(!mac, |col| col.pt(px(INSET)))
-            .context_menu(|menu, _, _| column_menu(menu))
+            .context_menu(move |menu, _, cx| column_menu(menu, me, cx))
             .child(controls)
             .children(self.pinned(cx))
             .child(rows)
@@ -412,6 +434,10 @@ impl BrowserWindow {
     fn row(&mut self, row: SidebarRow, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let id = match row {
             SidebarRow::Tab(id) => id,
+            SidebarRow::Separator(id) => {
+                let name = separator_name(self.tree(), &id).to_owned();
+                return crate::separators::row(self, id, &name, cx);
+            }
             SidebarRow::NewTab => return new_tab_row(cx),
         };
         let Some(tab) = self.tab(id) else { return div().into_any_element() };
@@ -534,15 +560,60 @@ fn row_menu(menu: ContextMenu, win: WindowId, id: TabId, cx: &App) -> ContextMen
         .entry(item(command_for::<MoveTabToNewWindow>()))
         .entry(item(command_for::<SleepTab>()))
         .separator()
+        .entry(item(command_for::<AddSeparatorBelow>()))
+        .separator()
         .entry(item(command_for::<CloseTab>()))
         .entry(item(command_for::<CloseOtherTabs>()))
 }
 
+/// The list's rows in drawing order, each with the index of the tree row it belongs to: a tab
+/// in a folder or split draws as a row of its own under its container's index.
+fn list_rows(tree: &SidebarTree) -> Vec<(SidebarRow, usize)> {
+    let tab = |id: &str, at| tab_number(id).map(|n| (SidebarRow::Tab(n), at));
+    tree.items
+        .iter()
+        .enumerate()
+        .flat_map(|(at, item)| -> Vec<(SidebarRow, usize)> {
+            match item {
+                Item::Tab { id } => tab(id, at).into_iter().collect(),
+                Item::Separator { id, .. } => vec![(SidebarRow::Separator(id.clone().into()), at)],
+                Item::Folder(_) | Item::Split(_) => {
+                    let mut one = SidebarTree { items: vec![item.clone()], ..SidebarTree::default() };
+                    one.pins.clear();
+                    one.tab_ids().into_iter().filter_map(|id| tab(id, at)).collect()
+                }
+            }
+        })
+        .collect()
+}
+
+/// The gap the list marked before row `slot`, as a gap in the tree's own list.
+fn tree_slot(tree: &SidebarTree, slot: usize) -> usize {
+    list_rows(tree).get(slot).map_or(tree.items.len(), |(_, at)| *at)
+}
+
+fn separator_name<'a>(tree: &'a SidebarTree, id: &str) -> &'a str {
+    tree.items
+        .iter()
+        .find_map(|i| match i {
+            Item::Separator { id: s, name } if s == id => Some(name.as_str()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
 /// The menu on the column off any tab. The compact layout arrives with its lane.
-fn column_menu(menu: ContextMenu) -> ContextMenu {
-    menu.item("New Tab", actions::NewTab)
+fn column_menu(menu: ContextMenu, win: WindowId, cx: &App) -> ContextMenu {
+    let menu = menu
+        .item("New Tab", actions::NewTab)
         .item("Hide Sidebar", actions::ToggleSidebar)
-        .entry(MenuItem::action("Use Compact Layout", actions::SwitchLayout).enabled(false))
+        .entry(MenuItem::action("Use Compact Layout", actions::SwitchLayout).enabled(false));
+    let Some(win) = app::window(cx, win) else { return menu };
+    let win = win.read(cx);
+    let item = |command| actions::item_for_tab(command, win, win.active, cx);
+    menu.separator()
+        .entry(item(actions::command_for::<actions::TidyTabs>()))
+        .entry(item(actions::command_for::<actions::UndoTidy>()))
 }
 
 fn new_tab_row(cx: &mut Context<BrowserWindow>) -> AnyElement {
@@ -582,5 +653,28 @@ mod tests {
         set_hovered(&mut cx, a, Some(1));
         assert!(cx.request_close(a));
         assert_eq!(hovered_row(&cx, a), None);
+    }
+
+    #[test]
+    fn a_gap_in_the_list_is_the_same_gap_in_the_tree() {
+        let json = r#"{"pins":["t9"],"items":[
+            {"type":"tab","id":"t1"},
+            {"type":"separator","id":"i1","name":"Work"},
+            {"type":"split","id":"i2","tabs":["t2","t3"]},
+            {"type":"tab","id":"t4"}],"lastActive":""}"#;
+        let tree: SidebarTree = serde_json::from_str(json).unwrap();
+        let rows: Vec<_> = list_rows(&tree);
+        assert_eq!(
+            rows,
+            [
+                (SidebarRow::Tab(1), 0),
+                (SidebarRow::Separator("i1".into()), 1),
+                (SidebarRow::Tab(2), 2),
+                (SidebarRow::Tab(3), 2),
+                (SidebarRow::Tab(4), 3),
+            ]
+        );
+        assert_eq!((0..=5).map(|slot| tree_slot(&tree, slot)).collect::<Vec<_>>(), [0, 1, 2, 2, 3, 4]);
+        assert_eq!(separator_name(&tree, "i1"), "Work");
     }
 }

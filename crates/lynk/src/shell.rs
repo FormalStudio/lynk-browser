@@ -69,7 +69,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|win, a: &SelectTab, _, cx| win.select(a.0, cx)))
             .on_action(cx.listener(|win, a: &MoveTabToWindow, _, cx| move_tab(win, win.active, Some(a.0), cx)))
             .on_action(cx.listener(actions::run_for_tab))
-            .on_action(cx.listener(|win, a: &SwitchProfile, window, cx| crate::profile::switch(win, a, window, cx)));
+            .on_action(cx.listener(|win, a: &SwitchProfile, window, cx| crate::profile::switch(win, a, window, cx)))
+            .on_action(cx.listener(crate::separators::rename))
+            .on_action(cx.listener(crate::separators::delete_row));
         actions::listen_all(root, cx)
     }
 }

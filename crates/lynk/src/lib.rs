@@ -18,11 +18,13 @@ pub mod omnibox;
 pub mod page;
 pub mod process;
 pub mod profile;
+pub mod separators;
 pub mod session;
 pub mod shell;
 pub mod sidebar;
 pub mod site_info;
 pub mod tab;
+pub mod tidy;
 pub mod window;
 pub mod zoom;
 

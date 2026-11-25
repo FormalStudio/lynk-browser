@@ -12,6 +12,7 @@ use lynk_core::session::{OpenDisposition, Placement, place_opened_tab, tab_id, t
 use lynk_core::sidebar_tree::{Dest, SidebarTree};
 use lynk_core::spaces::neighbour;
 use lynk_core::tabstate::left_pinned_page;
+use lynk_core::tidy::{TidyTab, TidyUndo};
 use nd::core::WindowId;
 use nd::prelude::*;
 use nd::virtual_list::ListState;
@@ -70,6 +71,8 @@ pub const WINDOW_CLOSED: &[WindowListener] = &[
     crate::profile::forget,
     crate::devtools::forget,
     crate::blocking::forget,
+    crate::separators::forget,
+    crate::tidy::forget,
 ];
 
 /// Closes waiting on pages' `beforeunload`. `settle` is the one place a close goes ahead, and
@@ -527,8 +530,8 @@ impl BrowserWindow {
         self.changed(cx);
     }
 
-    /// A tile dropped on the list at row `index`.
-    /// A tab dropped on the list in the gap `slot` marked: a pin unpins there, a row moves there.
+    /// A tab dropped on the list in the gap `slot` marked, counted in the tree's list: a pin
+    /// unpins there, a row moves there.
     pub fn drop_in_list(&mut self, id: TabId, slot: usize, cx: &mut Context<Self>) {
         let was_pinned = self.is_pinned(id);
         if self.tree.drop_in_list(&tab_id(id), slot).is_err() {
@@ -538,6 +541,49 @@ impl BrowserWindow {
             tab.pinned_url = None;
         }
         self.changed(cx);
+    }
+
+    /// A separator dropped on the list in the gap `slot`, counted as [`Self::drop_in_list`]
+    /// counts it.
+    pub fn drop_separator(&mut self, id: &str, slot: usize, cx: &mut Context<Self>) {
+        if self.tree.drop_in_list(id, slot).is_ok() {
+            self.changed(cx);
+        }
+    }
+
+    /// A separator with `id` under the tab's row; false for a pinned tab.
+    pub fn add_separator_below(&mut self, tab: TabId, id: &str, cx: &mut Context<Self>) -> bool {
+        let added = self.tree.add_separator_below(&tab_id(tab), id, "").is_ok();
+        if added {
+            self.changed(cx);
+        }
+        added
+    }
+
+    pub fn rename_separator(&mut self, id: &str, name: &str, cx: &mut Context<Self>) {
+        if self.tree.rename(id, name).is_ok() {
+            self.changed(cx);
+        }
+    }
+
+    pub fn delete_separator(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.tree.delete_separator(id).is_ok() {
+            self.changed(cx);
+        }
+    }
+
+    /// Sorts the loose tabs into groups under new separators; the undo for it, or `None` when
+    /// there was nothing to tidy.
+    pub fn tidy(&mut self, tabs: &[TidyTab], cx: &mut Context<Self>) -> Option<TidyUndo> {
+        let (undo, _) = lynk_core::tidy::tidy(&mut self.tree, tabs, None, || app::next_item_id(cx)).ok()?;
+        self.changed(cx);
+        Some(undo)
+    }
+
+    pub fn undo_tidy(&mut self, undo: TidyUndo, cx: &mut Context<Self>) {
+        if lynk_core::tidy::undo(&mut self.tree, undo).is_ok() {
+            self.changed(cx);
+        }
     }
 
     /// The pinned tab has left the page it was pinned at.

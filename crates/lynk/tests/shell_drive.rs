@@ -3315,8 +3315,11 @@ fn real_pins_and_profiles_captures() {
             let app = os::launch(options);
             until(&app, "the tiles", 30, |a| tiles(a).len() == 5 && shown_title(a) == "Alpha");
             // Pins 2 and 3 wake and show the page's favicon; 4 and 5 sleep on their letter.
-            press(&app, "cmd-shift-]");
-            press(&app, "cmd-shift-]");
+            // One press at a time: a second chord sent while the first pin still wakes can be lost.
+            for left in [3, 2] {
+                press(&app, "cmd-shift-]");
+                until(&app, &format!("{left} tiles on their letter"), 20, |a| letters(a) == left);
+            }
             real_click(&app, tile_at(&app, 0).0, tile_at(&app, 0).1);
             let deadline = Instant::now() + Duration::from_secs(20);
             while letters(&app) != 2 {

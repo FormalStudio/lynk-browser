@@ -2124,8 +2124,10 @@ fn real_a_quit_writes_the_last_change() {
         profile.join("session.json").exists()
             && session_of(&profile)["windows"][0]["tabs"].as_array().map(Vec::len) == Some(2)
     });
-    // Shown by the next key, then quit before the store's debounce has passed.
+    // Shown by the next key, then quit before the store's debounce has passed. The key can
+    // reach the page first and come back to the app later, so the quit waits for the switch.
     app.keyboard().press(&os::chord("cmd-1")).unwrap();
+    until(&app, "the first tab shown", 5, |a| shown_title(a) == "Alpha");
     quit(&app);
     drop(app);
     let saved = session_of(&profile);

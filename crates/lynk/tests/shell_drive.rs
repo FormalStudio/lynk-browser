@@ -3157,6 +3157,50 @@ fn all_titles(app: &App) -> Vec<String> {
     titles
 }
 
+/// The title of the app's key window.
+fn key_title(app: &AppHandle) -> Option<String> {
+    app.windows()
+        .ok()
+        .and_then(|w| w.as_array().cloned())
+        .and_then(|ws| ws.iter().find(|w| w["key"] == true).map(|w| w["title"].as_str().unwrap_or_default().to_owned()))
+}
+
+/// Each profile's cookie store as Chromium left it on disk: `<dir>: <host> <name>, ...`.
+fn profile_cookies(dir: &std::path::Path) -> String {
+    let stores = [dir.join("cef/Default/Cookies")].into_iter().chain(
+        std::fs::read_dir(dir.join("cef"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("profile-"))
+            .map(|e| e.path().join("Cookies")),
+    );
+    stores
+        .map(|db| {
+            let out = std::process::Command::new("sqlite3")
+                .args(["-readonly", &db.display().to_string(), "select host_key || ' ' || name from cookies"])
+                .output();
+            let rows = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', ", ")).unwrap_or_default();
+            format!("{}: [{rows}]", db.strip_prefix(dir).unwrap_or(&db).display())
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Every window with its profile's tabs, key state and frame, and `profiles.json`, for a
+/// restore that did not come back as it should.
+fn profile_windows(app: &AppHandle, dir: &std::path::Path) -> String {
+    let tree = app.tree(None).map(|t| {
+        t.windows.iter().map(|w| format!("{:?} tabs {:?}", w.title, window_titles(w))).collect::<Vec<_>>().join("; ")
+    });
+    format!(
+        "windows {}\ntabs {}\nprofiles {:?}",
+        app.windows().unwrap_or_default(),
+        tree.unwrap_or_default(),
+        profiles_in(dir)
+    )
+}
+
 /// `profiles.json`: each profile's id, name and whether it opens at launch.
 fn profiles_in(dir: &std::path::Path) -> Vec<(String, String, bool)> {
     let text = std::fs::read_to_string(dir.join("profiles.json")).unwrap();
@@ -3186,7 +3230,7 @@ fn real_two_profiles_keep_their_cookies_apart() {
     until(&app, "Work sent no cookie", 15, |a| all_titles(a).contains(&"Cookie none".to_owned()));
     shot(&app, "profiles-two-windows");
     run_command(&app, "switch to default", "Switch to Default");
-    // Keys typed the moment the switched-to window comes forward can land before its bar does.
+    until(&app, "Default's window key", 10, |a| key_title(a).as_deref() == Some("Set"));
     open_bar(&app, key::T);
     paste(&app, &format!("{base}/cookie"));
     std::thread::sleep(Duration::from_millis(300));
@@ -3203,13 +3247,20 @@ fn real_two_profiles_keep_their_cookies_apart() {
     assert!(dir.join("profiles").join(&work).join("session.json").exists(), "Work keeps its own session");
 
     // Each window's shown page reloads at launch, sending what its profile has kept.
+    let kept = profile_cookies(&dir);
     let app = launch_on(&dir, &[]);
-    until(&app, "both profiles back, still apart", 30, |a| all_titles(a) == ["Cookie none", "Cookie who=one"]);
-    let key_title = |a: &App| {
-        a.windows().ok().and_then(|w| w.as_array().cloned()).and_then(|ws| {
-            ws.iter().find(|w| w["key"] == true).map(|w| w["title"].as_str().unwrap_or_default().to_owned())
-        })
-    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while all_titles(&app) != ["Cookie none", "Cookie who=one"] {
+        if Instant::now() > deadline {
+            shot(&app, "profiles-two-restart-timeout");
+            panic!(
+                "timed out restoring both profiles, still apart\ncookies kept at quit: {kept}\n{}\n{}",
+                profile_windows(&app, &dir),
+                app.stderr_tail(80).join("\n")
+            );
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
     for (row, title) in [("Switch to Default", "Cookie who=one"), ("Switch to Work", "Cookie none")] {
         os::in_front(&app);
         // The profile in front offers no switch to itself.

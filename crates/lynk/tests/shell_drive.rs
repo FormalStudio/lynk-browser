@@ -216,6 +216,15 @@ fn width_of(app: &AppHandle) -> Option<f64> {
     on_screen_window(app).map(|w| w.bounds.2)
 }
 
+/// Whether the key window is in fullscreen with macOS done moving it there; until then its
+/// frame may have grown already, but it takes no input.
+fn settled_fullscreen(app: &AppHandle) -> bool {
+    app.windows()
+        .ok()
+        .and_then(|w| w.as_array().cloned())
+        .is_some_and(|ws| ws.iter().any(|w| w["key"] == true && w["fullscreen"] == true))
+}
+
 /// Resizes the front window to `width` points, keeping its height, as a drag of its edge would.
 fn resize(app: &AppHandle, width: u32) {
     resize_to(app, width, front_window(app).bounds.3 as u32);
@@ -655,9 +664,7 @@ fn real_fullscreen_page_and_browser() {
     let width = front_window(&app).bounds.2;
     // The page's own fullscreen takes the window with it and hides the sidebar; Esc leaves.
     click_page(&app, 100.);
-    until(&app, "page fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width) && lacks(a, "controls-row"));
-    // The window server cannot capture a window while it moves into its fullscreen space.
-    std::thread::sleep(Duration::from_millis(1500));
+    until(&app, "page fullscreen", 10, |a| settled_fullscreen(a) && lacks(a, "controls-row"));
     shot(&app, "page-fullscreen");
     // The page fills the window, edge to edge. A capture of a fullscreen window also takes the
     // title bar strip parked above the screen, which is no part of the page.
@@ -672,15 +679,47 @@ fn real_fullscreen_page_and_browser() {
     until(&app, "out of page fullscreen", 10, |a| width_of(a) == Some(width) && has(a, "controls-row"));
     // The browser's: macOS's own Enter Full Screen, the sidebar kept.
     hid(key::F, &[Modifier::Control, Modifier::Command]);
-    until(&app, "browser fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width));
+    until(&app, "browser fullscreen", 10, settled_fullscreen);
     assert!(has(&app, "controls-row"));
     // The page's fullscreen inside it, left with Esc, leaves the window as the user had it.
     click_page(&app, 100.);
     until(&app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
     hid(key::ESCAPE, &[]);
     until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
+    // A wrong exit would start within this.
     std::thread::sleep(Duration::from_millis(1500));
-    assert!(front_window(&app).bounds.2 > width, "the window stays in the user's fullscreen");
+    assert!(settled_fullscreen(&app), "the window stays in the user's fullscreen");
+    hid(key::F, &[Modifier::Control, Modifier::Command]);
+    until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
+}
+
+/// The window takes no input while macOS still moves it into fullscreen, though its frame has
+/// already grown; the app says it is fullscreen only once the move is over, and a click then
+/// reaches the page.
+#[test]
+fn real_fullscreen_is_reported_once_the_move_is_over() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/full"));
+    until(&app, "the page", 30, |a| titles(a) == ["Full"]);
+    let width = front_window(&app).bounds.2;
+    in_front(&app);
+    ndshell::input::key(key::F, &[Modifier::Control, Modifier::Command]);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut grown_while_moving = false;
+    while !settled_fullscreen(&app) {
+        assert!(Instant::now() < deadline, "the window never settled in fullscreen");
+        grown_while_moving |= width_of(&app).is_some_and(|w| w > width);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(grown_while_moving, "the frame grew before the move was over");
+    click_page(&app, 100.);
+    until(&app, "page fullscreen in browser fullscreen", 10, |a| lacks(a, "controls-row"));
+    hid(key::ESCAPE, &[]);
+    until(&app, "out of page fullscreen", 10, |a| has(a, "controls-row"));
+    assert!(settled_fullscreen(&app), "the window stays in the user's fullscreen");
     hid(key::F, &[Modifier::Control, Modifier::Command]);
     until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
 }
@@ -1386,8 +1425,7 @@ fn real_closing_a_fullscreen_page_leaves_fullscreen() {
     until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t == "Full"));
     let width = front_window(&app).bounds.2;
     click_page(&app, 100.);
-    until(&app, "page fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width));
-    std::thread::sleep(Duration::from_millis(1500));
+    until(&app, "page fullscreen", 10, settled_fullscreen);
     press(&app, "cmd-w");
     until(&app, "the tab gone and the window back", 15, |a| titles(a).len() == 1 && width_of(a) == Some(width));
     assert!(has(&app, "controls-row"));

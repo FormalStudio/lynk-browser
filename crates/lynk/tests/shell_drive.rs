@@ -1981,6 +1981,39 @@ fn go_to(app: &AppHandle, text: &str) {
     bar_closed(app);
 }
 
+/// The bar's panel shows a turn after the bar opens, later still while a load keeps the main
+/// thread busy. Keys typed the instant the bar is in the tree all land in its field, none in the
+/// page behind.
+#[test]
+fn real_command_bar_keeps_keys_typed_during_a_load() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    for n in 0..20 {
+        go_to(&app, &format!("{base}/slow?{n}"));
+        until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
+        open_bar(&app, key::L);
+        let typed = format!("{base}/alpha?{n}");
+        ndshell::input::type_text(&typed);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while bar_field(&app).and_then(|f| f.split('|').next().map(str::to_owned)).as_deref() != Some(typed.as_str()) {
+            assert!(
+                Instant::now() < deadline,
+                "round {n}: the field holds {:?}\n{}",
+                bar_field(&app),
+                app.stderr_tail(60).join("\n")
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        hid(key::ESCAPE, &[]);
+        bar_closed(&app);
+    }
+    assert_eq!(titles(&app).len(), 1, "no search for keys the page took");
+}
+
 #[test]
 fn real_command_bar_opens_sites() {
     if !real_allowed() {

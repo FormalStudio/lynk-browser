@@ -806,11 +806,24 @@ fn real_fullscreen_is_reported_once_the_move_is_over() {
     until(&app, "the page", 30, |a| titles(a) == ["Full"]);
     let width = front_window(&app).bounds.2;
     os::in_front(&app);
+    // The windows' key and main state and the app in front at the keypress: the Window menu's
+    // item needs a key window, for a run where macOS never takes it into fullscreen.
+    let before = format!(
+        "page {:?}, window {:?}, {:?}, in front: {} (lynk {})",
+        box_of(&app, "content"),
+        front_window(&app).bounds,
+        app.windows(),
+        os::front_app(),
+        app.pid()
+    );
     os::key(&app, key::F, &[Modifier::Control, Modifier::Command]);
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut grown_while_moving = false;
     while !settled_fullscreen(&app) {
-        assert!(Instant::now() < deadline, "the window never settled in fullscreen");
+        if Instant::now() > deadline {
+            shot(&app, "fullscreen-unsettled");
+            panic!("the window never settled in fullscreen; at the keypress {before}; now {:?}", app.windows());
+        }
         grown_while_moving |= width_of(&app).is_some_and(|w| w > width);
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -1107,6 +1120,7 @@ fn real_dev_tools_leave_their_tab_as_it_was() {
         open_bar(app, key::L);
         let field = bar_field(app).unwrap_or_default();
         assert!(field.contains(&address) && !field.contains("devtools"), "the bar {when}: {field}");
+        shot(app, &format!("devtools-left-{}", when.rsplit(' ').next().unwrap_or(when)));
         // Commands come up only when they would run.
         type_real(app, "back");
         until(app, "the Back command", 10, |a| bar_rows(a).iter().any(|r| r.starts_with("Back")));

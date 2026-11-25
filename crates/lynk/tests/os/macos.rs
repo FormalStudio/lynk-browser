@@ -263,13 +263,24 @@ pub fn right_click(_: &App, at: (f64, f64)) {
     ndshell::input::right_click(at);
 }
 
-pub fn key(_: &App, code: Code, modifiers: &[Modifier]) {
+#[track_caller]
+pub fn key(app: &App, code: Code, modifiers: &[Modifier]) {
+    still_in_front(app);
     ndshell::input::key(code, modifiers);
 }
 
 /// Types `text` at the HID tap, character by character.
-pub fn type_text(_: &App, text: &str) {
+#[track_caller]
+pub fn type_text(app: &App, text: &str) {
+    still_in_front(app);
     ndshell::input::type_text(text);
+}
+
+/// HID keys go to whichever app macOS has in front. An app that took the front since the case
+/// brought this one forward would take them instead, so the case fails naming it.
+#[track_caller]
+fn still_in_front(app: &App) {
+    assert!(front_pid() == Some(app.pid()), "another app took the front before a key; in front: {}", front_app());
 }
 
 pub fn set_clipboard(_: &App, text: &str) {

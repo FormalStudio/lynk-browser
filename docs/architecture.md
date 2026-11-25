@@ -249,6 +249,23 @@ Layers drawn over the whole window above the page, back to front, each
 `fn(&BrowserWindow, &mut Window, &mut Context<BrowserWindow>) -> Option<AnyElement>`. The command
 bar and the panels go here. A full-size layer takes every click, so return `None` while closed.
 
+### The command bar
+
+`omnibox.rs` is one entry in `OVERLAYS`: nd's `command_palette`, mounted only while the window
+has a bar open, so a closed bar takes no clicks. Its state is one `Bar` per window (mode, where
+Return sends an address, the typed query) in the module's own global. `NewTab`, `OpenAddress`
+and `OpenSwitcher` in `COMMANDS` open it; Cmd+T makes no tab until Return, so a bar put away
+leaves none. Each render asks `lynk_core::omnibox::omni_rows` for the rows and drops command rows
+whose `COMMANDS` row has no handler or is disabled; a row's id names what Return does (`url`,
+`go:`, `hist:`, `tab:`, `cmd:`). Typed text becomes an address through `lynk_core::url::to_url`
+with the engine from `cx.settings::<LynkSettings>()`. Highlight, inline completion and the keys
+are nd's `PaletteModel`; the shell feeds back every reported query, which the model tells apart
+from a reseed even when the echo trails the typing. History comes from `history.rs`, which
+records every committed page through `page::OBSERVERS` into `history.sqlite` and answers the
+bar's searches off the main thread; each search is numbered and an answer to an older one is
+dropped, so rows never go back to a query already typed past. Open tabs are offered most
+recently shown first, an order the bar keeps through `TAB_EVENTS`.
+
 ### `BrowserWindow::open_tab`
 
 The one way to open a tab in a window: `open_tab(url, Open, cx) -> TabId`, empty `url` for the new
@@ -363,6 +380,8 @@ Shell, `crates/lynk/src`:
 | `sidebar.rs` | the controls row, tab rows and their menus, `FOOT` | own tab order |
 | `actions.rs` | actions, `COMMANDS`, `MENU_ITEMS`, `CONTEXT_KEYS`, bindings, menu bar | run a command's logic |
 | `find.rs` | find in page | touch another tab |
+| `omnibox.rs` | the command bar: its state per window, running the picked row | rank rows or parse typed text (core does) |
+| `history.rs` | recording visits and titles, searching them for the bar | rank matches (core does) |
 | `zoom.rs` | zoom steps, the foot glyph and popover | store levels outside `app` |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |
 | `main.rs` | calls `lynk::run` | anything else |

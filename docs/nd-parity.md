@@ -97,14 +97,14 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Menu on the column off any tab: New Tab, Hide Sidebar, Use Compact Layout
 
 ## Command bar
-- [ ] Cmd+T: address mode, empty field, Enter opens a new tab; on a blank tab it loads in place
+- [x] Cmd+T: address mode, empty field, Enter opens a new tab; on a blank tab it loads in place; drive `real_command_bar_opens_sites` (macOS)
 - [ ] Cmd+L (or a click on the active row or compact tab): the current address, all selected, Enter loads in this tab; a second Cmd+L closes it
 - [ ] Cmd+K: switcher mode, empty field, Enter loads in this tab; with nothing typed the first row is the page you were on last
 - [ ] Opening while open reseeds it, never a second bar
 - [ ] Address mode rows, in order: the history-completed address; the typed text ("<words>" with "<engine> Search", or the address with "Open" or "Open in New Tab"); matching open tabs ("Switch to Tab"); history, newest first, one row per URL, never an open tab; matching commands with their shortcut as the hint
 - [ ] Switcher rows: the typed row, open tabs most recently shown first, commands
 - [ ] Typed text always gets its own row ahead of tabs; Return searches or loads it and never switches tabs
-- [ ] Inline completion from history only, host first, `www.` ignored, shown selected after the caret; Backspace stops it until the next insertion; Tab or Right accepts it (unit: port of `omnibox.test.ts`)
+- [x ] Inline completion from history only, host first, `www.` ignored, shown selected after the caret; Backspace stops it until the next insertion; Tab or Right accepts it (unit: port of `omnibox.test.ts`); drive `real_command_bar_suggests` (macOS)
 - [ ] Up, Down, Home, End; Enter runs the highlighted row; Cmd+Enter submits the text as typed; the top row is highlighted whenever results change
 - [ ] Esc or a click outside closes it and gives focus back to the page
 - [ ] No request leaves the machine before Return (no engine suggestions)
@@ -112,7 +112,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Every command in `COMMANDS` is a row, with labels that flip (Pin or Unpin Tab, Reading Mode or Leave Reading Mode, Allow or Block Ads on This Site)
 - [ ] Hints spelled per OS ("⇧⌘T" on macOS, "Ctrl+Shift+T" on Linux)
 - [ ] Search engines DuckDuckGo (default), Google, Bing
-- [ ] Address parsing: a scheme is kept, `host.tld` or `localhost:port` becomes `https://`, anything else searches; resubmitting an unchanged `http:` address keeps `http:` (unit: port of `url.test.ts`)
+- [x] Address parsing: a scheme is kept, `host.tld` becomes `https://`, `localhost:port`, an IP or a local name `http://`, anything else searches; resubmitting an unchanged `http:` address keeps `http:` (unit: port of `url.test.ts`); unit `hosts_people_type`, `an_untouched_address_keeps_the_pages_own_scheme`
 - [ ] Context menu "Search with <engine>" on a selection opens a foreground tab (old drive `mac-context-menu`)
 
 ## Tabs and navigation

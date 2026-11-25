@@ -41,6 +41,7 @@ const KEYS: &[Key] = &[
     k("find-next", "Find next", "primary+g", "primary+g"),
     k("find-previous", "Find previous", "primary+shift+g", "primary+shift+g"),
     k("reload", "Reload", "primary+r", "primary+r"),
+    k("stop", "Stop loading", "primary+period", ""),
     k("copy-address", "Copy address", "primary+shift+c", "primary+shift+c"),
     k("back", "Back", "primary+[", "primary+["),
     k("forward", "Forward", "primary+]", "primary+]"),
@@ -159,6 +160,7 @@ fn canonical(chord: &str, mac: bool) -> Option<String> {
             "[" => "bracketleft",
             "]" => "bracketright",
             "," => "comma",
+            "." => "period",
             "-" => "minus",
             "return" => "enter",
             "del" => "delete",
@@ -258,6 +260,7 @@ pub fn shortcut_label(keys: &str, mac: bool) -> String {
     let key = parts.pop().unwrap_or("");
     let shown = match key {
         "comma" => ",".into(),
+        "period" => ".".into(),
         "plus" => "+".into(),
         "minus" => "-".into(),
         "tab" => "Tab".into(),

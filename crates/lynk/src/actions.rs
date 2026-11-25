@@ -18,7 +18,7 @@ use nd::webview::WebView;
 use crate::app;
 use crate::shell;
 use crate::tab::{Tab, TabId};
-use crate::window::{BrowserWindow, Open};
+use crate::window::BrowserWindow;
 
 /// The key context of a browser window's root.
 pub const CONTEXT: &str = "Browser";
@@ -40,6 +40,7 @@ actions!(
         FindNext,
         FindPrevious,
         Reload,
+        Stop,
         ToggleFullScreen,
         ToggleSidebar,
         SwitchLayout,
@@ -234,6 +235,11 @@ impl Command {
     fn enabled_for(&self, win: &BrowserWindow, id: TabId, cx: &App) -> bool {
         self.enabled.is_none_or(|when| when(win, id, cx))
     }
+
+    /// A module handles it and it is enabled for tab `id`.
+    pub fn runs(&self, win: &BrowserWindow, id: TabId, cx: &App) -> bool {
+        self.handler.is_some() && self.here() && self.enabled_for(win, id, cx)
+    }
 }
 
 /// The row for action `A`.
@@ -270,15 +276,16 @@ fn view_of(w: &BrowserWindow, id: TabId) -> Option<&WebView> {
 pub const CONTEXT_KEYS: &[fn() -> KeyBinding] = &[crate::find::close_key];
 
 pub const COMMANDS: &[Command] = &[
-    Command::new::<NewTab>("New Tab").key("new-tab").menu(MenuId::File).handler(|w, _, _, cx| {
-        w.open_tab("", Open::End, cx);
-    }),
+    Command::new::<NewTab>("New Tab").key("new-tab").menu(MenuId::File).handler(crate::omnibox::new_tab),
     Command::new::<NewWindow>("New Window").key("new-window").menu(MenuId::File).handler(|_, _, _, cx| {
         app::open_window(cx, Vec::new(), None);
     }),
     Command::new::<NewPrivateWindow>("New Private Window").key("private").menu(MenuId::File),
-    Command::new::<OpenAddress>("Open Address Bar").key("address").menu(MenuId::File),
-    Command::new::<OpenSwitcher>("Switch Tabs").key("switcher").menu(MenuId::File),
+    Command::new::<OpenAddress>("Open Address Bar")
+        .key("address")
+        .menu(MenuId::File)
+        .handler(crate::omnibox::open_address),
+    Command::new::<OpenSwitcher>("Switch Tabs").key("switcher").menu(MenuId::File).handler(crate::omnibox::switcher),
     Command::new::<CloseTab>("Close Tab")
         .key("close-tab")
         .menu(MenuId::File)
@@ -303,6 +310,15 @@ pub const COMMANDS: &[Command] = &[
         .menu(MenuId::Edit)
         .handler(crate::find::previous),
     Command::new::<Reload>("Reload").key("reload").menu(MenuId::View).handler(shell::reload),
+    Command::new::<Stop>("Stop")
+        .key("stop")
+        .menu(MenuId::View)
+        .enabled(|w, id, _| w.tab(id).is_some_and(|t| t.rt.loading))
+        .handler(|w, id, _, _| {
+            if let Some(page) = view_of(w, id) {
+                page.stop();
+            }
+        }),
     // macOS gives fullscreen to the Window menu's own item, Ctrl+Cmd+F.
     Command::new::<ToggleFullScreen>("Full Screen")
         .key("fullscreen")
@@ -415,6 +431,7 @@ fn binding_keys(chord: &str) -> String {
             "minus" => "-",
             "bracketleft" => "[",
             "bracketright" => "]",
+            "period" => ".",
             "F11" => "f11",
             other => other,
         })

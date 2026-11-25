@@ -1,123 +1,72 @@
-# Handoff (written 2026-11-10, evening)
+# Handoff (written 2026-11-25)
 
-Development is stopped. No agent is running and nothing is running on purpose. To resume, tell
-Claude: "read RESUME.md and continue".
+Development is running under one orchestrator with one agent per lane. To resume after a stop,
+tell Claude: "read RESUME.md and continue".
 
-Goal: Lynk, an Arc-style Chromium browser, as a Rust app on NativeDesktop (`nd`) for macOS, Linux
-and Windows. The plan is [docs/delivery-plan.md](docs/delivery-plan.md) (five waves), the work
-list is [docs/nd-parity.md](docs/nd-parity.md), the architecture is
-[docs/nd-port-plan.md](docs/nd-port-plan.md). `src/` is the old TypeScript app and is only the
+Goal: Lynk, an Arc-style Chromium browser, as a Rust app on NativeDesktop (`nd`). Usable and
+stable on macOS and Linux first, Windows only as far as the KVM guest on g815 can test it, then
+the features, including [docs/inspiration.md](docs/inspiration.md). The plan is
+[docs/delivery-plan.md](docs/delivery-plan.md) (five waves), the work list is
+[docs/nd-parity.md](docs/nd-parity.md), the design is [docs/architecture.md](docs/architecture.md),
+the rules for agents are [AGENTS.md](AGENTS.md). `src/` is the old TypeScript app and is only the
 spec. `PLAN.md` at the root is from the WebKit era and describes nothing current.
 
-## Where it stands: wave 1 of 5, two lanes of three done
+## Where it stands
 
 | Lane | State |
 | --- | --- |
-| `core` (`crates/core`, `lynk-core`) | Done, reviewed in two rounds, pushed. 17 modules, 80 tests, clippy clean |
-| `cef-windows` (nd repo) | Written, reviewed, pushed in nd. Never run on Windows. macOS and Linux gates green after its refactor |
-| `shell` (`crates/lynk`) | Not done. Stopped between review rounds 2 and 3 |
+| `core` (`crates/core`) | Done and on `main`, tabs live in the core sidebar tree |
+| `shell` (`crates/lynk`) | On `main`. Review findings S1 to S21 closed (four Codex rounds, one Claude round, budget spent). Session restore landed. Next: settings as a tab, then private and popup windows, permissions, external protocols |
+| command bar | Merged (`4f0cf58`). Open: one run in 12 loses the first typed letters; favicons in rows, the visual pass, history, bookmarks and downloads panels, `chrome://` routes |
+| Linux bring-up | Branch `t3/linux-browser-bringup`, not merged. The bar works on Linux and the build is installed on g815. Open: SIGTERM quit hang (about 1 in 20), a third client counted in the tiled case, sidebar pairs against macOS |
+| Windows guest | Branch `t3/windows-vm-toolchain`, 42 of 42 three runs in the guest, ready to merge after the Linux branch |
+| `package` | On `main` (`098c86a`): notarized mac app and dmg, Linux AppImage. Needs nd `0db1119b` and `4442c4cd` pushed and repinned, or the packaged mac app dies at launch |
+| `blocking-tools` | Started 2026-11-25 in its own worktree: docked DevTools first, then adblock |
+| `extensions` | Not started |
 
-No box in `docs/nd-parity.md` is ticked yet. Waves 2 to 5 have not started.
+macOS drive on `a43068a`: 50 of 50, 49 of 50, 50 of 50. The one failure was a click sent while
+macOS animated the window into fullscreen; the fix is nd `6f68fa13` plus lynk branch
+`shell-fullscreen` (`52d14c8`), waiting on the nd push.
 
-## The shell lane, exactly
+## Before any push of lynk
 
-- Committed and unpushed on lynk `main`: `e6200d8`, `9ced343` (the shell), `7091104`,
-  `766d86d` (round 1 fixes and the row menus), `2fec632` (pins nd `0d451fc1`), then
-  `28e4862 wip: shell review round 2 fixes, unverified`.
-- `766d86d` on nd `0d451fc1`: clippy clean, 6 unit tests pass, the drive
-  (`crates/lynk/tests/shell_drive.rs`, 17 cases) passed 17 of 17 for the agent and 15 of 17 in my
-  run. `real_fullscreen_page_and_browser` ("the app has a window on screen") and
-  `real_put_tab_to_sleep_and_wake` ("timed out waiting for a second tab") fail in a full run and
-  pass 3 of 3 alone. The log is `target/gate/shell-drive.log`.
-- The agent's lead on that flake when it was stopped: a page click is lost while a Chrome-style
-  page briefly has zero size after it is lifted. Its fix is nd `10242018`, unverified.
-- `28e4862` is the agent's unfinished round 2 work and nobody has run it: `TAB_EVENTS` fired on
-  every path, `key_window` skipping closed windows, drive changes. It builds only against the two
-  unpushed nd commits below. Never push a `wip:` commit; finish it, verify, then squash or reword.
-- nd, local `main` at `~/Developer/ecosystem/nativedesktop`, two commits unpushed and not gated
-  by me: `e27c2d62` (a right click on a list row no longer selects it) and `10242018`.
-
-Open review findings for the shell (round 2, Claude Opus):
-- S3 should: `TAB_EVENTS` is not called for tabs that start a window, for a window close, or
-  correctly for moves. Wants a unit test with a recording listener.
-- N1 should: a right click on a tab row selects it, so the browser switches tabs. The nd fix is
-  `e27c2d62`; the drive must open the menu on a tab that is not shown and assert the shown tab.
-- S4 nit: a launch arriving as the last window closes loses its URLs (`app.rs`, `key_window`).
-- For the Linux lane: F11 cannot leave a fullscreen the window manager started.
-
-## Next steps, in order
-
-1. Finish the shell: get the full drive to pass three times in a row with `--test-threads=1`,
-   close S3, N1 and S4.
-2. Gate nd (commands below), push nd, `cargo update -p nd` here, rerun the drive on the pushed nd.
-3. Review round 3 (the last in budget) on `git diff 766d86d HEAD -- crates/lynk` plus the two nd
-   commits. On approval push lynk.
-4. Tick the shell's boxes in `docs/nd-parity.md`, each naming its drive case.
-5. Start wave 2 (five lanes, `docs/delivery-plan.md`). The seams they append to:
-   `actions::COMMANDS`, `MENU_ITEMS`, `CONTEXT_KEYS`, `sidebar::FOOT`, `site_info::ROWS`,
-   `page::OBSERVERS`, `TAB_EVENTS`, `shell::OVERLAYS`, `BrowserWindow::open_tab`,
-   `app::open_window`.
-
-Carried into wave 2 from the `core` review: nothing calls `ublock::scriptlet_resources` yet. The
-`blocking-tools` lane has to evaluate the release's `js/resources/scriptlets.js` in a hidden page,
-pass `builtinScriptlets` through it and `save_resources`, or `+js()` filters do nothing on a
-fresh profile. Declined nits: the filter-list date fallback, lazy favicon ink.
+`main` is local only. Its history contains `28e4862 wip: shell review round 2 fixes, unverified`.
+Never push a `wip:` commit: reword or squash it first, at a moment when no lane branch is in
+flight, because every lane branch forks from that history.
 
 ## Gates
 
-- core: `env -u SDKROOT -u DEVELOPER_DIR CARGO_TARGET_DIR=target/core cargo test -p lynk-core`,
-  and `cargo clippy -p lynk-core --all-targets -- -D warnings`.
-- shell drive (macOS, opens real windows, moves the real pointer):
-  `env -u SDKROOT -u DEVELOPER_DIR CEF_PATH="/Volumes/Kyan Drive/dev-cache.noindex/cef" ND_REAL=1 cargo test -p lynk --test shell_drive -- --test-threads=1`.
-  Captures land in `target/tmp/shell-*.png`; look at the 1200 and 720 pt ones.
-- Against unpushed nd, without editing manifests: add
-  `--config 'patch."https://github.com/FormalStudio/NativeDesktop".nd.path="../nativedesktop/crates/nd"'`.
-- Windows cross-check from the macbook: `cargo xwin clippy --target x86_64-pc-windows-msvc -p lynk`
-  with `/opt/homebrew/opt/llvm@22/bin` on `PATH` (gpui's resource build needs `llvm-rc`).
-- nd on Linux, from the nd checkout, headless Hyprland on g815:
-  `scripts/linux-gate sync`, then
-  `ND_LINUX_GATE_TIMEOUT_MIN=150 scripts/linux-gate run 'cargo build -p browser && cargo test -p nd-os-linux --features cef --test real_webview -- --test-threads=1'`.
-  Expect 18 passed. Without `cargo build -p browser` first, 17 fail at setup.
-- nd on macOS for the list change:
-  `ND_REAL=1 cargo test -p nd-backend-appkit --lib --test notes_gaps`. Do not run the whole crate
-  without the `cef` feature: its extensions gate refuses to start.
+- core: `cargo test -p lynk-core` and `cargo clippy -p lynk-core --all-targets -- -D warnings`.
+- shell drive on macOS (real windows, real pointer), three full runs in a row:
+  `lockf /tmp/lynk-screen.lock env -u SDKROOT -u DEVELOPER_DIR CEF_PATH="/Volumes/Kyan Drive/dev-cache.noindex/cef" ND_REAL=1 cargo test -p lynk --test shell_drive -- --test-threads=1`.
+  Every run that uses the macbook's screen goes through that lock; several agents share it.
+- Linux: headless Hyprland on g815 through `scripts/linux-gate` (on the Linux branch until it
+  merges): `drive 3` for three runs, `install` to put the build in the owner's session.
+- Windows: the KVM guest `lynk-win` on g815, `scripts/windows-vm create|up|down` (on the Windows
+  branch). Software rendering only, so corners are square there.
+- Against unpushed nd: `cargo <subcommand> --config scripts/local-nd.toml ...`, with the flag
+  after the subcommand. It rewrites `Cargo.lock`; never commit that.
+- nd: fixed in nd, gated with the bar "no new failures against the last pushed head, fmt and
+  clippy clean", pushed, then repinned here as `chore(deps): nd <sha>`. Failures that were there
+  before and do not block: `nd-cli docs check`, four `layout-settings-*` Linux goldens,
+  `nav.rs:591`, mac `real_resize_drag`, the Linux middle-button test.
 
-## Windows
+## How this is run
 
-- There is no Windows VM any more. It was removed from g815 and the fspec spec on 2026-11-10
-  (dotfiles `851e3b3c`). Windows runs happen on the Windows PC (g815 booted into Windows,
-  `ssh windows`); nd's `scripts/windows/remote` drives it.
-- Nothing in nd's Windows engine has run. The first run, in the nd checkout on the PC, once per
-  scene (`parity`, `chrome-pages`, `extensions`, `webstore`, `adblock`, `private`, `pip`, `print`):
-  `$env:ND_WEBVIEW_ENGINE='cef'; $env:ND_CEF_STYLE='chrome'; $env:BROWSER_SCENE='parity'; cargo run -p browser --features cef`
-  and look for `ND_..._OK` on stderr (`ND_PRINT pdf=` for print).
-- To check on that run (also in nd `docs/plan/TODO.md`, lane `cef-windows`): the extension popup
-  search can take a tooltip for the popup; the install prompt presses Cancel in an RTL locale;
-  whether Chromium finds 1Password's native messaging host through Chrome's registry key.
-- Owner's call, still open: the Windows signing identity (`[windows] signing = "azure"` or
-  `"certificate"` in `nativedesktop.toml`).
-
-## How this was run
-
-- One orchestrator, one Opus agent per lane, lanes owning disjoint paths in the main checkouts
-  (no worktrees), path-scoped commits, agents never push. The orchestrator reruns every gate
-  before pushing; agent reports were wrong about a full-run drive once already.
-- Reviews: Sol (Codex) was out of credits and Claude Pulse was rate limited, so every review ran
-  on the main Claude account with Opus. Three rounds at most per lane.
-- nd gaps are fixed in nd, gated on macOS and Linux, pushed, then repinned here with
-  `cargo update -p nd` in a `chore(deps): nd <sha>` commit.
-- The macbook is where drives run; they need the screen, so one drive at a time.
-
-## Inspiration backlog
-
-[docs/inspiration.md](docs/inspiration.md) (written 2026-11-23, extended 2026-11-24) records seven X posts the owner
-bookmarked: a settings design, sidebar separators (manual and generated) and drop to pin, projects, split tabs, a top-tabs layout and themes,
-a visual tab switcher, and peek by force click, each with what Lynk and nd would need on all
-three platforms. It is notes only. Nothing in it is scheduled; do not start on it without the
-owner's go-ahead.
+- Lanes that share `crates/lynk` work in worktrees and land by rebase and merge; the shell agent
+  owns `main`. Agents never push. nd experiments live in `../nativedesktop-wt/<lane>` and land by
+  cherry-pick; the shared nd checkout holds only committed, compiling work.
+- Every brief that touches UI names the visual spec (`docs/sidebar.md`, the old app's styles),
+  the states to capture and the design skills to load. The agent judges its own captures first.
+- Reviews go to Sol (Codex); when it is out of credits, to Claude Pulse on Opus.
+- At each milestone the build is reinstalled on g815 for the owner to try by hand. Never kill a
+  Lynk they have running.
+- Worktrees to remove once their branches are merged: `lynk-wt/omnibox`, `lynk-wt/core`, the two
+  `.t3/worktrees/lynk` checkouts, `nativedesktop-wt/*`.
 
 ## Owner decisions pending
 
-- Wave 5 (spaces, folders, split view, auto-archive, peek, a small window for links from other
-  apps, default browser) was declined on 2026-09-29 and stays out until the owner says yes.
-- The Windows signing identity.
+- The Windows signing identity (`[windows] signing` in `nativedesktop.toml`).
+- Deleting nd branches `windows-keys`, `windows-scheme`, `windows-chrome-pad`: their content is
+  on `main` by cherry-pick, so git needs `branch -D`, which waits for the owner's word.
+- Publishing a release: the fspec store package for Linux hosts needs a published AppImage URL.

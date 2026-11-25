@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use lynk_core::profiles::{self, DEFAULT_ID, ProfileError, ProfilesState};
+use lynk_core::profiles::{self, DEFAULT_ID, ProfileError, ProfilesState, menu_name};
 use nd::core::WindowId;
 use nd::prelude::*;
 use nd::settings::Store;
@@ -150,13 +150,15 @@ pub fn glyph(win: &BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWindow
         let list = state(cx);
         let mut menu = menu;
         for p in &list.profiles {
-            let item = MenuItem::action(p.name.clone(), SwitchProfile(p.id.clone())).checked(p.id == mine);
+            let item = MenuItem::action(menu_name(&p.name), SwitchProfile(p.id.clone())).checked(p.id == mine);
             menu = menu.entry(item);
         }
         menu.separator()
             .entry(MenuItem::action("New Profile\u{2026}", NewProfile))
             .entry(MenuItem::action("Rename Profile\u{2026}", RenameProfile))
             .entry(MenuItem::action("Delete Profile\u{2026}", DeleteProfile).enabled(mine != DEFAULT_ID))
+            // The glyph sits in the window's foot: its menu opens upward, over the column.
+            .above()
     })
     .tooltip(format!("Profile: {tip}"));
     let mut anchor = div().id("profile-anchor").child(button);

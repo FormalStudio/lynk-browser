@@ -474,6 +474,18 @@ impl SidebarTree {
         self.move_row(tab, Dest::Root(root_index))
     }
 
+    /// A tab dropped on the list at `slot`, the gap the list marked counting the rows as they
+    /// were before the drag (0 before the first, `items.len()` after the last): a pin leaves the
+    /// block for that gap, a row of the list moves to it.
+    pub fn drop_in_list(&mut self, tab: &str, slot: usize) -> Result<(), TreeError> {
+        let slot = slot.min(self.items.len());
+        let index = match self.row_index(tab) {
+            Some(from) if from < slot => slot - 1,
+            _ => slot,
+        };
+        self.move_row(tab, Dest::Root(index))
+    }
+
     /// Pin Tab puts the tab at the end of the pinned block, Unpin Tab at the head of the list.
     /// Asking for the state the tab is already in changes nothing.
     pub fn set_pinned(&mut self, tab: &str, pinned: bool) -> Result<(), TreeError> {
@@ -897,6 +909,22 @@ mod tests {
         // Next and Previous Tab walk this order: the pins first, then the list.
         assert_eq!(&t.tab_ids()[..3], ["p1", "c", "p2"]);
         assert_eq!(t.check(), Ok(()));
+    }
+
+    #[test]
+    fn a_tab_dropped_on_the_list_lands_in_the_marked_gap() {
+        let items = ["a", "b", "c"].map(Item::tab).to_vec();
+        let mut t = SidebarTree { pins: vec!["p".into()], items, ..SidebarTree::default() };
+        let order = |t: &SidebarTree| t.items.iter().map(|i| i.id().to_owned()).collect::<Vec<_>>();
+        t.drop_in_list("a", 2).unwrap();
+        assert_eq!(order(&t), ["b", "a", "c"], "down: the gap between b and c");
+        t.drop_in_list("c", 0).unwrap();
+        assert_eq!(order(&t), ["c", "b", "a"], "up: before the first row");
+        t.drop_in_list("b", 2).unwrap();
+        assert_eq!(order(&t), ["c", "b", "a"], "its own gaps leave it where it is");
+        t.drop_in_list("p", 99).unwrap();
+        assert_eq!(order(&t), ["c", "b", "a", "p"], "a pin past the end unpins to the end");
+        assert!(t.pins.is_empty());
     }
 
     #[test]

@@ -25,10 +25,18 @@ pub mod key {
     pub const TAB: Code = 48;
     pub const BACKSPACE: Code = 51;
     pub const DOWN: Code = 125;
+    pub const LEFT: Code = 123;
+    pub const RIGHT: Code = 124;
+    pub const A: Code = 0;
     pub const F1: Code = 122;
     pub const F7: Code = 98;
     pub const F12: Code = 111;
 }
+
+/// The keys that take the caret to the start and the end of a field's line: Cmd+arrows, as in
+/// any AppKit field, where Home and End only scroll.
+pub const LINE_START: (Code, &[Modifier]) = (key::LEFT, &[Modifier::Command]);
+pub const LINE_END: (Code, &[Modifier]) = (key::RIGHT, &[Modifier::Command]);
 
 /// The modifier of the app's shortcuts.
 pub const CMD: Modifier = Modifier::Command;

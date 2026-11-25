@@ -2025,6 +2025,77 @@ fn real_command_bar_keeps_keys_typed_during_a_load() {
     assert_eq!(titles(&app).len(), 1, "no search for keys the page took");
 }
 
+/// The bar's field as typed, without a completion it shows.
+fn bar_typed(app: &App) -> String {
+    bar_field(app).and_then(|f| f.split('|').next().map(str::to_owned)).unwrap_or_default()
+}
+
+/// A 300-character address stays inside the bar's field, with the caret keys, typing at its end
+/// and a 2,000-character paste.
+#[test]
+fn real_command_bar_long_address_stays_in_its_field() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let long = format!("{base}/beta?{}", "segment/".repeat(36));
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    go_to(&app, &long);
+    until(&app, "Beta", 15, |a| titles(a) == ["Beta"]);
+
+    // Right of the card, a field that does not clip shows the address's tail.
+    open_bar(&app, key::T);
+    type_real(&app, "b");
+    let edge = |what: &str| {
+        shot(&app, what);
+        #[cfg(target_os = "linux")]
+        return os::right_edge(&app, &front_window(&app), front_window(&app).bounds.2 * 0.2, 3);
+        #[cfg(not(target_os = "linux"))]
+        Vec::<[u8; 3]>::new()
+    };
+    let clear = edge("bar-long-reference");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    let clipped = |what: &str| {
+        let seen = edge(what);
+        let off =
+            clear.iter().zip(&seen).filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 24)).count();
+        assert_eq!(off, 0, "{what}: {off} pixels right of the bar changed");
+    };
+
+    open_bar(&app, key::L);
+    let address = bar_typed(&app);
+    assert!(address.len() >= 300, "the bar holds the address: {address:?}");
+    clipped("bar-long-selected");
+    hid(&app, os::LINE_END.0, os::LINE_END.1);
+    clipped("bar-long-end");
+    type_real(&app, "x");
+    assert_eq!(bar_typed(&app), format!("{address}x"), "the line's end, then typing, adds at the end");
+    hid(&app, os::LINE_START.0, os::LINE_START.1);
+    type_real(&app, "y");
+    hid(&app, key::RIGHT, &[]);
+    type_real(&app, "z");
+    hid(&app, key::LEFT, &[]);
+    hid(&app, key::LEFT, &[]);
+    type_real(&app, "w");
+    assert_eq!(
+        bar_typed(&app),
+        format!("yw{}z{}x", &address[..1], &address[1..]),
+        "the line's start, Right and Left move the caret"
+    );
+    clipped("bar-long-home");
+
+    let pasted = format!("{base}/beta?{}", "p".repeat(2000 - base.len() - 6));
+    hid(&app, key::A, &[os::CMD]);
+    paste(&app, &pasted);
+    until(&app, "the pasted address", 5, |a| bar_typed(a) == pasted);
+    clipped("bar-long-pasted");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    quit(&app);
+}
+
 #[test]
 fn real_command_bar_opens_sites() {
     if !real_allowed() {

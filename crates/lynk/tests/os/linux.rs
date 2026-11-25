@@ -29,11 +29,20 @@ pub mod key {
     pub const TAB: Code = 15;
     pub const BACKSPACE: Code = 14;
     pub const DOWN: Code = 108;
+    pub const LEFT: Code = 105;
+    pub const RIGHT: Code = 106;
+    pub const HOME: Code = 102;
+    pub const END: Code = 107;
+    pub const A: Code = 30;
     pub const F1: Code = 59;
     pub const F7: Code = 65;
     pub const F11: Code = 87;
     pub const F12: Code = 88;
 }
+
+/// The keys that take the caret to the start and the end of a field's line.
+pub const LINE_START: (Code, &[Modifier]) = (key::HOME, &[]);
+pub const LINE_END: (Code, &[Modifier]) = (key::END, &[]);
 
 /// The modifier of the app's shortcuts.
 pub const CMD: Modifier = Modifier::Control;
@@ -138,6 +147,16 @@ pub fn launch_on(mut options: LaunchOptions, display: Display) -> App {
 /// The colour at `at`, in the window's points, read from the output as it is now.
 pub fn pixel(app: &App, win: &Win, _shot: &Path, at: (f64, f64)) -> [u8; 3] {
     app.output().rgb((win.bounds.0 + at.0) as u32, (win.bounds.1 + at.1) as u32)
+}
+
+/// The window's pixels in the last `width` points before its right edge, every `step` points,
+/// from one frame.
+pub fn right_edge(app: &App, win: &Win, width: f64, step: usize) -> Vec<[u8; 3]> {
+    let frame = app.output();
+    let (right, bottom) = (win.bounds.0 + win.bounds.2, win.bounds.1 + win.bounds.3);
+    let xs = ((right - width).max(0.) as u32..(right as u32).min(frame.width)).step_by(step);
+    let ys = (win.bounds.1.max(0.) as u32..(bottom as u32).min(frame.height)).step_by(step);
+    ys.flat_map(|y| xs.clone().map(move |x| (x, y))).map(|(x, y)| frame.rgb(x, y)).collect()
 }
 
 /// Hyprland gives the keyboard to the window under a click, so there is no app to bring forward.

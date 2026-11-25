@@ -235,8 +235,8 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Linux on e1504g in the user's Hyprland session: pages, extensions and 1Password
 - [ ] App id `dev.formalsnake.Lynk`, name "Lynk Browser", categories Network and WebBrowser
 - [ ] [mac] Icon Composer layered icon (background `#0c1736`, the two layers in `assets/icon`); [linux] the Pantheon-style tile
-- [ ] [mac] `nd package mac`: the app with the CEF framework and its five helpers, signed with the Developer ID
-- [ ] [linux] `nd package linux` AppImage with the CEF runtime beside the binary
+- [x] [mac] `nd package mac`: the app with the CEF framework and its five helpers, signed with the Developer ID (`nd package mac --dir crates/lynk`, then `codesign --verify --deep --strict` and `spctl -a -vv` "accepted, Notarized Developer ID"; the app loads a page)
+- [x] [linux] `nd package linux` AppImage with the CEF runtime beside the binary (`nd package linux --dir crates/lynk --binary <g815 release>/lynk`, then `ndshell shot` of the AppImage in headless Hyprland on g815 loads a page)
 - [ ] Nix package: the nd build from the flake, root-owned in the store, replacing the `requireFile` AppImage derivation in `~/.config/nix`, rebuilt on every host
 
 ## Windows

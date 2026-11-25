@@ -2,9 +2,16 @@
 [app]
 id = "dev.formalsnake.Lynk"
 display_name = "Lynk Browser"
+icon = "../../assets/icon/linux.png"
+categories = ["Network", "WebBrowser"]
 
 [macos]
 minimum_system_version = "14.0"
+# 1Password trusts a browser by its code signature; an ad hoc one changes with every build.
+signing_identity = "Developer ID Application: CanaryCoders SL (8E7JB82GJK)"
+# An `xcrun notarytool store-credentials` profile in the packaging Mac's keychain.
+notarize = true
+notary_profile = "canarycoders-notary"
 
 [webview]
 engine = "cef"

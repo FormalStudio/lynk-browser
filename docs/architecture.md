@@ -346,6 +346,27 @@ compile on the other OS. Shortfall: three local `mac()` and `linux()` helpers (A
 State per OS: macOS is the reference and the drive runs there. Linux runs pages in Chrome style
 under XWayland. On Windows nothing in nd's CEF engine has run yet.
 
+## Packaging
+
+`nd package` reads `crates/lynk/nativedesktop.toml` (id, name, icon, categories, signing) and
+writes under `target/nd/package/<os>`. Build the `nd` CLI from the nd checkout with
+`cargo build --release -p nd-cli`. Velopack's `vpk` comes through the .NET SDK (installed on the
+macbook); the Linux pack also needs `mksquashfs` (`brew install squashfs`).
+
+- macOS, on the macbook: `<env> nd package mac --dir crates/lynk` gives `out/Lynk Browser.app`
+  and `out/Lynk Browser-0.1.0.dmg`: the CEF framework, the five `Lynk Browser Helper*.app`,
+  signed with `Developer ID Application: CanaryCoders SL (8E7JB82GJK)` (1Password trusts a
+  browser by that signature), notarized and stapled through the keychain profile
+  `canarycoders-notary` (`xcrun notarytool store-credentials`, the CanaryCoders App Store Connect
+  key). A Mac without that profile packages with `notarize = false`.
+- Linux: g815 has no .NET, so the binary is built there and packed on the macbook. Build with nd's
+  `scripts/linux-gate run 'cd ~/Developer/lynk-<branch> && cargo build -p lynk --release'`
+  (`ND_LINUX_TARGET` set), copy `lynk` and the CEF runtime (`LINUX_RUNTIME` in nd's
+  `package/cef.rs`) from its `release/` into one directory, then
+  `nd package linux --dir crates/lynk --binary <dir>/lynk`. The AppImage is
+  `velopack/dev.formalsnake.Lynk-linux-stable.AppImage`, the runtime beside the binary in
+  `usr/bin`.
+
 ## Tests and gates
 
 | Rung | Command | Proves |

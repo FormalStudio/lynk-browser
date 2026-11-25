@@ -10,6 +10,8 @@
 
 pub mod actions;
 pub mod app;
+pub mod blocking;
+pub mod devtools;
 pub mod find;
 pub mod history;
 pub mod omnibox;
@@ -46,6 +48,7 @@ pub fn run() -> nd::Result<()> {
 /// none, on `LYNK_URL` or the new tab page.
 pub fn init(cx: &mut App, mut urls: Vec<String>) {
     app::install(cx);
+    blocking::init(cx);
     cx.bind_keys(actions::bindings());
     profile::install(cx, &nd::system::app_dirs().data());
     session::install(cx);

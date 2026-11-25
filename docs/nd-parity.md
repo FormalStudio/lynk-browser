@@ -133,7 +133,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] "Aw, Snap!" with Reload when the renderer is gone
 - [ ] Tab titles: the page title, else the display address, else "New Tab"; a restored tab never shows "about:blank"
 - [ ] `chrome:`, `chrome-extension:`, `devtools:` and `view-source:` addresses open in a fresh page
-- [ ] DevTools open docked inside the tab's page area (bottom or right, resizable by dragging the divider, undock to its own window and back), on macOS, Linux and Windows
+- [x] DevTools open docked inside the tab's page area (bottom or right, resizable by dragging the divider, undock to its own window and back), on macOS, Linux and Windows; drives `real_dev_tools_from_the_page`, `real_dev_tools_divider_stops_at_both_limits`, `real_dev_tools_dock_undock_redock`, `real_dev_tools_follow_their_tab`, `real_dev_tools_leave_their_tab_as_it_was` (macOS, Linux)
 - [ ] External protocols (`mailto:`, `zoommtg:`): "Open …?" with an "always" option for real origins, remembered per scheme
 - [ ] A tab that aimed at a download goes back to the page it showed; a fresh tab stays until the download ends
 
@@ -198,12 +198,12 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 ## Ad blocking
 - [ ] adblock-rust with uBlock Origin's default lists, scriptlets and redirects, on by default (lane `cef-request-filter`; old drives `adblock-drive`, `adblock-shots`)
 - [ ] Network requests blocked or redirected per rule, cross-site frames included
-- [ ] Cosmetic filters and scriptlets applied at document start
+- [x] Cosmetic filters and scriptlets applied at document start; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux), scriptlets by `blocker` tests
 - [ ] uBlock Origin 1.75.0 pinned by SHA-256, downloaded on a fresh profile and verified before extraction; a newer release checked weekly against GitHub's published hash
 - [ ] Lists refreshed daily from CDN mirrors in order, falling back to the bundled snapshot; a partial download or a captive portal page never replaces a list
 - [ ] The compiled engine cached on disk and restored off the main thread; the window never waits on it
-- [ ] Per-site switch: "Allow Ads on This Site" and "Block Ads on …" (command, View menu, padlock switch), kept in `offSites`
-- [ ] Blocked count per page, reset on navigation, shown in the padlock popover
+- [x] Per-site switch: "Allow Ads on This Site" and "Block Ads on …" (command, View menu, padlock switch), kept in `offSites`; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux)
+- [x] Blocked count per page, reset on navigation, shown in the padlock popover; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux)
 - [ ] Hide Element (Shift+Cmd+H): a picker in an isolated world, labels the element under the pointer, a click hides it on that site for good as a `site##selector` rule; Esc or the chord again puts it away
 - [ ] Show Hidden Elements restores one or all; Update Filter Lists refreshes now
 - [ ] `blocking.json` and `adblock/` carried over from the 0.5.11 profile

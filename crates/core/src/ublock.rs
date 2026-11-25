@@ -288,6 +288,37 @@ pub fn drop_other_releases(root: &Path, keep: &str) {
     }
 }
 
+/// Saves the scriptlets a page evaluating the release's `js/resources/scriptlets.js` posted,
+/// `[{name, aliases, source, dependencies}]`, as the release's cached resources. Returns how many.
+pub fn save_scriptlets(adblock_dir: &Path, version: &str, posted: &Value) -> Result<usize, String> {
+    let scriptlets: Vec<Scriptlet> = serde_json::from_value(posted.clone()).map_err(|e| e.to_string())?;
+    if scriptlets.is_empty() {
+        return Err("the release has no scriptlets".into());
+    }
+    save_resources(adblock_dir, version, &scriptlet_resources(&scriptlets)).map_err(|e| e.to_string())?;
+    Ok(scriptlets.len())
+}
+
+/// The release file a page asks for at `path` (`js/resources/scriptlets.js`) with its type, for
+/// the page that evaluates the scriptlets; `None` for a path that leaves the release or names
+/// nothing in it.
+pub fn release_file(release: &Path, path: &str) -> Option<(PathBuf, &'static str)> {
+    let rel = Path::new(path.trim_start_matches('/'));
+    if rel.as_os_str().is_empty() || !rel.components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+        return None;
+    }
+    let file = release.join(rel);
+    if !file.is_file() {
+        return None;
+    }
+    let mime = match file.extension().and_then(|e| e.to_str()) {
+        Some("js") => "text/javascript",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    };
+    Some((file, mime))
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use std::io::Write;
@@ -413,5 +444,41 @@ pub(crate) mod tests {
         let no_digest =
             serde_json::json!({ "tag_name": "1.76.0", "assets": [{ "name": "uBlock0_1.76.0.chromium.zip" }] });
         assert_eq!(parse_latest_release(&no_digest.to_string()), None);
+    }
+
+    #[test]
+    fn a_release_file_never_leaves_the_release() {
+        let root = tempfile::tempdir().unwrap();
+        let release = root.path().join("ubo/1.75.0");
+        std::fs::create_dir_all(release.join("js/resources")).unwrap();
+        std::fs::write(release.join("js/resources/scriptlets.js"), "export {}").unwrap();
+        std::fs::write(root.path().join("secret.txt"), "x").unwrap();
+        let (file, mime) = release_file(&release, "/js/resources/scriptlets.js").unwrap();
+        assert_eq!((file, mime), (release.join("js/resources/scriptlets.js"), "text/javascript"));
+        assert_eq!(release_file(&release, "/../../secret.txt"), None);
+        assert_eq!(release_file(&release, "js/resources/../../../secret.txt"), None);
+        assert_eq!(release_file(&release, "/js/missing.js"), None);
+        assert_eq!(release_file(&release, "/js"), None);
+        assert_eq!(release_file(&release, "/"), None);
+    }
+
+    #[test]
+    fn posted_scriptlets_become_the_releases_resources() {
+        let root = tempfile::tempdir().unwrap();
+        let posted = serde_json::json!([
+            { "name": "set-constant.js", "aliases": ["set.js"], "source": "function setConstant(){}", "dependencies": ["safe-self.fn"] },
+            { "name": "safe-self.fn", "source": "function safeSelf(){}" },
+        ]);
+        assert_eq!(save_scriptlets(root.path(), "1.75.0", &posted), Ok(2));
+        let saved = load_resources(root.path(), &root.path().join("no-release"), "1.75.0");
+        let set = saved.iter().find(|r| r.name == "set-constant.js").unwrap();
+        assert_eq!(set.aliases, ["set.js"]);
+        assert_eq!(set.dependencies, ["safe-self.fn"]);
+        assert!(matches!(
+            saved.iter().find(|r| r.name == "safe-self.fn").unwrap().kind,
+            ResourceType::Mime(MimeType::FnJavascript)
+        ));
+        assert!(save_scriptlets(root.path(), "1.75.0", &serde_json::json!([])).is_err());
+        assert!(save_scriptlets(root.path(), "1.75.0", &serde_json::json!({ "x": 1 })).is_err());
     }
 }

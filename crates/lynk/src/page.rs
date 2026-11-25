@@ -34,6 +34,7 @@ pub enum PageEvent<'a> {
     DownloadUpdated(&'a DownloadUpdated),
     ContextMenuItemClicked(&'a ContextMenuItemClicked),
     ScriptMessage(&'a ScriptMessage),
+    RequestBlocked(&'a RequestBlocked),
     ExternalProtocol(&'a ExternalProtocol),
     ExtensionPopupOpened(&'a ExtensionPopupOpened),
     ExtensionPopupResized(&'a ExtensionPopupResized),
@@ -43,7 +44,7 @@ pub enum PageEvent<'a> {
 pub type Observer = fn(&mut BrowserWindow, TabId, &PageEvent, &mut Window, &mut Context<BrowserWindow>);
 
 /// The modules listening to every tab's page, in the order they hear an event.
-pub const OBSERVERS: &[Observer] = &[crate::history::record];
+pub const OBSERVERS: &[Observer] = &[crate::history::record, crate::blocking::observe];
 
 fn observe(win: &mut BrowserWindow, id: TabId, event: PageEvent, window: &mut Window, cx: &mut Context<BrowserWindow>) {
     for observer in OBSERVERS {
@@ -131,9 +132,7 @@ pub fn mount(tab: &Tab, live: &Live, cx: &mut Context<BrowserWindow>) -> AnyElem
             cx.listener(move |w, e: &FullscreenChanged, _, cx| w.page_fullscreen_changed(id, e.fullscreen, cx)),
         )
         .on_close_approved(cx.listener(move |w, e: &CloseApproved, _, cx| w.close_answered(id, &page, e.approved, cx)))
-        .on_chrome_command(
-            cx.listener(move |w, e: &ChromeCommand, window, cx| chrome_command(w, e.command, window, cx)),
-        )
+        .on_chrome_command(cx.listener(move |w, e: &ChromeCommand, _, cx| chrome_command(w, e.command, cx)))
         .on_security_changed(cx.listener(move |w, e: &SecurityChanged, window, cx| {
             if let Some(tab) = w.tab_mut(id) {
                 tab.rt.security =
@@ -169,6 +168,9 @@ pub fn mount(tab: &Tab, live: &Live, cx: &mut Context<BrowserWindow>) -> AnyElem
                 return;
             }
             observe(w, id, PageEvent::ScriptMessage(e), window, cx)
+        }))
+        .on_request_blocked(cx.listener(move |w, e: &RequestBlocked, window, cx| {
+            observe(w, id, PageEvent::RequestBlocked(e), window, cx)
         }))
         .on_external_protocol(cx.listener(move |w, e: &ExternalProtocol, window, cx| {
             observe(w, id, PageEvent::ExternalProtocol(e), window, cx)
@@ -269,12 +271,7 @@ fn new_window(w: &mut BrowserWindow, opener: TabId, e: &NewWindow, cx: &mut Cont
 }
 
 /// A Chrome command the focused page took: it reaches the app as the app's own command.
-fn chrome_command(
-    w: &mut BrowserWindow,
-    command: BrowserCommand,
-    window: &mut Window,
-    cx: &mut Context<BrowserWindow>,
-) {
+pub(crate) fn chrome_command(w: &mut BrowserWindow, command: BrowserCommand, cx: &mut Context<BrowserWindow>) {
     use actions::*;
     let action: Box<dyn Action> = match command {
         BrowserCommand::NewTab => Box::new(NewTab),
@@ -300,6 +297,7 @@ fn chrome_command(
         BrowserCommand::FocusAddress => Box::new(OpenAddress),
         BrowserCommand::Fullscreen => Box::new(ToggleFullScreen),
         BrowserCommand::Print => Box::new(Print),
+        BrowserCommand::DevTools => Box::new(DevTools),
         // The window is leased to this listener, where `request_close` would find no close
         // handler and close it unasked; the handler's own check runs here instead.
         BrowserCommand::CloseWindow => {
@@ -315,7 +313,7 @@ fn chrome_command(
         // The task manager, Home and Open File are Chrome's own surfaces with nothing in Lynk.
         BrowserCommand::TaskManager | BrowserCommand::Home | BrowserCommand::OpenFile => return,
     };
-    cx.dispatch_action(window.id(), action.as_ref());
+    cx.dispatch_action(w.id, action.as_ref());
 }
 
 /// What the content area shows for the tab on show, in front of its page.

@@ -68,6 +68,18 @@ const FULL: &str = r#"<!doctype html><title>Full</title>
 
 /// No colours of its own: Chromium's default white is what it sits on.
 const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own.";
+/// Two requests EasyList stops wherever they are served (`/pagead/conversion.js$script`,
+/// `/banner_ads/*`), an element its generic `##.ad_banner` hides (except on 127.0.0.1, where
+/// EasyList's `@@://127.0.0.1$generichide` turns generic rules off) and one the user hid on
+/// 127.0.0.1. The title reports what each did: `Ads <ad_banner> <promo> <script>`.
+const ADS: &str = r#"<!doctype html><title>Ads</title>
+<script src="/pagead/conversion.js"></script>
+<img src="/banner_ads/b.png" alt="">
+<div class="ad_banner">Ad</div><div class="promo">Promo</div><p>Content</p>
+<script>
+const shown = s => getComputedStyle(document.querySelector(s)).display;
+setInterval(() => { document.title = `Ads ${shown('.ad_banner')} ${shown('.promo')} ${window.converted ? 'ran' : 'stopped'}`; }, 200);
+</script>"#;
 const DARK_SCHEME: &str = "<!doctype html><meta name=color-scheme content=dark><title>Dark</title><p>Dark only.";
 const BOTH_SCHEMES: &str =
     "<!doctype html><meta name=color-scheme content=\"light dark\"><title>Both</title><p>Either scheme.";
@@ -83,7 +95,12 @@ const POPUPS: &str = r#"<!doctype html><title>Popups</title>
 /// Serves the fixture pages on a free local port for the rest of the test process, each request
 /// on its own thread, since `/slow` never answers.
 fn serve() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    serve_at("127.0.0.1:0")
+}
+
+/// The fixture pages on `addr`, for a page that must not be on 127.0.0.1.
+fn serve_at(addr: &str) -> String {
+    let listener = TcpListener::bind(addr).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
         for stream in listener.incoming().map_while(Result::ok) {
@@ -121,6 +138,8 @@ fn respond(mut stream: std::net::TcpStream) {
         "/press" => page(PRESS),
         "/popups" => page(POPUPS),
         "/plain" => page(PLAIN),
+        "/ads" => page(ADS),
+        "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
         "/dark-scheme" => page(DARK_SCHEME),
         "/both-schemes" => page(BOTH_SCHEMES),
         "/long-title" => page(LONG_TITLE),
@@ -599,12 +618,6 @@ fn hid(app: &App, code: os::Code, modifiers: &[Modifier]) {
     std::thread::sleep(Duration::from_millis(600));
 }
 
-/// The app's windows on screen, popovers and bubbles left out. On macOS a Chrome-style page adds
-/// a window of its own over the app's.
-fn on_screen(app: &App) -> usize {
-    os::windows(app).iter().filter(|w| w.bounds.2 >= 300. && w.bounds.3 >= 200.).count()
-}
-
 #[test]
 fn real_fullscreen_page_and_browser() {
     if !real_allowed() {
@@ -709,10 +722,354 @@ fn real_dev_tools_from_the_page() {
         until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
         // Focus in the page, where Chrome sees the chord first.
         click_page(&app, 500.);
-        let before = on_screen(&app);
         hid(&app, code, modifiers);
-        until(&app, &format!("devtools from {name}"), 10, |a| on_screen(a) == before + 1);
+        until(&app, &format!("devtools from {name}"), 20, |a| has(a, "devtools-bar"));
+        shot(&app, &format!("devtools-{}", name.replace('+', "-")));
+        // Docked in the page area: no window of their own.
+        assert_eq!(window_count(&app), 1, "DevTools open docked, not in a window");
+        // The same chord from inside DevTools closes them.
+        hid(&app, code, modifiers);
+        until(&app, &format!("devtools closed by {name}"), 10, |a| lacks(a, "devtools-bar"));
     }
+}
+
+/// `test_id`'s box in window points.
+fn box_of(app: &AppHandle, test_id: &str) -> nd_test::BoundingBox {
+    app.get_by_test_id(test_id).bounding_box().unwrap().unwrap_or_else(|| panic!("{test_id} is laid out"))
+}
+
+/// A real click in the middle of `test_id`, in whichever of the app's windows has it.
+fn click_id(app: &App, test_id: &str) {
+    click_node(app, test_id, |n| n.test_id.as_deref() == Some(test_id), 0.5);
+}
+
+/// A real click on the first node `pick` takes, `fx` of the way across it.
+fn click_node(app: &App, what: &str, pick: impl Fn(&nd_test::SemanticNode) -> bool, fx: f32) {
+    // Forward, but not `in_front`: while the DevTools have the keyboard the key window is
+    // Chromium's, none of the app's own.
+    os::activate(app);
+    let tree = app.tree(None).unwrap();
+    let (frame, b) = tree
+        .windows
+        .iter()
+        .find_map(|w| {
+            let node = w.root.iter().find(|n| pick(n) && n.visible)?;
+            // The frame takes in a title bar above the content the bounds are measured in.
+            let content = w.root.iter().next()?.bounds?;
+            let mut frame = w.frame?;
+            frame.origin.y += frame.size.height - content.size.height;
+            Some((frame, node.bounds?))
+        })
+        .unwrap_or_else(|| panic!("{what} is laid out in a window"));
+    let at = (frame.origin.x + b.origin.x + b.size.width * fx, frame.origin.y + b.origin.y + b.size.height / 2.);
+    os::click(app, (f64::from(at.0), f64::from(at.1)));
+    std::thread::sleep(Duration::from_millis(400));
+}
+
+/// A real drag from `(x, y)` in the window's points by `(dx, dy)`.
+fn real_drag(app: &App, (x, y): (f32, f32), dx: f64, dy: f64) {
+    os::in_front(app);
+    let (wx, wy, _, _) = front_window(app).bounds;
+    let from = (wx + f64::from(x), wy + f64::from(y));
+    os::hold(app, from);
+    for step in 1..=30 {
+        let f = f64::from(step) / 30.;
+        os::move_to(app, (from.0 + dx * f, from.1 + dy * f));
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    os::release(app, (from.0 + dx, from.1 + dy));
+    std::thread::sleep(Duration::from_millis(400));
+}
+
+/// Launches on `urls` under `appearance`.
+fn launch_in(appearance: &str, urls: &[String]) -> App {
+    let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-theme-{appearance}.toml"));
+    std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+    let options = urls.iter().fold(
+        LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+            .env("ND_CEF_STYLE", "chrome")
+            .env("ND_THEME_TOML", theme.display().to_string()),
+        |o, url| o.arg(url),
+    );
+    let app = os::launch(options);
+    os::in_front(&app);
+    app
+}
+
+/// Opens the shown tab's DevTools with F12 from inside its page, docked where the window keeps
+/// them.
+fn open_dev_tools(app: &App) {
+    // Below every fixture's links and buttons.
+    click_page(app, 450.);
+    hid(app, key::F12, &[]);
+    until(app, "devtools docked", 20, |a| has(a, "devtools-bar"));
+    std::thread::sleep(Duration::from_millis(800));
+}
+
+/// The docked divider stops at both panes' minimums, below and beside the page, in either
+/// appearance and in a 720 pt window; the bar's controls at rest, under the pointer and held
+/// down. Captures land as `shell-devtools-<state>-<appearance>.png`.
+#[test]
+fn real_dev_tools_divider_stops_at_both_limits() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for appearance in ["dark", "light"] {
+        let app = launch_in(appearance, &[format!("{base}/alpha")]);
+        until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+        open_dev_tools(&app);
+        shot(&app, &format!("devtools-rest-{appearance}"));
+        // Under the pointer, then held down.
+        os::in_front(&app);
+        let (wx, wy, _, _) = front_window(&app).bounds;
+        let b = box_of(&app, "devtools-dock-right");
+        let at = (wx + f64::from(b.x + b.width / 2.), wy + f64::from(b.y + b.height / 2.));
+        os::move_to(&app, at);
+        std::thread::sleep(Duration::from_millis(600));
+        shot(&app, &format!("devtools-hover-{appearance}"));
+        // The side already chosen, so letting go changes nothing.
+        let b = box_of(&app, "devtools-dock-bottom");
+        let at = (wx + f64::from(b.x + b.width / 2.), wy + f64::from(b.y + b.height / 2.));
+        os::hold(&app, at);
+        std::thread::sleep(Duration::from_millis(400));
+        shot(&app, &format!("devtools-pressed-{appearance}"));
+        os::release(&app, at);
+        assert!(has(&app, "devtools-bar"));
+        app.get_by_test_id("devtools-undock").focus().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        shot(&app, &format!("devtools-focused-{appearance}"));
+
+        // Below the page: grabbed 3 pt off the line on the DevTools' side, past the top, then past
+        // the bottom. The page's side of the grab is the page's own window on Linux.
+        let area = box_of(&app, "devtools-split");
+        let line = box_of(&app, "devtools").y;
+        real_drag(&app, (area.x + area.width / 2., line + 3.), 0., -2000.);
+        let page = box_of(&app, "content");
+        assert!((page.height - 160.).abs() <= 1., "the page keeps 160 pt: {page:?}");
+        shot(&app, &format!("devtools-bottom-max-{appearance}"));
+        let line = box_of(&app, "devtools").y;
+        real_drag(&app, (area.x + area.width / 2., line + 3.), 0., 2000.);
+        let tools = box_of(&app, "devtools");
+        assert!((tools.height - 120.).abs() <= 1., "the DevTools keep 120 pt: {tools:?}");
+        shot(&app, &format!("devtools-bottom-min-{appearance}"));
+
+        // Beside the page, the same both ways.
+        click_id(&app, "devtools-dock-right");
+        until(&app, "docked right", 10, |a| box_of(a, "devtools").x > box_of(a, "content").x);
+        let line = box_of(&app, "devtools").x;
+        let bar = box_of(&app, "devtools-bar");
+        real_drag(&app, (line + 3., bar.y + bar.height / 2.), -2000., 0.);
+        let page = box_of(&app, "content");
+        assert!((page.width - 240.).abs() <= 1., "the page keeps 240 pt: {page:?}");
+        shot(&app, &format!("devtools-right-max-{appearance}"));
+        let line = box_of(&app, "devtools").x;
+        real_drag(&app, (line + 3., bar.y + bar.height / 2.), 2000., 0.);
+        let tools = box_of(&app, "devtools");
+        assert!((tools.width - 240.).abs() <= 1., "the DevTools keep 240 pt: {tools:?}");
+        shot(&app, &format!("devtools-right-min-{appearance}"));
+
+        // The smallest window keeps both panes their minimums.
+        resize(&app, 720);
+        until(&app, "the 720 pt layout", 10, |a| box_of(a, "devtools-split").width < 500.);
+        let (page, tools) = (box_of(&app, "content"), box_of(&app, "devtools"));
+        assert!(page.width >= 239. && tools.width >= 239., "both panes keep 240 pt: {page:?} {tools:?}");
+        shot(&app, &format!("devtools-720-{appearance}"));
+    }
+}
+
+/// Docked right, closed and opened again where they were, undocked into a window of their own
+/// with a long title, and docked back from there.
+#[test]
+fn real_dev_tools_dock_undock_redock() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/long-title"));
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("A page")));
+    open_dev_tools(&app);
+    assert!(box_of(&app, "devtools").y > box_of(&app, "content").y, "a window's first DevTools sit below");
+    click_id(&app, "devtools-dock-right");
+    until(&app, "docked right", 10, |a| box_of(a, "devtools").x > box_of(a, "content").x);
+    // The window remembers the side.
+    click_id(&app, "devtools-close");
+    until(&app, "closed", 10, |a| lacks(a, "devtools-bar"));
+    open_dev_tools(&app);
+    assert!(box_of(&app, "devtools").x > box_of(&app, "content").x, "they come back beside the page");
+    // Into a window of their own; the page takes the whole area back.
+    click_id(&app, "devtools-undock");
+    until(&app, "the DevTools window", 10, |a| window_count(a) == 2);
+    std::thread::sleep(Duration::from_millis(1200));
+    shot(&app, "devtools-window");
+    assert!(lacks(&app, "devtools-split"), "the page has the area to itself");
+    assert!(app.tree(None).unwrap().windows.iter().any(|w| w.title.starts_with("Developer Tools: ")));
+    // Docked back from the window's own control: the window goes, the dock returns below.
+    click_id(&app, "devtools-dock-bottom");
+    until(&app, "redocked", 10, |a| window_count(a) == 1 && has(a, "devtools-bar"));
+    assert!(box_of(&app, "devtools").y > box_of(&app, "content").y, "redocked below the page");
+    shot(&app, "devtools-redocked");
+}
+
+/// DevTools belong to their tab: another tab shows without them and theirs shows with them, the
+/// page's fullscreen hides them and leaving it brings them back, the browser's keeps them, and
+/// closing the tab closes them.
+#[test]
+fn real_dev_tools_follow_their_tab() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/full"), format!("{base}/beta")]);
+    until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Full"));
+    open_dev_tools(&app);
+    let page = box_of(&app, "content");
+    let (x, y) = row_at(&app, 1);
+    real_click(&app, x, y);
+    until(&app, "Beta without DevTools", 15, |a| titles(a) == ["Full", "Beta"] && lacks(a, "devtools-bar"));
+    let full = box_of(&app, "content");
+    assert!(full.height > page.height, "Beta has the whole area: {full:?}");
+    let (x, y) = row_at(&app, 0);
+    real_click(&app, x, y);
+    until(&app, "Full with its DevTools", 10, |a| has(a, "devtools-bar"));
+    // The page's fullscreen: the page alone, edge to edge; Esc brings the DevTools back.
+    let width = front_window(&app).bounds.2;
+    click_page(&app, 100.);
+    until(&app, "page fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width) && lacks(a, "devtools-bar"));
+    std::thread::sleep(Duration::from_millis(1500));
+    shot(&app, "devtools-page-fullscreen");
+    hid(&app, key::ESCAPE, &[]);
+    until(&app, "out of page fullscreen", 10, |a| width_of(a) == Some(width));
+    until(&app, "the DevTools back", 10, |a| has(a, "devtools-bar"));
+    // The browser's fullscreen keeps them docked.
+    #[cfg(target_os = "macos")]
+    {
+        hid(&app, key::F, &[Modifier::Control, Modifier::Command]);
+        until(&app, "browser fullscreen", 10, |a| width_of(a).is_some_and(|w| w > width));
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(has(&app, "devtools-bar"), "DevTools stay docked in the browser's fullscreen");
+        shot(&app, "devtools-browser-fullscreen");
+        hid(&app, key::F, &[Modifier::Control, Modifier::Command]);
+        until(&app, "out of browser fullscreen", 10, |a| width_of(a) == Some(width));
+    }
+    // Closing the tab closes them with it.
+    click_page(&app, 450.);
+    hid(&app, key::W, &[os::CMD]);
+    until(&app, "Full closed", 10, |a| titles(a) == ["Beta"]);
+    assert!(lacks(&app, "devtools-bar"), "the closed tab's DevTools went with it");
+    assert_eq!(window_count(&app), 1);
+}
+
+/// The DevTools' own title, address, icon and loads never reach their tab: docked, in a window of
+/// their own and after they close, the tab keeps its page's title and the bar its address.
+#[test]
+fn real_dev_tools_leave_their_tab_as_it_was() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/plain"));
+    until(&app, "the page", 30, |a| titles(a) == ["Plain"]);
+    let address = format!("{}/plain", base.trim_start_matches("http://"));
+    let unchanged = |app: &App, when: &str| {
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(titles(app), ["Plain"], "the tab's title {when}");
+        assert!(lacks(app, "load-bar"), "no load on the tab {when}");
+        // Into the page, near its right edge, which a DevTools window of their own leaves clear;
+        // the keyboard goes back to the page from the DevTools.
+        click_node(app, "the page", |n| n.test_id.as_deref() == Some("content"), 0.95);
+        open_bar(app, key::L);
+        let field = bar_field(app).unwrap_or_default();
+        assert!(field.contains(&address) && !field.contains("devtools"), "the bar {when}: {field}");
+        hid(app, key::ESCAPE, &[]);
+        bar_closed(app);
+    };
+    open_dev_tools(&app);
+    unchanged(&app, "with DevTools docked");
+    click_id(&app, "devtools-undock");
+    until(&app, "the DevTools window", 10, |a| window_count(a) == 2);
+    unchanged(&app, "with DevTools in a window");
+    // F12 from the page closes them wherever they are.
+    click_node(&app, "the page", |n| n.test_id.as_deref() == Some("content"), 0.95);
+    hid(&app, key::F12, &[]);
+    until(&app, "DevTools closed", 10, |a| window_count(a) == 1);
+    unchanged(&app, "after DevTools closed");
+}
+
+/// A profile whose blocker runs on uBO 1.75.0's bundled lists with nothing due from the network,
+/// and with `.promo` hidden on 127.0.0.1 by the user. The release zip comes from `LYNK_UBO_ZIP`,
+/// else the test's tmp dir.
+fn blocking_profile(name: &str) -> PathBuf {
+    let dir = profile(name);
+    let zip = std::env::var_os("LYNK_UBO_ZIP").map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("uBlock0_{}.chromium.zip", lynk_core::ublock::PINNED_VERSION))
+    });
+    let bytes = std::fs::read(&zip).unwrap_or_else(|e| panic!("{}: {e}; set LYNK_UBO_ZIP", zip.display()));
+    let adblock = lynk_core::adblock::adblock_dir(&dir).unwrap();
+    let release = adblock.join("ubo").join(lynk_core::ublock::PINNED_VERSION);
+    lynk_core::ublock::extract(&bytes, &release).unwrap();
+    let lists = lynk_core::ublock::default_lists(&release).unwrap();
+    let now = lynk_core::now_ms();
+    let store = lynk_core::adblock::open(&dir);
+    store.update(|s| {
+        s.last_release_check = now;
+        for list in &lists {
+            s.fetched.insert(list.key.clone(), now);
+        }
+        s.hide("127.0.0.1", ".promo", "Promo", "", now);
+    });
+    drop(store);
+    dir
+}
+
+/// The blocker on a local page: EasyList's requests stopped and counted in the padlock, the
+/// user's rule hiding its element from the head, EasyList's generic rule held off on 127.0.0.1 by
+/// its own exception and hiding its element on `[::1]`; the switch turns it all off for the site
+/// once the page reloads, and on again.
+#[test]
+fn real_blocking_counts_hides_and_switches_off() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = blocking_profile("blocking");
+    let app = launch_on(&dir, &[format!("{base}/ads")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Ads")));
+    // The engine compiles off the main thread; the page loaded before it may have gone through.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while titles(&app) != ["Ads block none stopped"] {
+        assert!(
+            Instant::now() < deadline,
+            "the blocker never took the page, title {:?}\n{}",
+            titles(&app),
+            app.stderr_tail(60).join("\n")
+        );
+        click_page(&app, 300.);
+        hid(&app, key::R, &[os::CMD]);
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    click_id(&app, "site-info");
+    until(&app, "the padlock popover", 10, |a| has(a, "site-blocking-switch"));
+    assert_eq!(text_of(&app, "site-blocking-title").as_deref(), Some("Block Ads and Trackers"));
+    until(&app, "the count", 10, |a| {
+        text_of(a, "site-blocking-count").as_deref() == Some("2 requests blocked on this page")
+    });
+    shot(&app, "blocking-padlock");
+    click_id(&app, "site-blocking-switch");
+    until(&app, "blocking off after the reload", 20, |a| titles(a) == ["Ads block block ran"]);
+    if lacks(&app, "site-blocking-switch") {
+        click_id(&app, "site-info");
+    }
+    until(&app, "the off row", 10, |a| text_of(a, "site-blocking-count").as_deref() == Some("Off for this site"));
+    shot(&app, "blocking-padlock-off");
+    click_id(&app, "site-blocking-switch");
+    until(&app, "blocking back on", 20, |a| titles(a) == ["Ads block none stopped"]);
+    // Elsewhere the generic rule applies, and the user's rule for 127.0.0.1 does not.
+    let v6 = serve_at("[::1]:0");
+    open_bar(&app, key::L);
+    os::type_text(&app, &format!("{v6}/ads\n"));
+    until(&app, "the generic rule on [::1]", 30, |a| titles(a) == ["Ads none block stopped"]);
 }
 
 #[test]

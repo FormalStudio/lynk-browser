@@ -31,6 +31,8 @@ pub mod key {
     pub const F1: Code = 122;
     pub const F7: Code = 98;
     pub const F12: Code = 111;
+    pub const R: Code = 15;
+    pub const W: Code = 13;
 }
 
 /// The keys that take the caret to the start and the end of a field's line: Cmd+arrows, as in
@@ -106,7 +108,7 @@ pub fn launch(options: LaunchOptions) -> App {
 /// Brings the app forward and waits until macOS has it in front. The accessibility call fails
 /// until the app has registered with the window server, and succeeds while another app (Finder,
 /// after the last test's app quit) keeps the front, so it retries until the front app is this one.
-fn activate(app: &App) {
+pub fn activate(app: &App) {
     let deadline = Instant::now() + Duration::from_secs(15);
     while !(ndshell::input::activate(app.pid()) && front_pid() == Some(app.pid())) {
         assert!(Instant::now() < deadline, "the app would not come forward; in front: {}", front_app());

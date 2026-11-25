@@ -50,7 +50,7 @@ pub type Row = fn(&BrowserWindow, &Tab, &mut Window, &mut Context<BrowserWindow>
 
 /// The popover's rows under the security sentence, in order: the ad blocking switch with its
 /// blocked count, then the site's permissions.
-pub const ROWS: &[Row] = &[];
+pub const ROWS: &[Row] = &[crate::blocking::row];
 
 fn icon_of(security: Security) -> Icon {
     match security {

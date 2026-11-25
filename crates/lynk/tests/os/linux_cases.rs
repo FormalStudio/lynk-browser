@@ -763,16 +763,14 @@ fn real_quit_mid_load_with_devtools_and_two_windows() {
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     hid(&app, key::F12, &[]);
-    until(&app, "DevTools", 15, |a| os::windows(a).len() == 2 || has(a, "devtools"));
+    until(&app, "DevTools", 15, |a| has(a, "devtools-bar"));
     quit_by(&app, Quit::Term);
 
-    // DevTools is Chromium's own window and has the keyboard: Ctrl+Q still quits.
+    // Docked DevTools have the keyboard: Ctrl+Q still quits.
     let app = launch(&format!("{base}/alpha"));
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     hid(&app, key::F12, &[]);
-    until(&app, "DevTools", 15, |a| os::windows(a).len() == 2);
-    let devtools = ("dev.formalsnake.Lynk".to_owned(), "Lynk DevTools".to_owned());
-    until(&app, "DevTools named after the app", 5, |a| os::window_names(a).contains(&devtools));
+    until(&app, "DevTools", 15, |a| has(a, "devtools-bar"));
     quit_by(&app, Quit::Key);
 
     let profile = profile("quit-two-windows");
@@ -794,7 +792,7 @@ fn real_one_f12_opens_devtools() {
     let base = serve();
     let opens = |app: &App, when: &str| {
         os::key(app, key::F12, &[]);
-        until(app, &format!("DevTools from one F12 {when}"), 5, |a| os::windows(a).len() == 2);
+        until(app, &format!("DevTools from one F12 {when}"), 5, |a| has(a, "devtools-bar"));
     };
     for i in 0..30 {
         let app = launch(&format!("{base}/alpha"));
@@ -806,7 +804,7 @@ fn real_one_f12_opens_devtools() {
     until(&app, "the never-ending load", 15, |a| has(a, "load-bar"));
     opens(&app, "during a load");
     os::key(&app, key::F12, &[]);
-    until(&app, "DevTools closed", 5, |a| os::windows(a).len() == 1);
+    until(&app, "DevTools closed", 5, |a| lacks(a, "devtools-bar"));
     opens(&app, "after closing DevTools");
     quit_by(&app, Quit::Term);
 }

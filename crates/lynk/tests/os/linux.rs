@@ -38,6 +38,8 @@ pub mod key {
     pub const F7: Code = 65;
     pub const F11: Code = 87;
     pub const F12: Code = 88;
+    pub const R: Code = 19;
+    pub const W: Code = 17;
 }
 
 /// The keys that take the caret to the start and the end of a field's line.
@@ -162,6 +164,8 @@ pub fn right_edge(app: &App, win: &Win, width: f64, step: usize) -> Vec<[u8; 3]>
 /// Hyprland gives the keyboard to the window under a click, so there is no app to bring forward.
 pub fn in_front(_: &App) {}
 
+pub fn activate(_: &App) {}
+
 /// Where a hung process's main thread waits, as the kernel reports it; reading its stack needs
 /// ptrace, which Yama allows only on the test's own children.
 pub fn main_thread_of(pid: u32) -> String {
@@ -214,12 +218,6 @@ pub fn cursor(app: &App) -> (String, u16, u16, Vec<u32>) {
     conn.xfixes_query_version(5, 0).unwrap().reply().unwrap();
     let c = conn.xfixes_get_cursor_image_and_name().unwrap().reply().unwrap();
     (String::from_utf8_lossy(&c.name).into_owned(), c.width, c.height, c.cursor_image)
-}
-
-/// The class and title of each of the app's windows, most recently focused first.
-pub fn window_names(app: &App) -> Vec<(String, String)> {
-    let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
-    clients(app).iter().map(|c| (text(&c["class"]), text(&c["title"]))).collect()
 }
 
 /// The app's mapped windows, most recently focused first.

@@ -1459,7 +1459,10 @@ fn pick_menu(app: &App, at: (f32, f32), item: &str) {
     // and type-select then lands on another item.
     let deadline = Instant::now() + Duration::from_secs(10);
     while os::windows_above(app) <= before {
-        assert!(Instant::now() < deadline, "the menu for {item} never opened");
+        if Instant::now() >= deadline {
+            shot(app, "menu-never-opened");
+            panic!("the menu for {item} never opened at {at:?}; rows {:?}", rows(app));
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     for c in item.to_ascii_lowercase().chars() {
@@ -3277,6 +3280,24 @@ fn real_two_profiles_keep_their_cookies_apart() {
         }
         std::thread::sleep(Duration::from_millis(150));
     }
+    // A relaunch leaves exactly one of the restored windows key, with no click.
+    let keys = |a: &AppHandle| {
+        a.windows().ok().and_then(|w| w.as_array().map(|ws| ws.iter().filter(|w| w["key"] == true).count()))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while keys(&app) != Some(1) {
+        if Instant::now() > deadline {
+            shot(&app, "profiles-two-restart-no-key");
+            panic!(
+                "{:?} windows key after the relaunch, not one\n{}\n{}\n{}",
+                keys(&app),
+                profile_windows(&app, &dir),
+                os::focus_report(&app),
+                app.stderr_tail(40).join("\n")
+            );
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
     for (row, title) in [("Switch to Default", "Cookie who=one"), ("Switch to Work", "Cookie none")] {
         os::in_front(&app);
         // The profile in front offers no switch to itself.
@@ -3301,6 +3322,7 @@ fn key_within(app: &App, dir: &std::path::Path, title: &str, secs: u64) {
         std::thread::sleep(Duration::from_millis(150));
     }
     let state = profile_windows(app, dir);
+    let focus = os::focus_report(app);
     shot(app, "key-timeout");
     let late = loop {
         if is_key(app) {
@@ -3312,7 +3334,7 @@ fn key_within(app: &App, dir: &std::path::Path, title: &str, secs: u64) {
         std::thread::sleep(Duration::from_millis(150));
     };
     panic!(
-        "{title:?} not key within {secs}s ({}); at the timeout\n{state}\n{}",
+        "{title:?} not key within {secs}s ({}); at the timeout\n{state}\n{focus}\n{}",
         late.map_or("never, after 30 s more".to_owned(), |t| format!("key after {t:?}")),
         app.stderr_tail(40).join("\n")
     );

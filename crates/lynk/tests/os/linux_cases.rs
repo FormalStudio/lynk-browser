@@ -771,6 +771,8 @@ fn real_quit_mid_load_with_devtools_and_two_windows() {
     until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
     hid(&app, key::F12, &[]);
     until(&app, "DevTools", 15, |a| os::windows(a).len() == 2);
+    let devtools = ("dev.formalsnake.Lynk".to_owned(), "Lynk DevTools".to_owned());
+    until(&app, "DevTools named after the app", 5, |a| os::window_names(a).contains(&devtools));
     quit_by(&app, Quit::Key);
 
     let profile = profile("quit-two-windows");

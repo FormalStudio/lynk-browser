@@ -208,6 +208,12 @@ pub fn cursor(app: &App) -> (String, u16, u16, Vec<u32>) {
     (String::from_utf8_lossy(&c.name).into_owned(), c.width, c.height, c.cursor_image)
 }
 
+/// The class and title of each of the app's windows, most recently focused first.
+pub fn window_names(app: &App) -> Vec<(String, String)> {
+    let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
+    clients(app).iter().map(|c| (text(&c["class"]), text(&c["title"]))).collect()
+}
+
 /// The app's mapped windows, most recently focused first.
 fn clients(app: &App) -> Vec<serde_json::Value> {
     let Ok(reply) = app.display.hyprland.request("j/clients") else { return Vec::new() };

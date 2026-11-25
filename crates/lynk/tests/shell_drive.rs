@@ -67,6 +67,9 @@ const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
 /// No colours of its own: Chromium's default white is what it sits on.
+/// A page with an icon of its own.
+const ICONIC: &str = "<!doctype html><title>Iconic</title><link rel=icon href=/icon.svg><p>Its own icon.";
+const ICON: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='#c33'/></svg>";
 const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own.";
 /// Two requests EasyList stops wherever they are served (`/pagead/conversion.js$script`,
 /// `/banner_ads/*`), an element its generic `##.ad_banner` hides (except on 127.0.0.1, where
@@ -148,6 +151,8 @@ fn respond(mut stream: std::net::TcpStream) {
         "/press" => page(PRESS),
         "/popups" => page(POPUPS),
         "/plain" => page(PLAIN),
+        "/iconic" => page(ICONIC),
+        "/icon.svg" => ("200 OK", "Content-Type: image/svg+xml\r\n".to_owned(), ICON.to_owned()),
         "/ads" => page(ADS),
         "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
         "/dark-scheme" => page(DARK_SCHEME),
@@ -176,9 +181,10 @@ fn respond(mut stream: std::net::TcpStream) {
         }
         _ => ("404 Not Found", String::new(), "<!doctype html><title>Missing</title>".to_owned()),
     };
+    let kind = if extra.contains("Content-Type") { "" } else { "Content-Type: text/html\r\n" };
     let _ = write!(
         stream,
-        "HTTP/1.1 {status}\r\nContent-Type: text/html\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status}\r\n{kind}{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
 }
@@ -315,8 +321,16 @@ fn lacks(app: &AppHandle, test_id: &str) -> bool {
 }
 
 fn has(app: &AppHandle, test_id: &str) -> bool {
+    shows(app, |id| id == test_id)
+}
+
+fn has_prefix(app: &AppHandle, prefix: &str) -> bool {
+    shows(app, |id| id.starts_with(prefix))
+}
+
+fn shows(app: &AppHandle, id: impl Fn(&str) -> bool) -> bool {
     app.tree(None).is_ok_and(|t| {
-        t.windows.iter().any(|w| w.root.iter().any(|n| n.test_id.as_deref() == Some(test_id) && n.visible))
+        t.windows.iter().any(|w| w.root.iter().any(|n| n.test_id.as_deref().is_some_and(&id) && n.visible))
     })
 }
 
@@ -974,20 +988,29 @@ fn real_dev_tools_follow_their_tab() {
     assert_eq!(window_count(&app), 1);
 }
 
-/// The DevTools' own title, address, icon and loads never reach their tab: docked, in a window of
-/// their own and after they close, the tab keeps its page's title and the bar its address.
+/// The DevTools' own title, address, icon, loads and history never reach their tab: docked, in a
+/// window of their own and after they close, the tab keeps its page's title and icon, the bar its
+/// address, and Back stays on offer.
 #[test]
 fn real_dev_tools_leave_their_tab_as_it_was() {
     if !real_allowed() {
         return;
     }
     let base = serve();
+    let address = format!("{}/iconic", base.trim_start_matches("http://"));
     let app = launch(&format!("{base}/plain"));
     until(&app, "the page", 30, |a| titles(a) == ["Plain"]);
-    let address = format!("{}/plain", base.trim_start_matches("http://"));
+    // A second page in the tab, so it has one to go back to.
+    open_bar(&app, key::L);
+    type_real(&app, &format!("{base}/iconic"));
+    assert_eq!(bar_field(&app), Some(format!("{base}/iconic")), "the typed address");
+    hid(&app, key::ENTER, &[]);
+    let iconic = |a: &App| titles(a) == ["Iconic"] && has_prefix(a, "tab-favicon-");
+    until(&app, "the page with its icon", 30, iconic);
     let unchanged = |app: &App, when: &str| {
         std::thread::sleep(Duration::from_millis(1500));
-        assert_eq!(titles(app), ["Plain"], "the tab's title {when}");
+        assert_eq!(titles(app), ["Iconic"], "the tab's title {when}");
+        assert!(has_prefix(app, "tab-favicon-"), "the tab's icon {when}");
         assert!(lacks(app, "load-bar"), "no load on the tab {when}");
         // Into the page, near its right edge, which a DevTools window of their own leaves clear;
         // the keyboard goes back to the page from the DevTools.
@@ -995,6 +1018,9 @@ fn real_dev_tools_leave_their_tab_as_it_was() {
         open_bar(app, key::L);
         let field = bar_field(app).unwrap_or_default();
         assert!(field.contains(&address) && !field.contains("devtools"), "the bar {when}: {field}");
+        // Commands come up only when they would run.
+        type_real(app, "back");
+        until(app, "the Back command", 10, |a| bar_rows(a).iter().any(|r| r.starts_with("Back")));
         hid(app, key::ESCAPE, &[]);
         bar_closed(app);
     };

@@ -71,7 +71,14 @@ impl Blocker {
         let mut hide: Vec<String> = lists.hide_selectors.into_iter().chain(user.hide_selectors).collect();
         hide.sort();
         hide.dedup();
-        Cosmetics { hide, script: lists.injected_script, generic_off: lists.generichide, exceptions: lists.exceptions }
+        let script = [lists.injected_script, user.injected_script].join("\n").trim().to_owned();
+        // uBO's scriptlets read a `scriptletGlobals` that its own injector declares around them.
+        let script = if script.is_empty() {
+            script
+        } else {
+            format!("(function () {{ const scriptletGlobals = {{}};\n{script}\n}})();")
+        };
+        Cosmetics { hide, script, generic_off: lists.generichide, exceptions: lists.exceptions }
     }
 
     /// The generic rules that hide some of `classes` and `ids`, for a page at `cosmetics`' address.
@@ -166,8 +173,10 @@ $removeparam=utm_source
         };
         let mut resources = scriptlet_resources(&[set]);
         resources.push(gpt);
-        lists.use_resources(resources);
-        Blocker::new(lists, user_engine(state))
+        lists.use_resources(resources.clone());
+        let mut user = user_engine(state);
+        user.use_resources(resources);
+        Blocker::new(lists, user)
     }
 
     #[test]
@@ -254,5 +263,14 @@ $removeparam=utm_source
         let head = c.head();
         assert_eq!(head.matches("</style>").count(), 1);
         assert_eq!(head.matches("</script>").count(), 1);
+    }
+
+    #[test]
+    fn the_users_scriptlets_join_the_lists() {
+        let mut state = BlockingState::default();
+        state.hide("example.com", "+js(set-constant, lynkSet, 1)", "Scriptlet", "", 1);
+        let script = blocker(&state).cosmetics("https://example.com/").script;
+        assert!(script.contains("lynkSet"), "{script}");
+        assert!(script.starts_with("(function () { const scriptletGlobals = {};"), "{script}");
     }
 }

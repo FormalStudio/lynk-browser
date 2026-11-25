@@ -20,6 +20,9 @@ from what is visible on screen.
 | 6 | [oleksiibe, 2026-10-20](https://x.com/oleksiibe/status/2112601852399280358) | same browser | 17 s of trackpad gestures with force click |
 | 7 | [mcign69, 2026-11-24](https://x.com/mcign69/status/2125047872684982713) | "Ask", plum theme | 3 stills: split tabs, typed folders, folder popover |
 
+Post 1's browser is Search (searchbrowser.app, open source); its look, motion and source are
+studied in [reference-search-browser.md](reference-search-browser.md).
+
 ## 1. Settings that stay small (post 1)
 
 The post's point: the browser looks minimal, and everything extra is a setting that is off by

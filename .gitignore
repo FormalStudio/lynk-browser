@@ -10,3 +10,4 @@ assets/icon/candidates/
 !assets/icon/*.png
 !assets/brand/**/*.png
 target/
+!docs/reference/**/*.png

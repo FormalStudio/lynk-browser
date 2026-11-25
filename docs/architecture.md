@@ -239,7 +239,9 @@ stateDiagram-v2
   the shown tab has them, and returns it unchanged otherwise or during the page's fullscreen.
   Tabs not on show keep their DevTools in the holder like any page. The window remembers the
   side for the next DevTools opened in it; closing the tab, moving it to another window or
-  closing the window closes them.
+  closing the window closes them. Chromium's own DevTools shortcuts reach the app as nd's
+  `BrowserCommand::DevTools` and open these, from the page or from inside the DevTools. Known
+  limit: on Linux the page's own window covers the page's half of the divider's grab area.
 
 - **Ad blocking.** `blocking.rs` puts core's `blocker::Blocker` (the compiled lists plus the
   user's own rules) on nd's request filter, read on Chromium's IO thread through a lock-guarded

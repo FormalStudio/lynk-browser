@@ -11,7 +11,7 @@ use lynk_core::url::display_url;
 use nd::components::split::Axis;
 use nd::core::WindowId;
 use nd::prelude::*;
-use nd::webview::{FullscreenChanged, WebView, WebViewElement, WindowClosed, webview};
+use nd::webview::{ChromeCommand, FullscreenChanged, WebView, WebViewElement, WindowClosed, webview};
 
 use crate::app;
 use crate::tab::{Tab, TabId};
@@ -259,6 +259,13 @@ fn tools_view(tab: TabId, tools: &WebView) -> WebViewElement {
         .on_fullscreen_changed(move |e: &FullscreenChanged, _, cx| {
             if let Some(entity) = owner(cx, tab) {
                 entity.update(cx, |w, cx| w.page_fullscreen_changed(tab, e.fullscreen, cx));
+            }
+        })
+        // Chromium's shortcuts inside the DevTools, F12 among them, mean what they mean in the
+        // page's window.
+        .on_chrome_command(move |e: &ChromeCommand, _, cx| {
+            if let Some(entity) = owner(cx, tab) {
+                entity.update(cx, |w, cx| crate::page::chrome_command(w, e.command, cx));
             }
         })
 }

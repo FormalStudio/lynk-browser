@@ -811,21 +811,28 @@ fn box_of(app: &AppHandle, test_id: &str) -> nd_test::BoundingBox {
 
 /// A real click in the middle of `test_id`, in whichever of the app's windows has it.
 fn click_id(app: &AppHandle, test_id: &str) {
-    in_front(app);
+    click_node(app, test_id, |n| n.test_id.as_deref() == Some(test_id), 0.5);
+}
+
+/// A real click on the first node `pick` takes, `fx` of the way across it.
+fn click_node(app: &AppHandle, what: &str, pick: impl Fn(&nd_test::SemanticNode) -> bool, fx: f32) {
+    // Forward, but not `in_front`: while the DevTools have the keyboard the key window is
+    // Chromium's, none of the app's own.
+    activate(app.pid());
     let tree = app.tree(None).unwrap();
     let (frame, b) = tree
         .windows
         .iter()
         .find_map(|w| {
-            let node = w.root.iter().find(|n| n.test_id.as_deref() == Some(test_id) && n.visible)?;
+            let node = w.root.iter().find(|n| pick(n) && n.visible)?;
             // The frame takes in a title bar above the content the bounds are measured in.
             let content = w.root.iter().next()?.bounds?;
             let mut frame = w.frame?;
             frame.origin.y += frame.size.height - content.size.height;
             Some((frame, node.bounds?))
         })
-        .unwrap_or_else(|| panic!("{test_id} is laid out in a window"));
-    let at = (frame.origin.x + b.origin.x + b.size.width / 2., frame.origin.y + b.origin.y + b.size.height / 2.);
+        .unwrap_or_else(|| panic!("{what} is laid out in a window"));
+    let at = (frame.origin.x + b.origin.x + b.size.width * fx, frame.origin.y + b.origin.y + b.size.height / 2.);
     ndshell::input::click((f64::from(at.0), f64::from(at.1)));
     std::thread::sleep(Duration::from_millis(400));
 }
@@ -897,7 +904,8 @@ fn real_dev_tools_divider_stops_at_both_limits() {
         std::thread::sleep(Duration::from_millis(300));
         shot(&app, &format!("devtools-focused-{appearance}"));
 
-        // Below the page: grabbed 3 pt off the line, past the top, then past the bottom.
+        // Below the page: grabbed 3 pt off the line on the DevTools' side, past the top, then past
+        // the bottom. The page's side of the grab is the page's own window on Linux.
         let area = box_of(&app, "devtools-split");
         let line = box_of(&app, "devtools").y;
         real_drag(&app, (area.x + area.width / 2., line + 3.), 0., -2000.);
@@ -905,7 +913,7 @@ fn real_dev_tools_divider_stops_at_both_limits() {
         assert!((page.height - 160.).abs() <= 1., "the page keeps 160 pt: {page:?}");
         shot(&app, &format!("devtools-bottom-max-{appearance}"));
         let line = box_of(&app, "devtools").y;
-        real_drag(&app, (area.x + area.width / 2., line - 3.), 0., 2000.);
+        real_drag(&app, (area.x + area.width / 2., line + 3.), 0., 2000.);
         let tools = box_of(&app, "devtools");
         assert!((tools.height - 120.).abs() <= 1., "the DevTools keep 120 pt: {tools:?}");
         shot(&app, &format!("devtools-bottom-min-{appearance}"));
@@ -914,12 +922,13 @@ fn real_dev_tools_divider_stops_at_both_limits() {
         click_id(&app, "devtools-dock-right");
         until(&app, "docked right", 10, |a| box_of(a, "devtools").x > box_of(a, "content").x);
         let line = box_of(&app, "devtools").x;
-        real_drag(&app, (line + 3., area.y + area.height / 2.), -2000., 0.);
+        let bar = box_of(&app, "devtools-bar");
+        real_drag(&app, (line + 3., bar.y + bar.height / 2.), -2000., 0.);
         let page = box_of(&app, "content");
         assert!((page.width - 240.).abs() <= 1., "the page keeps 240 pt: {page:?}");
         shot(&app, &format!("devtools-right-max-{appearance}"));
         let line = box_of(&app, "devtools").x;
-        real_drag(&app, (line - 3., area.y + area.height / 2.), 2000., 0.);
+        real_drag(&app, (line + 3., bar.y + bar.height / 2.), 2000., 0.);
         let tools = box_of(&app, "devtools");
         assert!((tools.width - 240.).abs() <= 1., "the DevTools keep 240 pt: {tools:?}");
         shot(&app, &format!("devtools-right-min-{appearance}"));
@@ -1010,6 +1019,42 @@ fn real_dev_tools_follow_their_tab() {
     until(&app, "Full closed", 10, |a| titles(a) == ["Beta"]);
     assert!(lacks(&app, "devtools-bar"), "the closed tab's DevTools went with it");
     assert_eq!(window_count(&app), 1);
+}
+
+/// The DevTools' own title, address, icon and loads never reach their tab: docked, in a window of
+/// their own and after they close, the tab keeps its page's title and the bar its address.
+#[test]
+fn real_dev_tools_leave_their_tab_as_it_was() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/plain"));
+    until(&app, "the page", 30, |a| titles(a) == ["Plain"]);
+    let address = format!("{}/plain", base.trim_start_matches("http://"));
+    let unchanged = |app: &AppHandle, when: &str| {
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(titles(app), ["Plain"], "the tab's title {when}");
+        assert!(lacks(app, "load-bar"), "no load on the tab {when}");
+        // Into the page, near its right edge, which a DevTools window of their own leaves clear;
+        // the keyboard goes back to the page from the DevTools.
+        click_node(app, "the page", |n| n.test_id.as_deref() == Some("content"), 0.95);
+        open_bar(app, key::L);
+        let field = bar_field(app).unwrap_or_default();
+        assert!(field.contains(&address) && !field.contains("devtools"), "the bar {when}: {field}");
+        hid(key::ESCAPE, &[]);
+        bar_closed(app);
+    };
+    open_dev_tools(&app);
+    unchanged(&app, "with DevTools docked");
+    click_id(&app, "devtools-undock");
+    until(&app, "the DevTools window", 10, |a| window_count(a) == 2);
+    unchanged(&app, "with DevTools in a window");
+    // F12 from the page closes them wherever they are.
+    click_node(&app, "the page", |n| n.test_id.as_deref() == Some("content"), 0.95);
+    hid(key::F12, &[]);
+    until(&app, "DevTools closed", 10, |a| window_count(a) == 1);
+    unchanged(&app, "after DevTools closed");
 }
 
 /// A profile whose blocker runs on uBO 1.75.0's bundled lists with nothing due from the network,

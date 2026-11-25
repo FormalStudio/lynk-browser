@@ -66,10 +66,11 @@ const PRESS: &str = r#"<!doctype html><title>Press</title>
 const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
-/// No colours of its own: Chromium's default white is what it sits on.
 /// A page with an icon of its own.
 const ICONIC: &str = "<!doctype html><title>Iconic</title><link rel=icon href=/icon.svg><p>Its own icon.";
-const ICON: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='#c33'/></svg>";
+const ICON: &str =
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='#c33'/></svg>";
+/// No colours of its own: Chromium's default white is what it sits on.
 const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own.";
 /// Two requests EasyList stops wherever they are served (`/pagead/conversion.js$script`,
 /// `/banner_ads/*`), an element its generic `##.ad_banner` hides (except on 127.0.0.1, where

@@ -196,7 +196,7 @@ fn move_to(app: &AppHandle, x: i32, y: i32) {
 fn activate(pid: u32) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while !ndshell::input::activate(pid) {
-        assert!(Instant::now() < deadline, "the app would not come forward");
+        assert!(Instant::now() < deadline, "the app would not come forward; in front: {}", front_app());
         std::thread::sleep(Duration::from_millis(200));
     }
     std::thread::sleep(Duration::from_millis(300));
@@ -252,10 +252,24 @@ fn in_front(app: &AppHandle) {
     };
     let deadline = Instant::now() + Duration::from_secs(10);
     while !key(app) {
-        assert!(Instant::now() < deadline, "no window of the app became key");
+        assert!(
+            Instant::now() < deadline,
+            "no window of the app became key; in front: {}, windows {:?}",
+            front_app(),
+            app.windows()
+        );
         ndshell::input::activate(app.pid());
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// The app macOS has in front, by name and pid.
+fn front_app() -> String {
+    std::process::Command::new("sh")
+        .args(["-c", "lsappinfo info -only name -only pid $(lsappinfo front)"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', " "))
+        .unwrap_or_default()
 }
 
 /// A composited capture of the window, glass and pages included, which the automation

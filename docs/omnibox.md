@@ -55,8 +55,11 @@ The commands cover every action:
 
 ## Keyboard
 
-- Up and Down move the highlight, Home and End jump. The top row is
-  highlighted whenever the results change.
+- Up and Down move the highlight, Page Up and Page Down jump to the first
+  and last rows (Cmd+Up and Cmd+Down too on macOS). Home and End, Left and
+  Right move the caret in the field, as in any text field (on macOS, Cmd+Left
+  and Cmd+Right; Home and End only scroll there). The top row is highlighted
+  whenever the results change.
 - Enter runs the highlighted row. Cmd+Enter submits the typed text as is.
 - Completion comes from history only. When the typed text is the start of a
   visited address (host first, `www.` ignored), the rest of it appears in the

@@ -63,6 +63,10 @@ const BUSY: &str = r#"<!doctype html><title>Busy</title>
 const PRESS: &str = r#"<!doctype html><title>Press</title>
 <body style="margin:0;height:400px;background:#dfd" onpointerdown="document.title = 'Pressed'"></body>"#;
 
+/// Its title is "Keys:" and every printable key the page gets.
+const KEYS: &str = r#"<!doctype html><title>Keys:</title>
+<body style="margin:0;height:600px" onkeydown="if (event.key.length == 1) document.title += event.key"></body>"#;
+
 const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
@@ -110,6 +114,13 @@ fn serve_at(addr: &str) -> String {
     base
 }
 
+/// Every request the test server has answered, by path and query.
+static REQUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn requested(target: &str) -> bool {
+    REQUESTS.lock().unwrap().iter().any(|t| t == target)
+}
+
 fn respond(mut stream: std::net::TcpStream) {
     let mut line = String::new();
     let mut reader = BufReader::new(&stream);
@@ -125,6 +136,7 @@ fn respond(mut stream: std::net::TcpStream) {
         header.clear();
     }
     let target = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
+    REQUESTS.lock().unwrap().push(target.clone());
     let path = target.split('?').next().unwrap_or("/");
     if path == "/icon.png" {
         let icon = include_bytes!("fixtures/icon.png");
@@ -146,6 +158,7 @@ fn respond(mut stream: std::net::TcpStream) {
         "/long" => page(LONG),
         "/busy" => page(BUSY),
         "/press" => page(PRESS),
+        "/keys" => page(KEYS),
         "/popups" => page(POPUPS),
         "/plain" => page(PLAIN),
         "/ads" => page(ADS),
@@ -2733,6 +2746,20 @@ fn real_command_bar_keeps_the_keys_while_a_window_behind_loads() {
 }
 
 /// The bar's rows as assistive tech reads them ("title, subtitle, hint"), top first.
+/// Waits until the bar's rows pass `check`, failing with the rows it shows.
+#[track_caller]
+fn until_rows(app: &App, what: &str, check: impl Fn(&[String]) -> bool) -> Vec<String> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let rows = bar_rows(app);
+        if check(&rows) {
+            return rows;
+        }
+        assert!(Instant::now() < deadline, "timed out waiting for {what}: field {:?}, rows {rows:#?}", bar_field(app));
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
 fn bar_rows(app: &AppHandle) -> Vec<String> {
     let Ok(tree) = app.tree(None) else { return Vec::new() };
     // The rows are parts of the palette that share its bounds, so the tree's order is theirs.
@@ -2824,6 +2851,321 @@ fn real_command_bar_suggests() {
     assert_eq!(bar_field(&app), Some(format!("{host}/beta?fast-typing")));
     hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
+}
+
+/// The bar's search boxes across the app's windows, with their placeholders.
+fn bar_boxes(app: &App) -> Vec<Option<String>> {
+    let Ok(tree) = app.tree(None) else { return Vec::new() };
+    tree.windows
+        .iter()
+        .flat_map(|w| w.root.iter().filter(|n| format!("{:?}", n.role) == "SearchBox").map(|n| n.placeholder.clone()))
+        .collect()
+}
+
+/// Opening the bar while it is open starts it over in the new mode and never stacks a second
+/// bar; Cmd+L puts it away instead, and a bar put away leaves no tab behind.
+#[test]
+fn real_command_bar_reopens_in_place() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    let switcher = Some("Switch to a tab or run a command".to_owned());
+    let address = Some("Search or enter address".to_owned());
+
+    open_bar(&app, key::T);
+    type_real(&app, "half");
+    assert_eq!(bar_field(&app).as_deref(), Some("half"));
+    hid(&app, key::K, &[os::CMD]);
+    until(&app, "the switcher, empty", 5, |a| {
+        bar_field(a).as_deref() == Some("") && bar_boxes(a) == [switcher.clone()]
+    });
+    type_real(&app, "tab");
+    hid(&app, key::T, &[os::CMD]);
+    until(&app, "the address bar, empty", 5, |a| {
+        bar_field(a).as_deref() == Some("") && bar_boxes(a) == [address.clone()]
+    });
+    type_real(&app, "x");
+    hid(&app, key::L, &[os::CMD]);
+    bar_closed(&app);
+    assert!(bar_boxes(&app).is_empty());
+    assert_eq!(titles(&app), ["Alpha"], "no tab from a bar put away");
+    quit(&app);
+}
+
+/// The rows come in the spec's order. Address mode: what was typed, then the open tabs that match,
+/// then history newest first, never an open tab twice. The switcher: what was typed, then the
+/// open tabs most recently shown first.
+#[test]
+fn real_command_bar_rows_come_in_order() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/beta?old"));
+    until(&app, "the page", 30, |a| titles(a) == ["Beta"]);
+    go_to(&app, &format!("{base}/beta?new"));
+    until(&app, "the newer Beta", 15, |a| address(a).ends_with("?new"));
+    go_to(&app, &format!("{base}/plain"));
+    until(&app, "Plain", 15, |a| titles(a) == ["Plain"]);
+    open_in_new_tab(&app, &format!("{base}/beta"));
+    until(&app, "Beta open", 15, |a| titles(a) == ["Plain", "Beta"]);
+    open_bar(&app, key::K);
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    until(&app, "Plain shown again", 10, |a| shown_title(a) == "Plain");
+
+    open_bar(&app, key::T);
+    type_real(&app, "Beta");
+    let rows = until_rows(&app, "the rows for Beta", |r| r.len() >= 4);
+    assert!(rows[0].starts_with("Beta") && rows[0].ends_with("Search"), "what was typed comes first: {rows:?}");
+    assert!(rows[1].starts_with("Beta") && rows[1].ends_with("Switch to Tab"), "then the open tab: {rows:?}");
+    // After Cmd+T a history row opens in a new tab, and says so.
+    assert!(
+        rows[2].contains("beta?new") && rows[2].ends_with("Open in New Tab"),
+        "then history, newest first: {rows:?}"
+    );
+    assert!(rows[3].contains("beta?old") && rows[3].ends_with("Open in New Tab"), "{rows:?}");
+    let beta = format!("{}/beta,", base.trim_start_matches("http://"));
+    assert!(
+        !rows.iter().any(|r| r.contains(&beta) && r.ends_with("Open")),
+        "the open tab is not history too: {rows:?}"
+    );
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+
+    // Shown in turn: Beta, then a new Alpha tab. The switcher offers Beta before Plain, though
+    // Plain comes first in the sidebar.
+    open_bar(&app, key::K);
+    type_real(&app, "Beta");
+    let rows = until_rows(&app, "Beta offered", |r| r.iter().any(|r| r.ends_with("Switch to Tab")));
+    let at = rows.iter().position(|r| r.ends_with("Switch to Tab")).unwrap();
+    for _ in 0..at {
+        hid(&app, key::DOWN, &[]);
+    }
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    until(&app, "Beta shown", 10, |a| shown_title(a) == "Beta");
+    open_in_new_tab(&app, &format!("{base}/alpha"));
+    until(&app, "Alpha", 15, |a| titles(a) == ["Plain", "Beta", "Alpha"]);
+    open_bar(&app, key::K);
+    type_real(&app, "127.0.0.1");
+    let rows =
+        until_rows(&app, "both tabs offered", |r| r.iter().filter(|r| r.ends_with("Switch to Tab")).count() == 2);
+    let tabs: Vec<_> = rows.iter().filter(|r| r.ends_with("Switch to Tab")).collect();
+    assert!(!rows[0].ends_with("Switch to Tab"), "what was typed comes first: {rows:?}");
+    assert!(tabs[0].starts_with("Beta") && tabs[1].starts_with("Plain"), "most recently shown first: {rows:?}");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    quit(&app);
+}
+
+/// Nothing typed in the bar is fetched before Return: no preload of the address, no prefetch of
+/// the completion.
+#[test]
+fn real_command_bar_fetches_nothing_before_return() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let host = base.trim_start_matches("http://").to_owned();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    go_to(&app, &format!("{base}/beta?visited"));
+    until(&app, "Beta", 15, |a| titles(a) == ["Beta"]);
+
+    open_bar(&app, key::T);
+    type_real(&app, &format!("{host}/beta?vis"));
+    until(&app, "the completion", 5, |a| bar_field(a) == Some(format!("{host}/beta?vis|ited")));
+    type_real(&app, "x");
+    std::thread::sleep(Duration::from_secs(3));
+    for target in ["/beta?visx", "/beta?vis", "/beta?v"] {
+        assert!(!requested(target), "{target} fetched while typing");
+    }
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    until(&app, "the typed address", 15, |_| requested("/beta?visx"));
+    quit(&app);
+}
+
+/// Esc, or a click outside the bar's panel, puts the bar away and gives the keyboard back to the
+/// page.
+#[test]
+fn real_command_bar_hands_the_keys_back() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/keys"));
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Keys")));
+    // Low on the page, well under the bar's card.
+    let content = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+    let low = (content.x + content.width / 2., content.y + content.height * 0.85);
+    let keys = |a: &App| titles(a).first().cloned().unwrap_or_default();
+    click_page(&app, content.height * 0.85);
+    type_real(&app, "a");
+    until(&app, "the page's key", 5, |a| keys(a) == "Keys:a");
+
+    open_bar(&app, key::K);
+    type_real(&app, "zz");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    type_real(&app, "b");
+    until(&app, "the key after Esc", 5, |a| keys(a) == "Keys:ab");
+
+    open_bar(&app, key::K);
+    type_real(&app, "zz");
+    // Not `real_click`: the bar's panel has the keyboard, not the window that waits for it.
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    os::click(&app, (wx + f64::from(low.0), wy + f64::from(low.1)));
+    bar_closed(&app);
+    type_real(&app, "c");
+    until(&app, "the key after a click outside", 5, |a| keys(a) == "Keys:abc");
+    quit(&app);
+}
+
+/// The typed row names the search engine and Return searches there: DuckDuckGo on a fresh
+/// profile, Google or Bing when the settings say so.
+#[test]
+fn real_command_bar_searches_the_chosen_engine() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for (setting, name, host) in [
+        (None, "DuckDuckGo", "duckduckgo.com"),
+        (Some("google"), "Google", "google."),
+        (Some("bing"), "Bing", "bing.com"),
+    ] {
+        let fresh = profile(&format!("engine-{name}"));
+        let options = profile_options(&fresh, &[format!("{base}/alpha")]);
+        let app = os::launch(match setting {
+            Some(id) => options.env("LYNK_SEARCHENGINE", id),
+            None => options,
+        });
+        os::in_front(&app);
+        until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+        open_bar(&app, key::L);
+        type_real(&app, "lynk drive words");
+        until_rows(&app, "the search row", |r| {
+            r.first().is_some_and(|r| r == &format!("lynk drive words, {name} Search, Search"))
+        });
+        hid(&app, key::ENTER, &[]);
+        bar_closed(&app);
+        until(&app, "the engine's page", 15, |a| address(a).contains(host));
+        quit(&app);
+    }
+}
+
+/// Commands are rows with their shortcut as the hint, spelled as the system spells it, and a
+/// command that toggles names what it will do next (Pin Tab, then Unpin Tab).
+#[test]
+fn real_command_bar_runs_commands() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    let reopen =
+        if cfg!(target_os = "macos") { "Reopen Closed Tab, ⇧⌘T" } else { "Reopen Closed Tab, Ctrl+Shift+T" };
+
+    open_bar(&app, key::K);
+    type_real(&app, "reopen");
+    until_rows(&app, "the reopen command with its chord", |r| r.iter().any(|r| r == reopen));
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+
+    open_bar(&app, key::K);
+    type_real(&app, "pin tab");
+    let rows = until_rows(&app, "Pin Tab", |r| r.iter().any(|r| r.starts_with("Pin Tab")));
+    for _ in 0..rows.iter().position(|r| r.starts_with("Pin Tab")).unwrap() {
+        hid(&app, key::DOWN, &[]);
+    }
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    open_bar(&app, key::K);
+    type_real(&app, "pin tab");
+    until_rows(&app, "the command turned to Unpin Tab", |r| {
+        r.iter().any(|r| r.starts_with("Unpin Tab")) && !r.iter().any(|r| r.starts_with("Pin Tab"))
+    });
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+    quit(&app);
+}
+
+/// Up and Down, Page Up and Page Down move the highlight and Return runs the highlighted row; new
+/// results highlight the top row again; Cmd+Return (Ctrl+Return off macOS) goes to the text as
+/// typed, past a completion.
+#[test]
+fn real_command_bar_moves_the_highlight() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let host = base.trim_start_matches("http://").to_owned();
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    go_to(&app, &format!("{base}/plain"));
+    until(&app, "Plain", 15, |a| titles(a) == ["Plain"]);
+    open_in_new_tab(&app, &format!("{base}/beta"));
+    until(&app, "Beta", 15, |a| titles(a) == ["Plain", "Beta"]);
+    let offered = |rows: &[String]| rows.last().is_some_and(|r| r.starts_with("Plain") && r.ends_with("Switch to Tab"));
+
+    // The typed row first, the open tab last: Page Down, Page Up, Page Down, then Return switches.
+    open_bar(&app, key::K);
+    type_real(&app, "Plai");
+    until_rows(&app, "Plain offered last", offered);
+    hid(&app, key::PAGE_DOWN, &[]);
+    hid(&app, key::PAGE_UP, &[]);
+    hid(&app, key::PAGE_DOWN, &[]);
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    until(&app, "Plain by Page Down", 10, |a| shown_title(a) == "Plain");
+
+    // Plain is shown now, so Beta is the open tab offered. Down to it, then a letter that
+    // changes the results takes the highlight back to the top row: Return searches in this tab
+    // instead of switching.
+    let beta_last =
+        |rows: &[String]| rows.last().is_some_and(|r| r.starts_with("Beta") && r.ends_with("Switch to Tab"));
+    open_bar(&app, key::K);
+    type_real(&app, "Bet");
+    until_rows(&app, "Beta offered last", beta_last);
+    hid(&app, key::DOWN, &[]);
+    type_real(&app, "a");
+    until_rows(&app, "Beta offered for Beta", beta_last);
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    // The engine may answer with a consent page first, so the search reads as Plain giving way.
+    until(&app, "a search in the shown tab", 15, |a| {
+        let t = titles(a);
+        t.len() == 2 && !t.contains(&"Plain".to_owned())
+    });
+    assert_ne!(shown_title(&app), "Beta", "the top row ran, not the open tab");
+
+    // Down, then Up, back to the typed row: Return searches again rather than switching.
+    open_bar(&app, key::K);
+    type_real(&app, "Bet");
+    until_rows(&app, "Beta offered last", beta_last);
+    hid(&app, key::DOWN, &[]);
+    hid(&app, key::UP, &[]);
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_ne!(shown_title(&app), "Beta", "Up left the open tab");
+    assert_eq!(titles(&app).len(), 2);
+
+    // Cmd+Return goes to the typed text and leaves the completion behind.
+    open_bar(&app, key::T);
+    type_real(&app, &format!("{host}/pl"));
+    until(&app, "the completed path", 5, |a| bar_field(a) == Some(format!("{host}/pl|ain")));
+    hid(&app, key::ENTER, &[os::CMD]);
+    bar_closed(&app);
+    until(&app, "the typed address in a new tab", 15, |a| titles(a).len() == 3);
+    assert_eq!(address(&app), format!("{base}/pl"));
+    quit(&app);
 }
 
 /// A capture for the report, under the worktree's `target/report-shots`, at the display's scale.

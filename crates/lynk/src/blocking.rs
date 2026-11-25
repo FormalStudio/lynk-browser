@@ -188,7 +188,9 @@ fn install(store: &Store<BlockingState>, dir: &Path, release: &Path, lists: &[ub
         }
         engine
     });
-    let blocker = Blocker::new(engine, adblock::user_engine(&store.get()));
+    let mut user = adblock::user_engine(&store.get());
+    user.use_resources(resources());
+    let blocker = Blocker::new(engine, user);
     *SHARED.blocker.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(blocker));
 }
 

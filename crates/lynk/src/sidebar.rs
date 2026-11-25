@@ -422,14 +422,17 @@ impl BrowserWindow {
         let favicon = match &tab.favicon {
             // A page names its icon before anyone knows it loads; one that fails gives way to
             // the globe.
-            Some(url) => image(url.to_string())
-                .size(px(FAVICON))
-                .on_error(cx.listener(move |win, _: &ImageFailed, _, cx| {
-                    if let Some(tab) = win.tab_mut(id) {
-                        tab.favicon = None;
-                    }
-                    win.changed(cx);
-                }))
+            Some(url) => div()
+                .id(format!("tab-favicon-{id}"))
+                .flex_none()
+                .child(image(url.to_string()).size(px(FAVICON)).on_error(cx.listener(
+                    move |win, _: &ImageFailed, _, cx| {
+                        if let Some(tab) = win.tab_mut(id) {
+                            tab.favicon = None;
+                        }
+                        win.changed(cx);
+                    },
+                )))
                 .into_any_element(),
             None => icon(Icon::Globe, FAVICON).into_any_element(),
         };

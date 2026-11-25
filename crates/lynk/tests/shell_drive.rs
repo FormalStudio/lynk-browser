@@ -272,6 +272,14 @@ fn in_front(app: &AppHandle) {
     }
 }
 
+/// The top of a process's main thread stack, sampled for a second: where a hung app is stuck.
+fn main_thread_of(pid: u32) -> String {
+    let out = std::process::Command::new("sample").args([&pid.to_string(), "1"]).output();
+    let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    let main = text.lines().skip_while(|l| !l.contains("com.apple.main-thread")).take(60);
+    main.collect::<Vec<_>>().join("\n")
+}
+
 /// The app macOS has in front, by name and pid.
 fn front_app() -> String {
     std::process::Command::new("sh")
@@ -1108,7 +1116,7 @@ fn shown_title(app: &AppHandle) -> String {
 
 /// The first window's tab rows top to bottom: test id and centre, in window points.
 fn rows(app: &AppHandle) -> Vec<(String, (f32, f32))> {
-    let tree = app.tree(None).unwrap();
+    let tree = app.tree(None).unwrap_or_else(|e| panic!("{e:?}\n{}", main_thread_of(app.pid())));
     let mut rows: Vec<_> = tree.windows[0]
         .root
         .iter()
@@ -1872,7 +1880,12 @@ fn real_two_launches_at_once_share_one_session() {
             // This launch holds the profile; the other hands its address over and quits.
             let deadline = Instant::now() + Duration::from_secs(20);
             while other.try_wait().unwrap().is_none() {
-                assert!(Instant::now() < deadline, "the other launch kept running");
+                assert!(
+                    Instant::now() < deadline,
+                    "the other launch kept running\nit:\n{}\nthis one:\n{}",
+                    main_thread_of(other.id()),
+                    main_thread_of(app.pid())
+                );
                 std::thread::sleep(Duration::from_millis(100));
             }
             activate(app.pid());

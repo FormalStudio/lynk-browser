@@ -1,7 +1,9 @@
 # Inspiration: bookmarked posts
 
-Seven X posts the owner bookmarked on 2026-11-23 and 2026-11-24 for features, design and ideas. Nothing here is
-scheduled or built. Each item names where it would live (Lynk, nd, or both) and what it needs to
+Seven X posts the owner bookmarked on 2026-11-23 and 2026-11-24 for features, design and ideas. These are
+features the owner wants built, not optional reading: each is scheduled as a lane in wave 5 of
+[delivery-plan.md](delivery-plan.md), and lanes that touch the same surface earlier (settings, the
+sidebar, pins) follow the design here from the start. Each item names where it would live (Lynk, nd, or both) and what it needs to
 work on macOS, Linux and Windows. Read from the posts' images and from one frame per second of
 each video; the authors' profile pages could not be loaded (X rate limit), so product names come
 from what is visible on screen.

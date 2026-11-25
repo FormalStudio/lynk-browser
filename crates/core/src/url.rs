@@ -117,7 +117,9 @@ pub fn strip_www(host: &str) -> &str {
 /// is not `http:` or `https:`.
 pub fn site_of(url: &str) -> String {
     match Url::parse(url) {
-        Ok(u) if matches!(u.scheme(), "http" | "https") => strip_www(&u.host_str().unwrap_or("").to_lowercase()).to_owned(),
+        Ok(u) if matches!(u.scheme(), "http" | "https") => {
+            strip_www(&u.host_str().unwrap_or("").to_lowercase()).to_owned()
+        }
         _ => String::new(),
     }
 }

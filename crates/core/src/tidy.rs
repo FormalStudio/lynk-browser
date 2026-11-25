@@ -201,7 +201,12 @@ mod tests {
             ],
             last_active: String::new(),
         };
-        let tabs = vec![t("a", "www.github.com", None), t("b", "news.test", None), t("c", "github.com", None), t("d", "", Some("c"))];
+        let tabs = vec![
+            t("a", "www.github.com", None),
+            t("b", "news.test", None),
+            t("c", "github.com", None),
+            t("d", "", Some("c")),
+        ];
         (tree, tabs)
     }
 
@@ -216,8 +221,18 @@ mod tests {
     /// Forty tabs across twelve hosts as a real sidebar has them.
     fn real() -> (SidebarTree, Vec<TidyTab>) {
         let hosts = [
-            "github.com", "www.github.com", "gist.github.com", "docs.rs", "127.0.0.1:8080", "[::1]:3000",
-            "localhost:3000", "localhost:5173", "", "", "news.ycombinator.com", "mail.google.com",
+            "github.com",
+            "www.github.com",
+            "gist.github.com",
+            "docs.rs",
+            "127.0.0.1:8080",
+            "[::1]:3000",
+            "localhost:3000",
+            "localhost:5173",
+            "",
+            "",
+            "news.ycombinator.com",
+            "mail.google.com",
         ];
         let mut tabs = Vec::new();
         for n in 0..40 {
@@ -226,7 +241,8 @@ mod tests {
             let opener = host.is_empty().then(|| format!("x{}", n - 1 - n % hosts.len() % 8));
             tabs.push(TidyTab { id: format!("x{n}"), title, host: host.into(), opener });
         }
-        let tree = SidebarTree { items: tabs.iter().map(|t| Item::tab(t.id.clone())).collect(), ..SidebarTree::default() };
+        let tree =
+            SidebarTree { items: tabs.iter().map(|t| Item::tab(t.id.clone())).collect(), ..SidebarTree::default() };
         (tree, tabs)
     }
 
@@ -245,8 +261,15 @@ mod tests {
         assert_eq!(
             names,
             [
-                "github.com", "gist.github.com", "docs.rs", "127.0.0.1:8080", "[::1]:3000", "localhost:3000",
-                "localhost:5173", "news.ycombinator.com", "mail.google.com"
+                "github.com",
+                "gist.github.com",
+                "docs.rs",
+                "127.0.0.1:8080",
+                "[::1]:3000",
+                "localhost:3000",
+                "localhost:5173",
+                "news.ycombinator.com",
+                "mail.google.com"
             ]
         );
         // github.com and www.github.com are one site; file: and about: tabs follow their opener.
@@ -266,7 +289,10 @@ mod tests {
         assert_eq!(validate(&loose, vec![g("Dev", &["a", "c"])]), Err(TidyError::Missing("b".into())));
         assert_eq!(validate(&loose, vec![g("Dev", &["a", "b", "c", "zz"])]), Err(TidyError::Invented("zz".into())));
         assert_eq!(validate(&loose, vec![g("Dev", &["a", "b", "c", "p"])]), Err(TidyError::Invented("p".into())));
-        assert_eq!(validate(&loose, vec![g("Dev", &["a", "b"]), g("X", &["b", "c"])]), Err(TidyError::Repeated("b".into())));
+        assert_eq!(
+            validate(&loose, vec![g("Dev", &["a", "b"]), g("X", &["b", "c"])]),
+            Err(TidyError::Repeated("b".into()))
+        );
         assert_eq!(validate(&loose, vec![g(" ", &["a", "b", "c"])]), Err(TidyError::EmptyName));
         assert_eq!(validate(&loose, vec![g("Dev", &["a", "b", "c"]), g("X", &[])]), Err(TidyError::EmptyGroup));
         assert_eq!(validate(&[], vec![]), Err(TidyError::NothingToTidy));
@@ -285,7 +311,10 @@ mod tests {
             ("omits one", vec![named("All", half(0..39))]),
             ("invents one", vec![named("All", half(0..40)), named("Ghost", vec!["x99".into()])]),
             ("empty group", vec![named("All", half(0..40)), named("None", vec![])]),
-            ("200 groups", (0..200).map(|n| named(&format!("G{n}"), all.get(n).cloned().into_iter().collect())).collect()),
+            (
+                "200 groups",
+                (0..200).map(|n| named(&format!("G{n}"), all.get(n).cloned().into_iter().collect())).collect(),
+            ),
         ];
         for (case, answer) in answers {
             let mut t = tree.clone();
@@ -341,7 +370,8 @@ mod tests {
     #[test]
     fn grouping_by_site_keeps_to_the_group_limit() {
         let tabs: Vec<TidyTab> = (0..26).map(|n| t(&format!("x{n}"), &format!("h{}.test", n / 2), None)).collect();
-        let mut tree = SidebarTree { items: tabs.iter().map(|t| Item::tab(t.id.clone())).collect(), ..SidebarTree::default() };
+        let mut tree =
+            SidebarTree { items: tabs.iter().map(|t| Item::tab(t.id.clone())).collect(), ..SidebarTree::default() };
         let (_, source) = tidy(&mut tree, &tabs, None, ids()).unwrap();
         assert_eq!(source, Source::Site);
         let groups = group_by_site(&tabs);

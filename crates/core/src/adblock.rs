@@ -13,8 +13,8 @@ use nd_settings::Store;
 use serde::{Deserialize, Serialize};
 
 use crate::null_default;
-use crate::url::site_of;
 use crate::ublock::{self, FilterList, Release, write_replacing};
+use crate::url::site_of;
 
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 pub const WEEK_MS: i64 = 7 * DAY_MS;

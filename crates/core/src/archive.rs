@@ -142,9 +142,8 @@ pub fn restore(state: &mut SessionState, at: usize) -> Option<(String, TabId)> {
     };
     let space = if space_known { entry.space_id.clone() } else { w.spaces.shown.clone() };
     let tree = w.spaces.sidebars.get(&space);
-    let index = tree
-        .and_then(|tree| entry.above.iter().find_map(|row| tree.row_index(row)))
-        .map_or(0, |above| above + 1);
+    let index =
+        tree.and_then(|tree| entry.above.iter().find_map(|row| tree.row_index(row))).map_or(0, |above| above + 1);
     let id = entry.tab.id.clone();
     w.insert_tab(entry.tab, &space, Dest::Root(index)).ok()?;
     if w.active_id.is_empty() && space == w.spaces.shown {
@@ -230,7 +229,10 @@ mod tests {
         let (_, id) = restore(&mut s, 0).unwrap();
         assert_ne!(id, "d");
         assert_eq!(s.windows[0].spaces.tree().unwrap().check(), Ok(()));
-        assert_eq!(s.windows[0].spaces.tree().unwrap().folder("f").unwrap().children, vec![Child::Tab { id: "e".into() }]);
+        assert_eq!(
+            s.windows[0].spaces.tree().unwrap().folder("f").unwrap().children,
+            vec![Child::Tab { id: "e".into() }]
+        );
     }
 
     #[test]
@@ -330,7 +332,11 @@ mod tests {
     fn a_restore_never_drops_the_entry_it_cannot_place() {
         let mut s = normalize(&SessionState::default());
         s.windows[0].spaces.tree_mut().items.push(Item::Separator { id: "x".into(), name: String::new() });
-        s.archive.push(ArchivedTab { tab: blank_tab("x"), window_id: s.windows[0].id.clone(), ..ArchivedTab::default() });
+        s.archive.push(ArchivedTab {
+            tab: blank_tab("x"),
+            window_id: s.windows[0].id.clone(),
+            ..ArchivedTab::default()
+        });
         let (_, id) = restore(&mut s, 0).expect("a row holding the id gives the tab a new one");
         assert_ne!(id, "x");
         assert!(s.windows[0].spaces.tree().unwrap().contains_tab(&id));

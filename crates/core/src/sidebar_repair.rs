@@ -36,7 +36,9 @@ impl SidebarTree {
                     }
                 }
                 Item::Separator { id, name } => items.push(Item::Separator { id: row_id(id), name }),
-                Item::Split(s) => items.extend(repair_split(s, &mut take, &mut row_id).into_iter().map(Child::into_item)),
+                Item::Split(s) => {
+                    items.extend(repair_split(s, &mut take, &mut row_id).into_iter().map(Child::into_item))
+                }
                 Item::Folder(mut f) => {
                     f.id = row_id(f.id);
                     let mut children = Vec::new();
@@ -95,7 +97,11 @@ impl SidebarTree {
     }
 }
 
-fn repair_split(mut s: Split, take: &mut impl FnMut(&str) -> bool, row_id: &mut impl FnMut(String) -> String) -> Vec<Child> {
+fn repair_split(
+    mut s: Split,
+    take: &mut impl FnMut(&str) -> bool,
+    row_id: &mut impl FnMut(String) -> String,
+) -> Vec<Child> {
     let kept: Vec<String> = s.tabs.iter().filter(|t| take(t)).cloned().collect();
     if kept.len() == 2 {
         s.id = row_id(s.id);
@@ -109,9 +115,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+    use crate::Lcg;
     use crate::sidebar_tree::{Dest, Folder, FolderKind, Half, Ratio};
     use crate::spaces::{Space, WindowSpaces};
-    use crate::Lcg;
 
     fn split(id: &str, a: &str, b: &str) -> Split {
         Split { id: id.into(), tabs: [a.into(), b.into()], ratio: Ratio::EVEN, focus: Half::First }

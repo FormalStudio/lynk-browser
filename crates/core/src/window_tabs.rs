@@ -107,7 +107,8 @@ pub fn fresh_start(stored: &SessionState, homepage: &str) -> SessionState {
             spaces.sidebars.entry(space.clone()).or_default().absorb(tree.saved_part());
         }
     }
-    let mut window = SessionWindow { id: first.id.clone(), width: first.width, height: first.height, ..SessionWindow::default() };
+    let mut window =
+        SessionWindow { id: first.id.clone(), width: first.width, height: first.height, ..SessionWindow::default() };
     let kept: Vec<SessionTab> =
         windows.iter().flat_map(|w| w.tabs.iter()).filter(|t| spaces.space_of_tab(&t.id).is_some()).cloned().collect();
     window.spaces = spaces;
@@ -128,8 +129,8 @@ mod tests {
 
     use super::*;
     use crate::Lcg;
-    use crate::mru::Mru;
     use crate::archive::{archive_tabs, restore};
+    use crate::mru::Mru;
     use crate::session::{open, row_ids, tab_number};
     use crate::sidebar_tree::{FolderKind, SidebarTree};
     use crate::spaces::Space;
@@ -165,7 +166,10 @@ mod tests {
         assert_eq!(s.windows[1].active_id, "t3");
         move_tab_in(&mut s, "t1", "w3", Dest::Pins(9)).unwrap();
         assert_eq!(s.windows[1].spaces.tree().unwrap().pins, ["t1"]);
-        assert_eq!(move_tab_in(&mut s, "t2", "w3", Dest::Folder { id: "nope".into(), index: 0 }), Err(TreeError::UnknownRow));
+        assert_eq!(
+            move_tab_in(&mut s, "t2", "w3", Dest::Folder { id: "nope".into(), index: 0 }),
+            Err(TreeError::UnknownRow)
+        );
         assert!(s.windows[0].tab("t2").is_some(), "a refused move leaves the tab where it was");
         assert_eq!(move_tab_in(&mut s, "t2", "w9", Dest::Root(0)), Err(TreeError::UnknownRow));
         // Within a window it is a reorder, and the tab stays on show.
@@ -216,7 +220,10 @@ mod tests {
         }
         let mut hidden = SidebarTree::default();
         hidden.insert_tab("h", Dest::Root(0)).unwrap();
-        let spaces = WindowSpaces { shown: "s1".into(), sidebars: BTreeMap::from([("s1".into(), shown), ("s2".into(), hidden)]) };
+        let spaces = WindowSpaces {
+            shown: "s1".into(),
+            sidebars: BTreeMap::from([("s1".into(), shown), ("s2".into(), hidden)]),
+        };
         let window = SessionWindow {
             id: "w1".into(),
             tabs: ["a", "b", "c", "h"].map(blank_tab).into(),
@@ -295,7 +302,8 @@ mod tests {
             check_window(w).map_err(|e| format!("in {}: {e}", w.id))?;
         }
         let mut tabs: HashSet<&str> = HashSet::new();
-        let placed = s.windows.iter().flat_map(|w| w.spaces.tab_ids()).chain(s.archive.iter().map(|a| a.tab.id.as_str()));
+        let placed =
+            s.windows.iter().flat_map(|w| w.spaces.tab_ids()).chain(s.archive.iter().map(|a| a.tab.id.as_str()));
         for id in placed {
             if !tabs.insert(id) {
                 return Err(format!("tab {id} is in more than one of the sidebars and the archive"));
@@ -354,8 +362,14 @@ mod tests {
         for step in 0..steps {
             let wi = rng.below(s.windows.len());
             let all: Vec<String> = s.windows[wi].tabs.iter().map(|t| t.id.clone()).collect();
-            let shown: Vec<String> =
-                s.windows[wi].spaces.tree().map(|t| t.tab_ids()).unwrap_or_default().into_iter().map(String::from).collect();
+            let shown: Vec<String> = s.windows[wi]
+                .spaces
+                .tree()
+                .map(|t| t.tab_ids())
+                .unwrap_or_default()
+                .into_iter()
+                .map(String::from)
+                .collect();
             let any = all.get(rng.below(all.len())).cloned().unwrap_or_default();
             let on_show = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
             let other = shown.get(rng.below(shown.len())).cloned().unwrap_or_default();
@@ -413,7 +427,11 @@ mod tests {
                         let at = rng.below(s.archive.len());
                         let id = s.archive[at].tab.id.clone();
                         let back = restore(&mut s, at);
-                        assert_eq!(back.is_some(), !s.archive.iter().any(|e| e.tab.id == id), "seed {seed} step {step}");
+                        assert_eq!(
+                            back.is_some(),
+                            !s.archive.iter().any(|e| e.tab.id == id),
+                            "seed {seed} step {step}"
+                        );
                     }
                 }
                 _ => {

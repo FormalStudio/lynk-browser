@@ -507,11 +507,7 @@ impl SidebarTree {
     }
 
     fn ensure_new_row(&self, id: &str) -> Result<(), TreeError> {
-        if self.contains_tab(id) || self.locate_row(id).is_some() {
-            Err(TreeError::AlreadyPresent)
-        } else {
-            Ok(())
-        }
+        if self.contains_tab(id) || self.locate_row(id).is_some() { Err(TreeError::AlreadyPresent) } else { Ok(()) }
     }
 
     /// Renames a separator or a folder.

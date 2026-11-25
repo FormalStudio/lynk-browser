@@ -636,9 +636,11 @@ mod tests {
 
     #[test]
     fn a_null_pin_drops_alone() {
-        let (s, _) = load(r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[{"id":"t1","url":"https://a.test/"}],
+        let (s, _) = load(
+            r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[{"id":"t1","url":"https://a.test/"}],
             "activeId":"t1","spaces":{"shown":"s1","sidebars":{"s1":{"pins":[null,"t1",7]}}}}],
-            "spaces":[{"id":"s1","name":"Personal"}]}}"#);
+            "spaces":[{"id":"s1","name":"Personal"}]}}"#,
+        );
         assert_eq!(s.windows[0].id, "w1");
         assert_eq!(s.windows[0].spaces.tree().unwrap().pins, ["t1"]);
     }
@@ -660,9 +662,11 @@ mod tests {
 
     #[test]
     fn a_separator_named_t1_in_a_window_with_no_tabs_gives_way_to_the_blank_tab() {
-        let (s, _) = load(r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[],"activeId":"",
+        let (s, _) = load(
+            r#"{"version":3,"data":{"windows":[{"id":"w1","tabs":[],"activeId":"",
             "spaces":{"shown":"s1","sidebars":{"s1":{"items":[{"type":"separator","id":"t1","name":"Later"}]}}}}],
-            "spaces":[{"id":"s1","name":"Personal"}],"nextTabId":1}}"#);
+            "spaces":[{"id":"s1","name":"Personal"}],"nextTabId":1}}"#,
+        );
         let w = &s.windows[0];
         assert_eq!(w.tabs.len(), 1);
         let tree = w.spaces.tree().unwrap();
@@ -792,7 +796,8 @@ mod tests {
     #[test]
     fn normalize_keeps_each_tab_once_and_fills_an_empty_space() {
         let mut w1 = window("w1", vec![tab("a", "https://a.test/"), tab("b", "https://b.test/")], "a", 1.0, 1.0);
-        let tree = SidebarTree { items: vec![Item::tab("a"), Item::tab("ghost"), Item::tab("a")], ..SidebarTree::default() };
+        let tree =
+            SidebarTree { items: vec![Item::tab("a"), Item::tab("ghost"), Item::tab("a")], ..SidebarTree::default() };
         w1.spaces = WindowSpaces::single("s1", tree);
         w1.spaces.sidebars.insert("s2".into(), SidebarTree { pins: vec!["b".into()], ..SidebarTree::default() });
         w1.spaces.sidebars.insert("gone".into(), SidebarTree { pins: vec!["a".into()], ..SidebarTree::default() });
@@ -886,7 +891,8 @@ mod tests {
     #[test]
     fn a_cut_short_empty_or_null_file_starts_fresh_and_is_set_aside() {
         let full = include_str!("../fixtures/session-v2.json");
-        for (name, text) in [("cut short", &full[..full.len() / 2]), ("empty", ""), ("null", "null"), ("no data", r#"{"version":3}"#)]
+        for (name, text) in
+            [("cut short", &full[..full.len() / 2]), ("empty", ""), ("null", "null"), ("no data", r#"{"version":3}"#)]
         {
             let dir = write(text);
             let store = open(dir.path());
@@ -895,9 +901,10 @@ mod tests {
             assert_eq!(s.windows.len(), 1, "{name}");
             assert_eq!(drawn(&s.windows[0]), ["t1"], "{name}");
             check_all(&s);
-            let aside = std::fs::read_dir(dir.path()).unwrap().filter_map(Result::ok).any(|e| {
-                e.file_name().to_string_lossy().starts_with("session.json.corrupt-")
-            });
+            let aside = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|e| e.file_name().to_string_lossy().starts_with("session.json.corrupt-"));
             assert!(aside, "{name}: the unreadable file is kept");
         }
     }
@@ -970,8 +977,9 @@ mod tests {
 
     #[test]
     fn five_thousand_tabs_load_in_order() {
-        let tabs: Vec<Value> =
-            (1..=5000).map(|n| json!({"id": format!("t{n}"), "url": format!("https://h{}.test/{n}", n % 97), "pinned": n <= 10})).collect();
+        let tabs: Vec<Value> = (1..=5000)
+            .map(|n| json!({"id": format!("t{n}"), "url": format!("https://h{}.test/{n}", n % 97), "pinned": n <= 10}))
+            .collect();
         let text = json!({"version": 2, "data": {"windows": [{"id": "w1", "tabs": tabs, "activeId": "t4000"}], "nextTabId": 5001}}).to_string();
         let (s, error) = load(&text);
         assert_eq!(error, None);
@@ -1008,7 +1016,13 @@ mod tests {
             ("t4", &format!("https://big.test/{big}"), &big),
         ];
         let state = SessionState {
-            windows: vec![window("w1", odd.iter().map(|(id, url, title)| SessionTab { title: (*title).into(), ..tab(id, url) }).collect(), "t1", 900.0, 700.0)],
+            windows: vec![window(
+                "w1",
+                odd.iter().map(|(id, url, title)| SessionTab { title: (*title).into(), ..tab(id, url) }).collect(),
+                "t1",
+                900.0,
+                700.0,
+            )],
             ..SessionState::default()
         };
         let state = normalize(&state);

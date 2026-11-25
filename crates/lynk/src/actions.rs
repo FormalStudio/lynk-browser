@@ -629,7 +629,8 @@ mod tests {
                 "Close Tab",
                 "Reopen Closed Tab",
                 "Save Page As\u{2026}",
-                "Settings"
+                "Settings",
+                "Quit"
             ]
         );
     }

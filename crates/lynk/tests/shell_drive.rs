@@ -191,11 +191,13 @@ fn move_to(app: &AppHandle, x: i32, y: i32) {
     std::thread::sleep(Duration::from_millis(800));
 }
 
-/// Brings the app forward: a launched test app is not, and key events would go elsewhere. The
-/// accessibility call fails until the app has registered with the window server, so it retries.
+/// Brings the app forward and waits until macOS has it in front: a launched test app is not, and
+/// key events would go elsewhere. The accessibility call fails until the app has registered with
+/// the window server, and succeeds while another app (Finder, after the last test's app quit)
+/// keeps the front, so it retries until the front app is this one.
 fn activate(pid: u32) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !ndshell::input::activate(pid) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !(ndshell::input::activate(pid) && front_pid() == Some(pid)) {
         assert!(Instant::now() < deadline, "the app would not come forward; in front: {}", front_app());
         std::thread::sleep(Duration::from_millis(200));
     }
@@ -278,6 +280,14 @@ fn main_thread_of(pid: u32) -> String {
     let text = out.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
     let main = text.lines().skip_while(|l| !l.contains("com.apple.main-thread")).take(60);
     main.collect::<Vec<_>>().join("\n")
+}
+
+/// The pid of the app macOS has in front. `lsappinfo` prints it as `"pid"=N` for a bundled app
+/// and `pid = N` for a bare binary like the test's.
+fn front_pid() -> Option<u32> {
+    let info = front_app();
+    let at = info.find("pid")? + 3;
+    info[at..].trim_start_matches(['"', ' ', '=']).split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
 }
 
 /// The app macOS has in front, by name and pid.
@@ -640,6 +650,9 @@ mod key {
     pub const TAB: u16 = 48;
     pub const BACKSPACE: u16 = 51;
     pub const DOWN: u16 = 125;
+    pub const LEFT: u16 = 123;
+    pub const RIGHT: u16 = 124;
+    pub const A: u16 = 0;
     pub const F: u16 = 3;
     pub const I: u16 = 34;
     pub const ESCAPE: u16 = 53;
@@ -2077,6 +2090,58 @@ fn real_command_bar_keeps_keys_typed_during_a_load() {
         bar_closed(&app);
     }
     assert_eq!(titles(&app).len(), 1, "no search for keys the page took");
+}
+
+/// The bar's field as typed, without a completion it shows.
+fn bar_typed(app: &AppHandle) -> String {
+    bar_field(app).and_then(|f| f.split('|').next().map(str::to_owned)).unwrap_or_default()
+}
+
+/// A 300-character address in the bar: the caret keys, typing at its end and a 2,000-character
+/// paste edit it where the caret is. Cmd+arrows go to the ends, as in any AppKit field, where
+/// Home and End only scroll.
+#[test]
+fn real_command_bar_long_address_edits_at_the_caret() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let long = format!("{base}/beta?{}", "segment/".repeat(36));
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    go_to(&app, &long);
+    until(&app, "Beta", 15, |a| titles(a) == ["Beta"]);
+
+    open_bar(&app, key::L);
+    let address = bar_typed(&app);
+    assert!(address.len() >= 300, "the bar holds the address: {address:?}");
+    shot(&app, "bar-long-selected");
+    hid(key::RIGHT, &[Modifier::Command]);
+    shot(&app, "bar-long-end");
+    type_real("x");
+    assert_eq!(bar_typed(&app), format!("{address}x"), "Cmd+Right, then typing, adds at the end");
+    hid(key::LEFT, &[Modifier::Command]);
+    type_real("y");
+    hid(key::RIGHT, &[]);
+    type_real("z");
+    hid(key::LEFT, &[]);
+    hid(key::LEFT, &[]);
+    type_real("w");
+    assert_eq!(
+        bar_typed(&app),
+        format!("yw{}z{}x", &address[..1], &address[1..]),
+        "Cmd+Left, Right and Left move the caret"
+    );
+    shot(&app, "bar-long-home");
+
+    let pasted = format!("{base}/beta?{}", "p".repeat(2000 - base.len() - 6));
+    hid(key::A, &[Modifier::Command]);
+    paste(&pasted);
+    until(&app, "the pasted address", 5, |a| bar_typed(a) == pasted);
+    shot(&app, "bar-long-pasted");
+    hid(key::ESCAPE, &[]);
+    bar_closed(&app);
+    quit(&app);
 }
 
 #[test]

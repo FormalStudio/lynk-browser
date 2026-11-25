@@ -633,3 +633,144 @@ fn real_tiled_below_the_minimum() {
     let run = block_run(&app.output(), (y + 100.) as u32, x as u32, (x + w) as u32);
     assert!((f64::from(run) - w).abs() <= 4., "the page is {run} px wide in a {w} px tile");
 }
+
+/// The pointer over a link, a text field, a paragraph's text and an empty spot: the X server
+/// shows the page's own cursor for each (a hand, an I-beam, an I-beam, the arrow). Chromium sets
+/// it on its window only when nd leaves the change to it. The images go to the run's shots.
+#[test]
+fn real_the_cursor_follows_the_page() {
+    if !real_allowed() {
+        return;
+    }
+    let page = "data:text/html,<style>body{margin:0;font:20px sans-serif}a,input,p{display:block;height:60px;margin:0}</style><a href=%23x>a link to follow</a><input value=field><p>Plain text in a paragraph</p>";
+    let app = launch(page);
+    until(&app, "the page", 30, |a| a.get_by_test_id("content").bounding_box().ok().flatten().is_some());
+    std::thread::sleep(Duration::from_secs(1));
+    let page = app.get_by_test_id("content").bounding_box().unwrap().unwrap();
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let at = |dy: f64| (wx + f64::from(page.x) + 40., wy + f64::from(page.y) + dy);
+    let over = |what: &str, point: (f64, f64)| {
+        os::move_to(&app, point);
+        std::thread::sleep(Duration::from_millis(500));
+        let cursor = os::cursor(&app);
+        write_cursor(&cursor, &format!("cursor-{what}"));
+        cursor.3
+    };
+    let link = over("link", at(20.));
+    let field = over("field", at(90.));
+    let text = over("text", at(140.));
+    let empty = over("empty", at(400.));
+    let back = over("link-again", at(20.));
+    assert_ne!(link, empty, "a hand over the link");
+    assert_ne!(field, empty, "an I-beam over the field");
+    assert_ne!(field, link);
+    assert_eq!(text, field, "an I-beam over the paragraph's text");
+    assert_eq!(back, link, "the hand again over the link");
+}
+
+/// A cursor image as XFixes reports it (premultiplied ARGB), as a PNG under the run's shots.
+fn write_cursor((_, width, height, pixels): &(String, u16, u16, Vec<u32>), name: &str) {
+    let path = os::shot_path(name).with_extension("png");
+    let mut encoder = png::Encoder::new(std::fs::File::create(&path).unwrap(), u32::from(*width), u32::from(*height));
+    encoder.set_color(png::ColorType::Rgba);
+    let mut writer = encoder.write_header().unwrap();
+    let rgba: Vec<u8> =
+        pixels.iter().flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8, (p >> 24) as u8]).collect();
+    writer.write_image_data(&rgba).unwrap();
+    println!("screenshot {}", path.display());
+}
+
+/// How a quit is asked for.
+#[derive(Clone, Copy, Debug)]
+enum Quit {
+    /// Ctrl+Q.
+    Key,
+    /// The command bar's Quit.
+    Command,
+    /// The compositor's close of the last window (Super+Q, `killactive`).
+    Close,
+    /// SIGTERM, as a service manager or `kill` sends.
+    Term,
+}
+
+/// Asks `app` to quit as `how` does; its windows go at once and the process within 2 s.
+#[track_caller]
+fn quit_by(app: &App, how: Quit) {
+    match how {
+        Quit::Key => os::key(app, os::key_of('q'), &[os::CMD]),
+        Quit::Command => {
+            open_bar(app, key::K);
+            type_real(app, "Quit");
+            let is_quit = |r: &String| r.starts_with("Quit") && r.ends_with("Ctrl+Q");
+            until(app, "the Quit row", 5, |a| bar_rows(a).iter().any(is_quit));
+            for _ in 0..bar_rows(app).iter().position(is_quit).unwrap() {
+                os::key(app, key::DOWN, &[]);
+            }
+            os::key(app, key::ENTER, &[]);
+        }
+        Quit::Close => os::close_window(app, &front_window(app)),
+        Quit::Term => os::quit(app),
+    }
+    let start = Instant::now();
+    until(app, &format!("the windows gone after {how:?}"), 1, |a| os::windows(a).is_empty());
+    exited(app, 2);
+    println!("quit by {how:?} in {} ms", start.elapsed().as_millis());
+}
+
+/// Every way to quit ends the app at once and saves the session.
+#[test]
+fn real_every_way_to_quit() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for how in [Quit::Key, Quit::Command, Quit::Close, Quit::Term] {
+        let profile = profile(&format!("quit-{how:?}"));
+        let app = launch_on(&profile, &[format!("{base}/alpha"), format!("{base}/beta")]);
+        until(&app, "the pages", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
+        quit_by(&app, how);
+        let tabs = session_of(&profile)["windows"][0]["tabs"].as_array().map(Vec::len);
+        assert_eq!(tabs, Some(2), "{how:?} saved both tabs");
+    }
+}
+
+/// Thirty quits in a row with pages loaded, by turns of the key, the compositor and SIGTERM.
+#[test]
+fn real_thirty_quits_in_a_row() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for n in 0..30 {
+        let how = [Quit::Key, Quit::Close, Quit::Term][n % 3];
+        let app = launch_with(&[format!("{base}/alpha"), format!("{base}/beta?{n}")]);
+        until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
+        quit_by(&app, how);
+    }
+}
+
+/// A quit while a page is still loading, with DevTools open, and with two windows.
+#[test]
+fn real_quit_mid_load_with_devtools_and_two_windows() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/slow"));
+    until(&app, "the never-ending load", 15, |a| has(a, "load-bar"));
+    quit_by(&app, Quit::Key);
+
+    let app = launch(&format!("{base}/alpha"));
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    hid(&app, key::F12, &[]);
+    until(&app, "DevTools", 15, |a| os::windows(a).len() == 2 || has(a, "devtools"));
+    quit_by(&app, Quit::Term);
+
+    let profile = profile("quit-two-windows");
+    let app = launch_on(&profile, &[format!("{base}/alpha")]);
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    press(&app, "cmd-n");
+    until(&app, "a second window", 10, |a| window_count(a) == 2);
+    quit_by(&app, Quit::Key);
+    assert_eq!(session_of(&profile)["windows"].as_array().map(Vec::len), Some(2), "both windows saved");
+}

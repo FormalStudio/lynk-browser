@@ -35,6 +35,7 @@ actions!(
         ReopenClosedTab,
         SavePage,
         OpenSettings,
+        Quit,
         CopyAddress,
         FindInPage,
         FindNext,
@@ -297,6 +298,8 @@ pub const COMMANDS: &[Command] = &[
         .handler(|w, _, _, cx| w.reopen(cx)),
     Command::new::<SavePage>("Save Page As\u{2026}").key("save-page").menu(MenuId::File).enabled(web_page),
     Command::new::<OpenSettings>("Settings").key("settings").menu(MenuId::File).after_separator(),
+    // macOS's app menu has its own Quit.
+    Command::new::<Quit>("Quit").key("quit").menu(MenuId::File).not_on_mac().handler(|_, _, _, cx| cx.quit()),
     Command::new::<CopyAddress>("Copy Address")
         .key("copy-address")
         .menu(MenuId::Edit)

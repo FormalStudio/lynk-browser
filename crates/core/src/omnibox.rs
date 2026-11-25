@@ -134,6 +134,7 @@ pub const COMMANDS: &[OmniCommand] = &[
     cmd("webstore", "Chrome Web Store", "web-browser-symbolic", None, ""),
     cmd("layout", "Switch Layout", "sidebar-show-symbolic", Some("layout"), "sidebar compact"),
     cmd("settings", "Settings", "preferences-system-symbolic", Some("settings"), "preferences"),
+    cmd("quit", "Quit", "window-close-symbolic", Some("quit"), "exit"),
 ];
 
 /// Commands that need Chromium: extensions, and the page scripts only it accepts.

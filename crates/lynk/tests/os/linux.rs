@@ -178,6 +178,17 @@ impl App {
     }
 }
 
+/// The cursor the app's X server shows now, as XFixes reports it: its name (empty for a cursor
+/// made without one) and its image's size and pixels.
+pub fn cursor(app: &App) -> (String, u16, u16, Vec<u32>) {
+    use x11rb::protocol::xfixes::ConnectionExt as _;
+    let display = app.display.hyprland.client_env().into_iter().find(|(k, _)| *k == "DISPLAY").expect("XWayland").1;
+    let (conn, _) = x11rb::connect(Some(&display)).unwrap();
+    conn.xfixes_query_version(5, 0).unwrap().reply().unwrap();
+    let c = conn.xfixes_get_cursor_image_and_name().unwrap().reply().unwrap();
+    (String::from_utf8_lossy(&c.name).into_owned(), c.width, c.height, c.cursor_image)
+}
+
 /// The app's mapped windows, most recently focused first.
 fn clients(app: &App) -> Vec<serde_json::Value> {
     let Ok(reply) = app.display.hyprland.request("j/clients") else { return Vec::new() };

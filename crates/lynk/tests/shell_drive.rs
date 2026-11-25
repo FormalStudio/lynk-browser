@@ -1709,7 +1709,7 @@ fn real_a_quit_writes_the_last_change() {
             && session_of(&profile)["windows"][0]["tabs"].as_array().map(Vec::len) == Some(2)
     });
     // Shown by the next key, then quit before the store's debounce has passed.
-    app.keyboard().press("cmd-1").unwrap();
+    app.keyboard().press(&os::chord("cmd-1")).unwrap();
     quit(&app);
     drop(app);
     let saved = session_of(&profile);

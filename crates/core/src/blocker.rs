@@ -36,6 +36,9 @@ pub struct Cosmetics {
     pub script: String,
     /// The page has the generic rules switched off (`$generichide`).
     pub generic_off: bool,
+    /// Procedural rules (`:has-text()`, `:upward()`, `:remove()` and the like) as adblock-rust's
+    /// JSON, `{selector: [{type, arg}], action}`, sorted. They need the page's DOM to run.
+    pub procedural: Vec<String>,
     exceptions: HashSet<String>,
 }
 
@@ -71,6 +74,9 @@ impl Blocker {
         let mut hide: Vec<String> = lists.hide_selectors.into_iter().chain(user.hide_selectors).collect();
         hide.sort();
         hide.dedup();
+        let mut procedural: Vec<String> = lists.procedural_actions.into_iter().chain(user.procedural_actions).collect();
+        procedural.sort();
+        procedural.dedup();
         let script = [lists.injected_script, user.injected_script].join("\n").trim().to_owned();
         // uBO's scriptlets read a `scriptletGlobals` that its own injector declares around them.
         let script = if script.is_empty() {
@@ -78,7 +84,7 @@ impl Blocker {
         } else {
             format!("(function () {{ const scriptletGlobals = {{}};\n{script}\n}})();")
         };
-        Cosmetics { hide, script, generic_off: lists.generichide, exceptions: lists.exceptions }
+        Cosmetics { hide, script, generic_off: lists.generichide, procedural, exceptions: lists.exceptions }
     }
 
     /// The generic rules that hide some of `classes` and `ids`, for a page at `cosmetics`' address.
@@ -263,6 +269,21 @@ $removeparam=utm_source
         let head = c.head();
         assert_eq!(head.matches("</style>").count(), 1);
         assert_eq!(head.matches("</script>").count(), 1);
+    }
+
+    #[test]
+    fn procedural_rules_from_the_lists_and_the_user_come_as_json() {
+        let mut state = BlockingState::default();
+        state.hide("example.com", ".post:has-text(Sponsored)", "Sponsored", "", 1);
+        state.hide("example.com", ".promo:remove()", "Promo", "", 1);
+        let b = blocker(&state);
+        let c = b.cosmetics("https://example.com/");
+        assert_eq!(c.procedural.len(), 2, "{:?}", c.procedural);
+        let rules: Vec<serde_json::Value> = c.procedural.iter().map(|r| serde_json::from_str(r).unwrap()).collect();
+        assert!(rules.iter().any(|r| r["selector"][1]["type"] == "has-text" && r["selector"][1]["arg"] == "Sponsored"));
+        assert!(rules.iter().any(|r| r["action"]["type"] == "remove"));
+        assert!(c.hide.is_empty(), "procedural rules stay out of the style sheet: {:?}", c.hide);
+        assert!(b.cosmetics("https://other.example/").procedural.is_empty());
     }
 
     #[test]

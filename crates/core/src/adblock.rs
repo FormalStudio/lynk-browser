@@ -259,11 +259,16 @@ pub fn user_engine(state: &BlockingState) -> Engine {
     Engine::new_with_filter_set(set)
 }
 
-/// The cache key for the compiled engine: the release and every list file it was built from.
+/// How the lists compile; a cached engine of another format is built again. 2: CSS validated,
+/// so procedural rules come apart from the plain selectors.
+const ENGINE_FORMAT: u32 = 2;
+
+/// The cache key for the compiled engine: its format, the release and every list file it was
+/// built from.
 pub fn engine_key(adblock_dir: &Path, version: &str, lists: &[FilterList]) -> String {
     let mut paths: Vec<PathBuf> = lists.iter().map(|l| list_path(adblock_dir, l)).collect();
     paths.push(ublock::resources_path(adblock_dir, version));
-    ublock::lists_key(version, &paths)
+    format!("{ENGINE_FORMAT}:{}", ublock::lists_key(version, &paths))
 }
 
 /// Writes the compiled engine to `engine.bin`, its key first on its own line.

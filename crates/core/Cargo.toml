@@ -27,7 +27,7 @@ sha2 = "0.10.9"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 ureq = "3.4"
 # Without `single-thread` an engine is Sync, as the filter Chromium calls on its IO thread must be.
-adblock = { version = "=0.13.3", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "resource-assembler"] }
+adblock = { version = "=0.13.3", default-features = false, features = ["css-validation", "embedded-domain-resolver", "full-regex-handling", "resource-assembler"] }
 
 [dev-dependencies]
 tempfile = "3"

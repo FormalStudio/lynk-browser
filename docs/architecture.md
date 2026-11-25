@@ -240,8 +240,7 @@ stateDiagram-v2
   Tabs not on show keep their DevTools in the holder like any page. The window remembers the
   side for the next DevTools opened in it; closing the tab, moving it to another window or
   closing the window closes them. Chromium's own DevTools shortcuts reach the app as nd's
-  `BrowserCommand::DevTools` and open these, from the page or from inside the DevTools. Known
-  limit: on Linux the page's own window covers the page's half of the divider's grab area.
+  `BrowserCommand::DevTools` and open these, from the page or from inside the DevTools.
 
 - **Ad blocking.** `blocking.rs` puts core's `blocker::Blocker` (the compiled lists plus the
   user's own rules) on nd's request filter, read on Chromium's IO thread through a lock-guarded
@@ -249,15 +248,21 @@ stateDiagram-v2
   gets its `$csp=` policy and, at the top of its head through the filter's `head`, a style sheet
   hiding what rules by address match and the scriptlets for it. Generic rules need the page's
   classes and ids: a script in the `lynk-blocker` world posts them (`lynkCosmetic`), and the
-  matched selectors go back as a style sheet in that world. nd reports each stopped request
+  matched selectors go back as a style sheet in that world. The script runs in every frame,
+  cross-site ones included, and the answer goes to the frame that asked. When a page's own
+  policy refuses the head's inline style or scriptlets (its `securitypolicyviolation` reaches the
+  world), the hide rules go in as a constructed sheet in `adoptedStyleSheets` and the scriptlets
+  run in the page's world through `execute_javascript_in_frame`, neither of which the policy
+  governs. Procedural filters (`:has-text()`, `:upward()`, `:matches-css()` and the rest
+  adblock-rust parses with `css-validation`) come as JSON actions and run in the world, again on
+  each mutation. The scriptlets run inside a function that declares the `scriptletGlobals` uBO's
+  own injector provides. nd reports each stopped request
   (`RequestBlocked`); the count is of the distinct addresses stopped on a tab's page, starting over
   with each load, since Chromium can ask for one resource twice in a load. The engine builds
   off the main thread, restoring `adblock/engine.bin` when its key matches; until then requests
   pass. A release with no cached scriptlets gets them from a hidden page in the front window's
   holder, which imports `js/resources/scriptlets.js` over the `lynk-ubo:` scheme (served from the
-  release folder only) and posts each function's source back. Known limits: a page whose own
-  policy forbids inline script or style keeps the head's scriptlets or style out, generic rules
-  reach the main frame only, and procedural filters (`:has-text()` and the like) are not applied.
+  release folder only) and posts each function's source back.
 
 ## Registries
 

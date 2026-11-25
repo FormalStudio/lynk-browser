@@ -670,7 +670,8 @@ fn real_the_cursor_follows_the_page() {
 
 /// nd's chrome shows the cursor for what is under it, as the page does: an I-beam over the
 /// command bar's field (the page's own I-beam), a resize cursor on both halves of the sidebar's
-/// edge, the arrow over the sidebar's buttons, and the same resize cursor on DevTools' divider.
+/// edge, the arrow over the sidebar's buttons, and a resize cursor across the docked DevTools'
+/// divider.
 /// The images go to the run's shots.
 #[test]
 fn real_the_chrome_cursors() {
@@ -724,31 +725,33 @@ fn real_the_chrome_cursors() {
     hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
 
-    let main = front_window(&app).address;
     os::key(&app, key::F12, &[]);
-    until(&app, "DevTools", 10, |a| os::windows(a).len() == 2);
+    until(&app, "DevTools", 15, |a| has(a, "devtools-bar"));
     std::thread::sleep(Duration::from_secs(2));
-    let tools = os::windows(&app).into_iter().find(|w| w.address != main).expect("the DevTools window");
-    os::capture(&app, &tools, &os::shot_path("chrome-cursor-devtools"));
-    let (x, y, w, h) = tools.bounds;
-    // Elements' DOM tree and its Styles pane split the window side by side; the divider
-    // between them is a few pixels wide, somewhere in the middle half.
-    let mut seen = Vec::new();
-    let mut at = x + w * 0.25;
-    while at < x + w * 0.75 {
-        let point = (at, y + h / 2.);
-        os::move_to(&app, point);
-        std::thread::sleep(Duration::from_millis(40));
-        let cursor = os::cursor(&app);
-        if !seen.iter().any(|(_, c): &(String, Vec<u32>)| *c == cursor.3) {
-            write_cursor(&cursor, &format!("chrome-cursor-devtools-{}", seen.len()));
-            seen.push((format!("{point:?}"), cursor.3));
-        }
-        at += 2.;
+    let page = app.get_by_test_id("content").bounding_box().unwrap().unwrap();
+    let tools = app.get_by_test_id("devtools").bounding_box().unwrap().unwrap();
+    // DevTools dock beside the page or under it; the divider's grab straddles the hairline
+    // between the two pages.
+    let beside = tools.x > page.x + 1.;
+    let (before, after) = if beside {
+        let mid = tools.y + tools.height / 2.;
+        (in_window(tools.x - 3., mid), in_window(tools.x + 2., mid))
+    } else {
+        let mid = tools.x + tools.width / 2.;
+        (in_window(mid, tools.y - 3.), in_window(mid, tools.y + 2.))
+    };
+    let page_side = over("devtools-divider-page-side", before);
+    let tools_side = over("devtools-divider-tools-side", after);
+    for (what, cursor) in [("page", &page_side), ("DevTools", &tools_side)] {
+        assert!(
+            *cursor != arrow && *cursor != ibeam && *cursor != hand,
+            "a resize cursor on the divider's {what} side"
+        );
     }
-    let divider = seen.iter().find(|(_, c)| *c == edge_in);
-    assert!(divider.is_some(), "the sidebar edge's resize cursor on DevTools' divider; {} cursors seen", seen.len());
-    println!("devtools divider at {}", divider.unwrap().0);
+    assert!(page_side == tools_side, "one cursor across the divider");
+    if beside {
+        assert!(page_side == edge_in, "the sidebar edge's resize cursor on a side-by-side divider");
+    }
     quit_by(&app, Quit::Term);
 }
 

@@ -165,6 +165,18 @@ fn respond(mut stream: std::net::TcpStream) {
         "/cookie" => {
             page(&format!("<!doctype html><title>Cookie {}</title>", if cookie.is_empty() { "none" } else { &cookie }))
         }
+        // The cookie set, then the page that reads it back, in the same tab.
+        "/set-cookie-read" => (
+            "200 OK",
+            "Set-Cookie: who=one; Path=/; Max-Age=3600\r\n".to_owned(),
+            "<!doctype html><script>location.replace('/cookie')</script>".to_owned(),
+        ),
+        // localStorage written, then the page that reads it back. Its title carries a number of
+        // its own load, so a title kept from before a restart does not read as a fresh one.
+        "/store-set" => page("<!doctype html><script>localStorage.x='kept';location.replace('/store')</script>"),
+        "/store" => {
+            page("<!doctype html><script>document.title='Stored '+(localStorage.x||'none')+' #'+Math.random()</script>")
+        }
         "/loop" => ("302 Found", "Location: /loop\r\n".to_owned(), String::new()),
         "/late" => {
             std::thread::sleep(Duration::from_secs(3));
@@ -3118,12 +3130,16 @@ fn run_command(app: &App, typed: &str, row: &str) {
     open_bar(app, key::K);
     type_real(app, typed);
     let deadline = Instant::now() + Duration::from_secs(10);
+    // Rows read before the field holds all of `typed` can belong to a shorter query and reorder.
     let at = loop {
+        let field = bar_field(app).unwrap_or_default();
         let rows = bar_rows(app);
-        if let Some(at) = rows.iter().position(|r| r.starts_with(row)) {
+        if field.split('|').next() == Some(typed)
+            && let Some(at) = rows.iter().position(|r| r.starts_with(row))
+        {
             break at;
         }
-        assert!(Instant::now() < deadline, "no {row} row for {typed:?}: {rows:?}");
+        assert!(Instant::now() < deadline, "no {row} row for {typed:?}, field {field:?}: {rows:?}");
         std::thread::sleep(Duration::from_millis(150));
     };
     for _ in 0..at {
@@ -3230,7 +3246,7 @@ fn real_two_profiles_keep_their_cookies_apart() {
     until(&app, "Work sent no cookie", 15, |a| all_titles(a).contains(&"Cookie none".to_owned()));
     shot(&app, "profiles-two-windows");
     run_command(&app, "switch to default", "Switch to Default");
-    until(&app, "Default's window key", 10, |a| key_title(a).as_deref() == Some("Set"));
+    key_within(&app, &dir, "Set", 10);
     open_bar(&app, key::T);
     paste(&app, &format!("{base}/cookie"));
     std::thread::sleep(Duration::from_millis(300));
@@ -3267,9 +3283,102 @@ fn real_two_profiles_keep_their_cookies_apart() {
         if key_title(&app).as_deref() != Some(title) {
             run_command(&app, &row.to_lowercase(), row);
         }
-        until(&app, title, 10, |a| key_title(a).as_deref() == Some(title));
+        key_within(&app, &dir, title, 10);
     }
     quit(&app);
+}
+
+/// Waits `secs` for the window showing `title` to be key. Past that it watches 30 s more, so the
+/// failure says whether the window was late or never came, with every window's state.
+#[track_caller]
+fn key_within(app: &App, dir: &std::path::Path, title: &str, secs: u64) {
+    let start = Instant::now();
+    let is_key = |a: &AppHandle| key_title(a).as_deref() == Some(title);
+    while start.elapsed() < Duration::from_secs(secs) {
+        if is_key(app) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    let state = profile_windows(app, dir);
+    shot(app, "key-timeout");
+    let late = loop {
+        if is_key(app) {
+            break Some(start.elapsed());
+        }
+        if start.elapsed() > Duration::from_secs(secs + 30) {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    };
+    panic!(
+        "{title:?} not key within {secs}s ({}); at the timeout\n{state}\n{}",
+        late.map_or("never, after 30 s more".to_owned(), |t| format!("key after {t:?}")),
+        app.stderr_tail(40).join("\n")
+    );
+}
+
+/// What a page or the user changed moments before a quit is there at the next launch: a cookie,
+/// localStorage, a zoom level and the history rows. The quit comes within a second or two of the
+/// changes, before any engine timer would have written them. Every kind is checked before the
+/// case fails, so a failure names all that was lost.
+#[test]
+fn real_quit_right_after_a_change_keeps_it() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = profile("quit-fast");
+    let app = launch_on(&dir, &[format!("{base}/store-set")]);
+    until(&app, "the stored value", 30, |a| shown_title(a).starts_with("Stored kept"));
+    let stored = shown_title(&app);
+    open_bar(&app, key::T);
+    paste(&app, &format!("{base}/set-cookie-read"));
+    std::thread::sleep(Duration::from_millis(300));
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    until(&app, "the cookie sent back", 15, |a| shown_title(a) == "Cookie who=one");
+    let set = Instant::now();
+    press(&app, "cmd-=");
+    until(&app, "110%", 10, |a| text_of(a, "zoom-value").as_deref() == Some("110%"));
+    let since = set.elapsed();
+    quit(&app);
+    drop(app);
+
+    let mut lost = Vec::new();
+    let cookies = profile_cookies(&dir);
+    if !cookies.contains("who") {
+        lost.push(format!("cookie on disk: {cookies}"));
+    }
+    let zoom = session_of(&dir)["zoomByHost"].clone();
+    if zoom.as_object().is_none_or(|z| z.values().all(|f| f.as_f64() != Some(1.1))) {
+        lost.push(format!("zoom in session.json: {zoom}"));
+    }
+    let visits = std::process::Command::new("sqlite3")
+        .args(["-readonly", &dir.join("history.sqlite").display().to_string(), "select url from visits"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', ", "))
+        .unwrap_or_default();
+    if !["/store", "/cookie"].iter().all(|p| visits.contains(p)) {
+        lost.push(format!("history rows: [{visits}]"));
+    }
+
+    // The shown tab reloads at launch and sends what the profile kept; the other loads when shown.
+    let app = launch_on(&dir, &[]);
+    until(&app, "the cookie page reloaded", 30, |a| shown_title(a).starts_with("Cookie "));
+    if shown_title(&app) != "Cookie who=one" {
+        lost.push(format!("cookie sent after launch: {:?}", shown_title(&app)));
+    }
+    if !has(&app, "zoom") {
+        lost.push("zoom glyph after launch".to_owned());
+    }
+    press(&app, "cmd-1");
+    until(&app, "the stored page reloaded", 15, |a| shown_title(a).starts_with("Stored ") && shown_title(a) != stored);
+    if !shown_title(&app).starts_with("Stored kept") {
+        lost.push(format!("localStorage after launch: {:?}", shown_title(&app)));
+    }
+    quit(&app);
+    assert!(lost.is_empty(), "lost at a quit {since:?} after the cookie was set:\n{}", lost.join("\n"));
 }
 
 /// Deleting the profile whose window is open asks first, closes that window without asking its

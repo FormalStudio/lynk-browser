@@ -22,7 +22,7 @@ use nd::core::WindowId;
 use nd::prelude::*;
 use nd::settings::Store;
 use nd::webview::{
-    FilterRequest, FilterResponse, JsValue, RequestFilter, SchemeRequest, SchemeResponse, ScriptMessage, UserScript,
+    FilterRequest, FilterResponse, JsValue, RequestFilter, SchemeRequest, SchemeResponse, ScriptMessage, UserGesture, UserScript,
     Verdict, WebView, webview,
 };
 
@@ -30,22 +30,107 @@ use crate::page::PageEvent;
 use crate::tab::{Tab, TabId};
 use crate::window::{BrowserWindow, TabEvent};
 
-/// The message a page posts the classes and ids it uses to, `{url, classes, ids}`.
+/// The message a page's `lynk-blocker` world posts: `{url, first}` as the document starts,
+/// `{url, refused}` when its policy refused the head's inline `script` or `style`, and
+/// `{url, classes, ids}` with the classes and ids it uses.
 const COSMETIC_MESSAGE: &str = "lynkCosmetic";
 const COSMETIC_WORLD: &str = "lynk-blocker";
-/// Reports the classes and ids not reported yet: once the document has parsed, then as nodes
-/// arrive, at most every half second.
-const COSMETIC_REPORT: &str = "(() => { const seen = new Set(); let wait = 0; \
+/// Says the document started, listens for its policy refusing inline code, then reports the
+/// classes and ids not reported yet: once the document has parsed, then as nodes arrive, at most
+/// every half second.
+const COSMETIC_REPORT: &str = "(() => { const seen = new Set(), refused = new Set(); let wait = 0; \
+    const send = (body) => window.webkit?.messageHandlers?.lynkCosmetic?.postMessage({ url: location.href, ...body }); \
+    send({ first: true }); \
+    document.addEventListener('securitypolicyviolation', (e) => { \
+      const kind = e.effectiveDirective.split('-')[0]; \
+      if (e.blockedURI === 'inline' && (kind === 'script' || kind === 'style') && !refused.has(kind)) { \
+        refused.add(kind); send({ refused: kind }); } }); \
     const post = () => { wait = 0; const classes = [], ids = []; \
       for (const el of document.querySelectorAll('[class],[id]')) { \
         for (const c of el.classList) if (!seen.has('.' + c)) { seen.add('.' + c); classes.push(c); } \
         if (el.id && !seen.has('#' + el.id)) { seen.add('#' + el.id); ids.push(el.id); } } \
-      if (classes.length || ids.length) \
-        window.webkit?.messageHandlers?.lynkCosmetic?.postMessage({ url: location.href, classes, ids }); }; \
+      if (classes.length || ids.length) send({ classes, ids }); }; \
     const later = () => { if (!wait) wait = setTimeout(post, 500); }; \
     const start = () => { post(); new MutationObserver(later).observe(document.documentElement, \
       { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'id'] }); }; \
     if (document.readyState === 'loading') addEventListener('DOMContentLoaded', start); else start(); })()";
+/// Adds a style sheet to the document from the world. A constructed sheet is outside the page's
+/// content security policy, which can refuse the head's `<style>`.
+const ADOPT: &str = "(css) => { const s = new CSSStyleSheet(); s.replaceSync(css); \
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, s]; }";
+
+/// Runs a document's procedural rules (adblock-rust's JSON) over it, then again as it changes.
+/// Each rule's operators narrow the document down step by step; what is left is hidden, or gets
+/// the rule's action. Called with the rules, once per document.
+const PROCEDURAL: &str = r#"(rules) => { if (window.lynkProcedural) return; window.lynkProcedural = true;
+  const regex = (arg) => { const m = /^\/(.*)\/([dgimsuy]*)$/.exec(arg); return m ? new RegExp(m[1], m[2]) : null; };
+  const test = (arg) => { const r = regex(arg); return r ? (s) => r.test(s) : (s) => s.includes(arg); };
+  const exact = (arg) => { const r = regex(arg); return r ? (s) => r.test(s) : (s) => s === arg; };
+  const unquote = (s) => s.trim().replace(/^"(.*)"$/s, '$1');
+  const step = (nodes, op) => {
+    const out = new Set(), a = op.arg;
+    for (const n of nodes) {
+      switch (op.type) {
+        case 'css-selector': {
+          const sel = a.trim();
+          if (n === document) { document.querySelectorAll(sel).forEach((e) => out.add(e)); break; }
+          if (sel[0] === '+' || sel[0] === '~') {
+            const rest = sel.slice(1).trim();
+            for (let e = n.nextElementSibling; e; e = e.nextElementSibling) {
+              if (e.matches(rest)) out.add(e);
+              if (sel[0] === '+') break;
+            }
+          } else n.querySelectorAll(':scope ' + sel).forEach((e) => out.add(e));
+          break;
+        }
+        case 'has-text': if (test(a)(n.textContent)) out.add(n); break;
+        case 'min-text-length': if (n.textContent.length >= Number(a)) out.add(n); break;
+        case 'matches-path': if (test(a)(location.pathname + location.search)) out.add(n); break;
+        case 'matches-attr': {
+          const [name, value] = a.split(/=(.*)/s).map(unquote);
+          const [nm, vm] = [exact(name), value === undefined ? null : exact(value)];
+          if (n.getAttributeNames?.().some((k) => nm(k) && (!vm || vm(n.getAttribute(k))))) out.add(n);
+          break;
+        }
+        case 'matches-css': case 'matches-css-before': case 'matches-css-after': {
+          const at = a.indexOf(':'), prop = a.slice(0, at).trim(), value = a.slice(at + 1).trim();
+          const pseudo = op.type === 'matches-css' ? null : '::' + op.type.slice(12);
+          if (exact(value)(getComputedStyle(n, pseudo).getPropertyValue(prop))) out.add(n);
+          break;
+        }
+        case 'upward': {
+          let e = n;
+          if (/^\d+$/.test(a.trim())) for (let i = Number(a); e && i > 0; i--) e = e.parentElement;
+          else e = n.parentElement?.closest(a);
+          if (e) out.add(e);
+          break;
+        }
+        case 'xpath': {
+          const r = document.evaluate(a, n, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+          for (let i = 0; i < r.snapshotLength; i++) if (r.snapshotItem(i).nodeType === 1) out.add(r.snapshotItem(i));
+          break;
+        }
+      }
+    }
+    return [...out];
+  };
+  const act = (e, action) => {
+    switch (action?.type) {
+      case 'remove': e.remove(); break;
+      case 'style': e.style.cssText += ';' + action.arg; break;
+      case 'remove-attr': e.removeAttribute(action.arg); break;
+      case 'remove-class': e.classList.remove(action.arg); break;
+      default: e.style.setProperty('display', 'none', 'important');
+    }
+  };
+  const run = () => { for (const r of rules) {
+    try { let nodes = [document]; for (const op of r.selector) nodes = step(nodes, op); nodes.forEach((e) => act(e, r.action)); }
+    catch (_) {} } };
+  run();
+  let wait = 0;
+  new MutationObserver(() => { if (!wait) wait = setTimeout(() => { wait = 0; run(); }, 100); })
+    .observe(document, { childList: true, subtree: true, attributes: true, characterData: true });
+}"#;
 
 const SCRIPTLET_SCHEME: &str = "lynk-ubo";
 const SCRIPTLET_ORIGIN: &str = "lynk-ubo://release";
@@ -258,7 +343,7 @@ pub fn forget(cx: &mut App, win: WindowId) {
 /// Sets up a new page to report the classes and ids it uses.
 pub fn prepare(view: &WebView) {
     view.register_script_message(COSMETIC_MESSAGE, Some(COSMETIC_WORLD), ["*"]);
-    view.add_user_script(UserScript::new("lynk-cosmetic", COSMETIC_REPORT).in_world(COSMETIC_WORLD));
+    view.add_user_script(UserScript::new("lynk-cosmetic", COSMETIC_REPORT).in_world(COSMETIC_WORLD).at_start().all_frames());
 }
 
 /// A page observer: counts what the filter stopped, starting over with each load, and hides
@@ -276,34 +361,73 @@ pub fn observe(win: &mut BrowserWindow, id: TabId, event: &PageEvent, _: &mut Wi
                 cx.notify();
             }
         }
-        PageEvent::ScriptMessage(m) if m.name == COSMETIC_MESSAGE && m.main_frame => {
+        PageEvent::ScriptMessage(m) if m.name == COSMETIC_MESSAGE => {
             if let Some(view) = win.tab(id).and_then(Tab::view) {
-                hide_generic(view, m);
+                cosmetic_message(view, m);
             }
         }
         _ => {}
     }
 }
 
-fn hide_generic(view: &WebView, m: &ScriptMessage) {
+/// Answers the `lynk-blocker` world. The head already holds the address's hide rules and
+/// scriptlets, unless the page's policy refused them: the rules go in again as a constructed
+/// sheet and, when refused, the scriptlets run through the DevTools protocol, which the policy
+/// does not govern.
+fn cosmetic_message(view: &WebView, m: &ScriptMessage) {
+    let Some(url) = m.body["url"].as_str() else { return };
+    let Some(blocker) = blocker_for(url) else { return };
+    let cosmetics = blocker.cosmetics(url);
+    if m.body["first"].as_bool() == Some(true) {
+        if !cosmetics.hide.is_empty() {
+            adopt(view, m, &hide_rule(&cosmetics.hide));
+        }
+        if !cosmetics.procedural.is_empty() {
+            // Each rule is JSON already, so the list is one too.
+            let code = format!("({PROCEDURAL})([{}])", cosmetics.procedural.join(","));
+            run_in(view, m, code, Some(COSMETIC_WORLD));
+        }
+        return;
+    }
+    if m.body["refused"].as_str() == Some("script") {
+        if !cosmetics.script.is_empty() {
+            run_in(view, m, as_script(&cosmetics.script), None);
+        }
+        return;
+    }
     let strings = |key: &str| -> Vec<String> {
         m.body[key]
             .as_array()
             .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
             .unwrap_or_default()
     };
-    let Some(url) = m.body["url"].as_str() else { return };
-    let Some(blocker) = blocker_for(url) else { return };
-    let selectors = blocker.generic(&blocker.cosmetics(url), &strings("classes"), &strings("ids"));
-    if selectors.is_empty() {
-        return;
+    let selectors = blocker.generic(&cosmetics, &strings("classes"), &strings("ids"));
+    if !selectors.is_empty() {
+        adopt(view, m, &hide_rule(&selectors));
     }
-    let css = JsValue::String(hide_rule(&selectors));
-    let code = format!(
-        "(() => {{ const s = document.createElement('style'); s.textContent = {css}; \
-         (document.head || document.documentElement).appendChild(s); }})()"
-    );
-    view.execute_javascript_in(code, Some(COSMETIC_WORLD), |_, _| {});
+}
+
+/// `scriptlets` as if a `<script>` of the page ran them. Scriptlets tell their own reads from the
+/// page's by `document.currentScript` (`set-constant` answers the page only when it differs), and
+/// code run through the DevTools protocol has none, as the page's timers and handlers have none.
+fn as_script(scriptlets: &str) -> String {
+    format!(
+        "(() => {{ const own = document.createElement('script'); \
+         Object.defineProperty(document, 'currentScript', {{ configurable: true, get: () => own }}); \
+         try {{ (function () {{\n{scriptlets}\n}})(); }} finally {{ delete document.currentScript; }} }})()"
+    )
+}
+
+fn adopt(view: &WebView, m: &ScriptMessage, css: &str) {
+    let css = JsValue::String(css.to_owned());
+    run_in(view, m, format!("({ADOPT})({css})"), Some(COSMETIC_WORLD));
+}
+
+/// Runs `code` in the frame `m` came from, without a user gesture: the page did nothing to earn
+/// one.
+fn run_in(view: &WebView, m: &ScriptMessage, code: String, world: Option<&str>) {
+    let frame = (!m.frame.is_empty()).then_some(m.frame.as_str());
+    view.execute_javascript_in_frame(code, world, frame, UserGesture::Without, |_, _| {});
 }
 
 /// A tab listener: a closed tab's count goes.

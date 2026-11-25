@@ -200,6 +200,9 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] adblock-rust with uBlock Origin's default lists, scriptlets and redirects, on by default (lane `cef-request-filter`; old drives `adblock-drive`, `adblock-shots`)
 - [ ] Network requests blocked or redirected per rule, cross-site frames included
 - [x] Cosmetic filters and scriptlets applied at document start; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux), scriptlets by `blocker` tests
+- [x] Generic cosmetic rules in cross-site frames; drive `real_blocking_hides_in_a_cross_site_frame` (macOS, Linux)
+- [x] Cosmetic filters and scriptlets under a page policy that refuses inline style and script; drive `real_blocking_reaches_a_page_under_a_strict_policy` (macOS, Linux)
+- [x] Procedural filters, a fixture element per operator; drive `real_blocking_runs_procedural_rules` (macOS, Linux)
 - [ ] uBlock Origin 1.75.0 pinned by SHA-256, downloaded on a fresh profile and verified before extraction; a newer release checked weekly against GitHub's published hash
 - [ ] Lists refreshed daily from CDN mirrors in order, falling back to the bundled snapshot; a partial download or a captive portal page never replaces a list
 - [ ] The compiled engine cached on disk and restored off the main thread; the window never waits on it

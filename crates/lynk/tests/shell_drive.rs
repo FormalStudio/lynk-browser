@@ -67,6 +67,76 @@ const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;
 
 /// No colours of its own: Chromium's default white is what it sits on.
+/// One element per procedural operator and action, each a user rule on 127.0.0.1 in
+/// `PROCEDURAL_RULES`, and elements the rules must leave alone. The page checks itself and says in
+/// its title what is still wrong, `Procedural ok` once nothing is.
+const PROCEDURAL: &str = r#"<!doctype html><title>Procedural</title><style>.pre::before{content:"AD"}</style>
+<div class=post id=t1>Sponsored post</div><div class=post id=c1>A post</div>
+<div class=card id=t2><span class=badge>Promoted</span></div>
+<div id=t3><p><b class=mark>x</b></p></div>
+<div id=t4 data-ad-slot=top>slot</div><div id=c4 data-ad-slot=side>side</div>
+<div id=t5 class=float style="position:fixed;top:0">float</div>
+<div id=t6 class=long>a long enough block of text here</div><div id=c6 class=long>short</div>
+<section id=t7><h2>Ad</h2></section><section id=c7><h2>News</h2></section>
+<div id=t8 class=pathy>path</div>
+<div id=t9 class=gone>gone</div>
+<div id=t10 class=restyle>restyle</div>
+<div id=t11 class=pre>before</div>
+<div id=t12 class="rmclass ad">class</div>
+<div id=t13 data-track=1>attr</div>
+<p class=lead>Ad below</p><div id=t14 class=next>next</div>
+<script>
+const shown = (id) => getComputedStyle(document.getElementById(id)).display !== 'none';
+const checks = {
+  t1: () => !shown('t1'), c1: () => shown('c1'), t2: () => !shown('t2'), t3: () => !shown('t3'),
+  t4: () => !shown('t4'), c4: () => shown('c4'), t5: () => !shown('t5'), t6: () => !shown('t6'),
+  c6: () => shown('c6'), t7: () => !shown('t7'), c7: () => shown('c7'), t8: () => !shown('t8'),
+  t9: () => !document.getElementById('t9'),
+  t10: () => getComputedStyle(document.getElementById('t10')).opacity === '0.5',
+  t11: () => !shown('t11'), t12: () => !document.getElementById('t12').classList.contains('ad'),
+  t13: () => !document.getElementById('t13').hasAttribute('data-track'), t14: () => !shown('t14'),
+};
+const check = () => {
+  const wrong = Object.keys(checks).filter((k) => { try { return !checks[k](); } catch (_) { return true; } });
+  document.title = 'Procedural ' + (wrong.length ? wrong.join(' ') : 'ok');
+  if (wrong.length) setTimeout(check, 200);
+};
+setTimeout(check, 200);
+</script>"#;
+/// The rules `PROCEDURAL` checks, one per element.
+const PROCEDURAL_RULES: &[&str] = &[
+    ".post:has-text(Sponsored)",
+    ".badge:has-text(Promoted):upward(.card)",
+    ".mark:upward(2)",
+    "div:matches-attr(\"data-ad-slot\"=\"top\")",
+    ".float:matches-css(position: fixed)",
+    ".long:min-text-length(20)",
+    ":xpath(//section[h2=\"Ad\"])",
+    ".pathy:matches-path(/procedural)",
+    ".gone:remove()",
+    ".restyle:style(opacity: 0.5)",
+    ".pre:matches-css-before(content: /AD/)",
+    ".rmclass:remove-class(ad)",
+    "[data-track]:remove-attr(data-track)",
+    ".lead:has-text(Ad) + .next",
+];
+/// `ADS` again under a policy that refuses inline script and style, its own script served from
+/// the page's origin. A user scriptlet sets `lynkSet` and a user rule hides `.promo`; the title
+/// says what got through: `Csp <promo> <scriptlet>`.
+const CSP: &str = r#"<!doctype html><title>Csp</title><div class="promo">Promo</div><p>Content</p>
+<script src="/csp.js"></script>"#;
+const CSP_SCRIPT: &str = "setInterval(() => { document.title = \
+    `Csp ${getComputedStyle(document.querySelector('.promo')).display} ${window.lynkSet === 1 ? 'set' : 'unset'}`; }, 200);";
+const CSP_POLICY: &str = "Content-Security-Policy: script-src 'self'; style-src 'self'\r\n";
+/// Frames the address after `?`, which tells it what became of its `.ad_banner`; the title says
+/// it: `Framed <display>`.
+const FRAMED: &str = r#"<!doctype html><title>Framed</title>
+<script>addEventListener('message', (e) => { document.title = 'Framed ' + e.data; });</script>
+<iframe id=frame width=400 height=200></iframe>
+<script>document.getElementById('frame').src = decodeURIComponent(location.search.slice(1));</script>"#;
+/// An element EasyList's generic `##.ad_banner` hides, reported to the framing page.
+const AD_FRAME: &str = r#"<!doctype html><div class="ad_banner">Ad</div><p>Frame</p>
+<script>setInterval(() => parent.postMessage(getComputedStyle(document.querySelector('.ad_banner')).display, '*'), 200);</script>"#;
 /// A page with an icon of its own.
 const ICONIC: &str = "<!doctype html><title>Iconic</title><link rel=icon href=/icon.svg><p>Its own icon.";
 const ICON: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='#c33'/></svg>";
@@ -152,6 +222,11 @@ fn respond(mut stream: std::net::TcpStream) {
         "/popups" => page(POPUPS),
         "/plain" => page(PLAIN),
         "/iconic" => page(ICONIC),
+        "/procedural" => page(PROCEDURAL),
+        "/framed" => page(FRAMED),
+        "/ad-frame" => page(AD_FRAME),
+        "/csp" => ("200 OK", CSP_POLICY.to_owned(), CSP.to_owned()),
+        "/csp.js" => ("200 OK", "Content-Type: text/javascript\r\n".to_owned(), CSP_SCRIPT.to_owned()),
         "/icon.svg" => ("200 OK", "Content-Type: image/svg+xml\r\n".to_owned(), ICON.to_owned()),
         "/ads" => page(ADS),
         "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
@@ -1061,6 +1136,89 @@ fn blocking_profile(name: &str) -> PathBuf {
     });
     drop(store);
     dir
+}
+
+/// The user's procedural rules on a local page: every operator adblock-rust reports narrows to
+/// its element and every action applies, while the elements beside them stay.
+#[test]
+fn real_blocking_runs_procedural_rules() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = blocking_profile("procedural");
+    let store = lynk_core::adblock::open(&dir);
+    store.update(|s| {
+        for rule in PROCEDURAL_RULES {
+            s.hide("127.0.0.1", rule, "Procedural", "", 1);
+        }
+    });
+    drop(store);
+    let app = launch_on(&dir, &[format!("{base}/procedural")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Procedural")));
+    // The engine compiles off the main thread; the page loaded before it may have gone through.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while titles(&app) != ["Procedural ok"] {
+        assert!(Instant::now() < deadline, "procedural rules missed, title {:?}", titles(&app));
+        click_page(&app, 300.);
+        hid(&app, key::R, &[os::CMD]);
+        std::thread::sleep(Duration::from_secs(3));
+    }
+    shot(&app, "blocking-procedural");
+}
+
+/// A page whose policy refuses inline script and style still gets the user's hide rule and
+/// scriptlet.
+#[test]
+fn real_blocking_reaches_a_page_under_a_strict_policy() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = blocking_profile("csp");
+    let store = lynk_core::adblock::open(&dir);
+    store.update(|s| {
+        s.hide("127.0.0.1", "+js(set-constant, lynkSet, 1)", "Scriptlet", "", 1);
+    });
+    drop(store);
+    let app = launch_on(&dir, &[format!("{base}/csp")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Csp")));
+    // The engine compiles and the scriptlets load off the main thread; the page loaded before
+    // them went through.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while titles(&app) != ["Csp none set"] {
+        assert!(
+            Instant::now() < deadline,
+            "the policy kept the blocker out, title {:?}\n{}",
+            titles(&app),
+            app.stderr_tail(60).join("\n")
+        );
+        click_page(&app, 300.);
+        hid(&app, key::R, &[os::CMD]);
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// EasyList's generic rule reaches a frame from another site, which runs in a process of its
+/// own: the frame reports its classes and gets the matching rules back.
+#[test]
+fn real_blocking_hides_in_a_cross_site_frame() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let v6 = serve_at("[::1]:0");
+    let dir = blocking_profile("framed");
+    let app = launch_on(&dir, &[format!("{base}/framed?{v6}/ad-frame")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Framed")));
+    // The engine compiles off the main thread; the page loaded before it went through.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while titles(&app) != ["Framed none"] {
+        assert!(Instant::now() < deadline, "the frame kept its ad, title {:?}", titles(&app));
+        click_page(&app, 300.);
+        hid(&app, key::R, &[os::CMD]);
+        std::thread::sleep(Duration::from_secs(3));
+    }
 }
 
 /// The blocker on a local page: EasyList's requests stopped and counted in the padlock, the

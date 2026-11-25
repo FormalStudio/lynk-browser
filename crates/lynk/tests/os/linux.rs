@@ -264,6 +264,12 @@ pub fn windows(app: &App) -> Vec<Win> {
         .collect()
 }
 
+/// How many of the app's windows are menus or popovers: Hyprland lists them among its clients with
+/// no layer of their own, so this counts every window.
+pub fn windows_above(app: &App) -> usize {
+    windows(app).len()
+}
+
 /// How many windows the app has, however small: the compositor lists X dialogs among its clients.
 pub fn every_window(app: &App) -> usize {
     windows(app).len()

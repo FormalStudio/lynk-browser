@@ -306,20 +306,34 @@ pub fn scroll(app: &App, at: (f64, f64), dy: i32, _steps: u32) {
     std::thread::sleep(Duration::from_millis(120));
 }
 
-/// Clicks the button titled `title` in one of the app's windows: GPUI draws alerts and dialogs
-/// on Linux, so the automation tree has them.
+/// Clicks the button titled `title` in the app's front window: GPUI draws alerts and dialogs on
+/// Linux, and nd puts them in the automation tree. The alert shows a frame after the click that
+/// asked for it, so the button is looked for until it is laid out.
 pub fn click_button(app: &App, title: &str) {
-    let tree = app.tree(None).unwrap();
-    let (window, button) = tree
-        .windows
-        .iter()
-        .find_map(|w| w.root.iter().find(|n| format!("{:?}", n.role) == "Button" && n.name == title).map(|n| (w, n)))
-        .unwrap_or_else(|| panic!("no {title} button"));
-    let r = button.bounds.expect("the button's bounds");
-    let client = clients(app).into_iter().find(|c| c["title"].as_str() == Some(window.title.as_str()));
-    let at =
-        client.as_ref().map_or((0., 0.), |c| (c["at"][0].as_f64().unwrap_or(0.), c["at"][1].as_f64().unwrap_or(0.)));
-    click(app, (at.0 + f64::from(r.origin.x + r.size.width / 2.), at.1 + f64::from(r.origin.y + r.size.height / 2.)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let r = loop {
+        let tree = app.tree(None).unwrap();
+        let found = tree
+            .windows
+            .iter()
+            .filter(|w| w.key)
+            .find_map(|w| w.root.iter().find(|n| format!("{:?}", n.role) == "Button" && n.name == title)?.bounds);
+        if let Some(found) = found {
+            break found;
+        }
+        if std::time::Instant::now() > deadline {
+            let dialogs: Vec<_> = tree
+                .windows
+                .iter()
+                .flat_map(|w| w.root.iter().filter(|n| format!("{:?}", n.role) == "Dialog"))
+                .map(|d| (d.name.clone(), d.children.iter().map(|b| b.name.clone()).collect::<Vec<_>>()))
+                .collect();
+            panic!("no {title} button in the key window; dialogs showing: {dialogs:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let (x, y, _, _) = front(app).bounds;
+    click(app, (x + f64::from(r.origin.x + r.size.width / 2.), y + f64::from(r.origin.y + r.size.height / 2.)));
     std::thread::sleep(Duration::from_millis(500));
 }
 

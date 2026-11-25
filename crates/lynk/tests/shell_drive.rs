@@ -1121,6 +1121,29 @@ fn real_put_tab_to_sleep_and_wake() {
     until(&app, "the tab awake", 15, |a| live_pages(a) == Some(2));
 }
 
+/// Right-clicks `at` (window points) and picks the item whose title starts with `item`, typed
+/// into the menu as a user selects by typing.
+fn pick_menu(app: &AppHandle, at: (f32, f32), item: &str) {
+    in_front(app);
+    let (wx, wy, _, _) = front_window(app).bounds;
+    let pid = app.pid();
+    let above = || ndshell::window_list::every_layer_of_pid(pid).len() - ndshell::window_list::of_pid(pid).len();
+    let before = above();
+    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
+    // Typed only once the menu's own window is up: letters sent to a menu still opening are lost,
+    // and type-select then lands on another item.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while above() <= before {
+        assert!(Instant::now() < deadline, "the menu for {item} never opened");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for c in item.to_ascii_lowercase().chars() {
+        ndshell::input::key(key_of(c), &[]);
+        std::thread::sleep(Duration::from_millis(60));
+    }
+    hid(36, &[]);
+}
+
 /// The macOS key code of a lowercase letter or a space, for typing into an open menu.
 fn key_of(c: char) -> u16 {
     const LETTERS: &str = "asdfhgzxcv_bqweryt123465=97-80]ou[ip_lj'k;\\,/nm.";
@@ -1128,20 +1151,6 @@ fn key_of(c: char) -> u16 {
         return 49;
     }
     LETTERS.find(c).map(|i| i as u16).expect("a key for the letter")
-}
-
-/// Right-clicks `at` (window points) and picks the item whose title starts with `item`, typed
-/// into the menu as a user selects by typing.
-fn pick_menu(app: &AppHandle, at: (f32, f32), item: &str) {
-    in_front(app);
-    let (wx, wy, _, _) = front_window(app).bounds;
-    ndshell::input::right_click((wx + f64::from(at.0), wy + f64::from(at.1)));
-    std::thread::sleep(Duration::from_millis(600));
-    for c in item.to_ascii_lowercase().chars() {
-        ndshell::input::key(key_of(c), &[]);
-        std::thread::sleep(Duration::from_millis(60));
-    }
-    hid(36, &[]);
 }
 
 /// The title of the app's first window, which is the shown tab's.

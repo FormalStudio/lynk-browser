@@ -2845,12 +2845,14 @@ fn real_delete_the_open_profile() {
     run_command(&app, "delete profile", "Delete Profile");
     std::thread::sleep(Duration::from_secs(1));
     shot(&app, "profiles-delete-asks");
+    assert!(os::alert_button_shown(&app, "Cancel"), "Delete Profile asks first");
     os::click_button(&app, "Cancel");
-    std::thread::sleep(Duration::from_secs(1));
+    until(&app, "the alert gone after Cancel", 10, |a| !os::alert_button_shown(a, "Cancel"));
     assert_eq!(window_count(&app), 2, "Cancel keeps the profile");
     run_command(&app, "delete profile", "Delete Profile");
     std::thread::sleep(Duration::from_secs(1));
     os::click_button(&app, "Delete Profile");
+    until(&app, "the alert gone after Delete", 10, |a| !os::alert_button_shown(a, "Cancel"));
     until(&app, "its window gone", 15, |a| window_count(a) == 1);
     assert_eq!(all_titles(&app), ["Alpha"]);
     assert_eq!(profiles_in(&dir).len(), 1);

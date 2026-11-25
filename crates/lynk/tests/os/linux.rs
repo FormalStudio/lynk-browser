@@ -337,6 +337,15 @@ pub fn click_button(app: &App, title: &str) {
     std::thread::sleep(Duration::from_millis(500));
 }
 
+/// Whether a drawn alert in one of the app's windows shows a button called `title`.
+pub fn alert_button_shown(app: &App, title: &str) -> bool {
+    let Ok(tree) = app.tree(None) else { return false };
+    tree.windows
+        .iter()
+        .flat_map(|w| w.root.iter())
+        .any(|n| format!("{:?}", n.role) == "Dialog" && n.children.iter().any(|b| b.name == title))
+}
+
 pub fn right_click(app: &App, at: (f64, f64)) {
     app.input.borrow_mut().right_click(at.0, at.1).unwrap();
 }

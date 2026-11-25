@@ -50,6 +50,7 @@ impl Render for BrowserWindow {
                 nd::prelude::sidebar()
                     .collapsed(hidden)
                     .width(px(sidebar::WIDTH))
+                    .resizable()
                     .under_toolbar()
                     .footer(foot)
                     .on_collapse_change(cx.listener(|win, e: &PaneCollapsed, _, cx| {

@@ -668,6 +668,90 @@ fn real_the_cursor_follows_the_page() {
     assert_eq!(back, link, "the hand again over the link");
 }
 
+/// nd's chrome shows the cursor for what is under it, as the page does: an I-beam over the
+/// command bar's field (the page's own I-beam), a resize cursor on both halves of the sidebar's
+/// edge, the arrow over the sidebar's buttons, and the same resize cursor on DevTools' divider.
+/// The images go to the run's shots.
+#[test]
+fn real_the_chrome_cursors() {
+    if !real_allowed() {
+        return;
+    }
+    let page = "data:text/html,<style>body{margin:0;font:20px sans-serif}a,input,p{display:block;height:60px;margin:0}</style><a href=%23x>a link to follow</a><input value=field><p>Plain text in a paragraph</p>";
+    let app = launch(page);
+    until(&app, "the page", 30, |a| a.get_by_test_id("content").bounding_box().ok().flatten().is_some());
+    std::thread::sleep(Duration::from_secs(1));
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let over = |what: &str, point: (f64, f64)| {
+        os::move_to(&app, point);
+        std::thread::sleep(Duration::from_millis(400));
+        let cursor = os::cursor(&app);
+        write_cursor(&cursor, &format!("chrome-cursor-{what}"));
+        cursor.3
+    };
+    let in_window = |x: f32, y: f32| (wx + f64::from(x), wy + f64::from(y));
+    let page = app.get_by_test_id("content").bounding_box().unwrap().unwrap();
+    let hand = over("page-link", in_window(page.x + 40., page.y + 20.));
+    let ibeam = over("page-field", in_window(page.x + 40., page.y + 90.));
+    let arrow = over("page-empty", in_window(page.x + 40., page.y + 400.));
+
+    let sidebar = app.get_by_test_id("sidebar").bounding_box().unwrap().unwrap();
+    let edge = sidebar.x + sidebar.width;
+    let mid = sidebar.y + sidebar.height / 2.;
+    let edge_in = over("sidebar-edge-inside", in_window(edge - 2., mid));
+    let edge_out = over("sidebar-edge-outside", in_window(edge + 2., mid));
+    let sidebar_empty = over("sidebar-empty", in_window(sidebar.x + sidebar.width / 2., mid));
+    let foot = app.get_by_test_id("sidebar-foot").bounding_box().unwrap().unwrap();
+    let button = over("sidebar-button", in_window(foot.x + 16., foot.y + foot.height / 2.));
+    for (what, cursor) in [("inside", &edge_in), ("outside", &edge_out)] {
+        assert!(*cursor != arrow && *cursor != ibeam && *cursor != hand, "a resize cursor on the edge's {what} half");
+    }
+    assert!(edge_in == edge_out, "one cursor along the whole edge");
+    assert!(button == sidebar_empty, "the arrow over a sidebar button");
+    assert!(button == arrow, "the chrome's arrow is the page's");
+
+    open_bar(&app, key::K);
+    let field = app
+        .tree(None)
+        .unwrap()
+        .windows
+        .iter()
+        .find_map(|w| w.root.iter().find(|n| format!("{:?}", n.role) == "SearchBox").and_then(|n| n.bounds))
+        .expect("the bar's field");
+    let bar =
+        over("bar-field", in_window(field.origin.x + field.size.width / 2., field.origin.y + field.size.height / 2.));
+    assert!(bar == ibeam, "the page's I-beam over the bar's field");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
+
+    let main = front_window(&app).address;
+    os::key(&app, key::F12, &[]);
+    until(&app, "DevTools", 10, |a| os::windows(a).len() == 2);
+    std::thread::sleep(Duration::from_secs(2));
+    let tools = os::windows(&app).into_iter().find(|w| w.address != main).expect("the DevTools window");
+    os::capture(&app, &tools, &os::shot_path("chrome-cursor-devtools"));
+    let (x, y, w, h) = tools.bounds;
+    // Elements' DOM tree and its Styles pane split the window side by side; the divider
+    // between them is a few pixels wide, somewhere in the middle half.
+    let mut seen = Vec::new();
+    let mut at = x + w * 0.25;
+    while at < x + w * 0.75 {
+        let point = (at, y + h / 2.);
+        os::move_to(&app, point);
+        std::thread::sleep(Duration::from_millis(40));
+        let cursor = os::cursor(&app);
+        if !seen.iter().any(|(_, c): &(String, Vec<u32>)| *c == cursor.3) {
+            write_cursor(&cursor, &format!("chrome-cursor-devtools-{}", seen.len()));
+            seen.push((format!("{point:?}"), cursor.3));
+        }
+        at += 2.;
+    }
+    let divider = seen.iter().find(|(_, c)| *c == edge_in);
+    assert!(divider.is_some(), "the sidebar edge's resize cursor on DevTools' divider; {} cursors seen", seen.len());
+    println!("devtools divider at {}", divider.unwrap().0);
+    quit_by(&app, Quit::Term);
+}
+
 /// A cursor image as XFixes reports it (premultiplied ARGB), as a PNG under the run's shots.
 fn write_cursor((_, width, height, pixels): &(String, u16, u16, Vec<u32>), name: &str) {
     let path = os::shot_path(name).with_extension("png");

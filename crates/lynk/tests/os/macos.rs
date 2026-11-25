@@ -221,6 +221,24 @@ pub fn click_button(app: &App, title: &str) {
     std::thread::sleep(Duration::from_millis(500));
 }
 
+/// Whether an alert of the app shows a button called `title`, in a window or a sheet.
+pub fn alert_button_shown(app: &App, title: &str) -> bool {
+    let script = format!(
+        r#"tell application "System Events" to tell (first process whose unix id is {pid})
+            repeat with w in windows
+                if exists button "{title}" of w then return "yes"
+                if exists sheet 1 of w then
+                    if exists button "{title}" of sheet 1 of w then return "yes"
+                end if
+            end repeat
+            return "no"
+        end tell"#,
+        pid = app.pid()
+    );
+    let out = Command::new("osascript").args(["-e", &script]).output().unwrap();
+    String::from_utf8_lossy(&out.stdout).trim() == "yes"
+}
+
 /// How many windows the app has on every layer, however small.
 pub fn every_window(app: &App) -> usize {
     ndshell::window_list::every_layer_of_pid(app.pid()).len()

@@ -87,6 +87,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] [mac] "New tab" row after the tabs, dimmed until pointed at; [linux] a "+" at the foot's trailing end instead
 - [ ] Foot, in order: settings, padlock, zoom (while not 100%), blocked pop-ups, extensions puzzle and pinned extension buttons, downloads; [linux] downloads leads and "+" closes the row
 - [ ] The tab list scrolls; the controls row, pinned block and foot stay put
+- [x] [linux] The sidebar's trailing edge drags to resize it, with the resize cursor on both sides of the edge, over the page too; the command bar's field shows the I-beam, buttons the arrow, and DevTools' divider the same resize cursor (drive: `real_the_chrome_cursors`)
 - [x] Drag a row: a line marks the slot, a drop on the list reorders and unpins, a drop on the pinned block pins, an empty one included (lane `nd-tab-drag`; old drive `mac-tabdrag`; drive: `real_a_row_dragged_in_the_list_marks_its_slot`, `real_drag_between_the_list_and_the_pins`, `real_a_row_dropped_on_the_empty_pinned_block_pins`)
 - [ ] Drag a tile over the others: the tile takes the slot under the pointer and the rest slide aside (0.2 s ease-out); a drop keeps the order, Esc or a release outside puts it back
 - [ ] A row or tile dropped on another window moves the live page there without a reload

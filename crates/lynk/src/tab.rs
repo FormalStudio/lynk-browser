@@ -4,7 +4,7 @@
 
 use lynk_core::tabstate::{FindState, SecurityFacts, create_at_url, tab_hover, tab_label};
 use nd::prelude::*;
-use nd::webview::{UserScript, WebView, WebViewOptions};
+use nd::webview::{Profile, UserScript, WebView, WebViewOptions};
 
 /// Unique across every window, so a tab keeps its id when it moves.
 pub type TabId = u64;
@@ -100,6 +100,12 @@ pub struct Tab {
     /// Where the page was last scrolled, `None` at the top: what it goes back to when it loads
     /// again after sleeping or a relaunch.
     pub scroll: Option<(f64, f64)>,
+    /// Where a pinned tab was pinned, which Reset to Pinned Page goes back to.
+    pub pinned_url: Option<String>,
+    /// Muted by the user; a page the tab gets later starts muted too.
+    pub muted: bool,
+    /// The Chromium profile its pages are made in: its window's.
+    pub profile: Profile,
     pub rt: Runtime,
     pub find: FindState,
 }
@@ -119,6 +125,9 @@ impl Tab {
             opener: None,
             favicon: None,
             scroll: None,
+            pinned_url: None,
+            muted: false,
+            profile: Profile::Default,
             rt: Runtime::default(),
             find: FindState::default(),
         }
@@ -178,7 +187,10 @@ impl Tab {
             return;
         }
         // Scripts reach only documents that start after them, so the load comes last.
-        let live = Live::new(WebView::with_options(page_options()), self.scroll);
+        let live = Live::new(WebView::with_options(page_options().profile(self.profile.clone())), self.scroll);
+        if self.muted {
+            live.view.set_muted(true);
+        }
         live.view.load(self.url.clone());
         self.page = Page::Live(live);
     }

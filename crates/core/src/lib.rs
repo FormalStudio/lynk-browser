@@ -19,6 +19,7 @@ pub mod mru;
 pub mod omnibox;
 pub mod pages;
 pub mod permissions;
+pub mod profiles;
 pub mod session;
 pub mod settings;
 pub mod settings_registry;

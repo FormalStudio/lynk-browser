@@ -263,7 +263,7 @@ fn new_window(w: &mut BrowserWindow, opener: TabId, e: &NewWindow, cx: &mut Cont
             w.insert(tab, Open::FromPage { opener, foreground: false }, cx);
         }
         Disposition::Window => {
-            crate::app::open_window(cx, vec![tab], Some(id));
+            crate::app::open_window_in(cx, w.profile.clone(), vec![tab], Some(id));
         }
     }
 }

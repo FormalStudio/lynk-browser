@@ -83,12 +83,13 @@ fn bars(cx: &mut App) -> &mut HashMap<WindowId, Bar> {
 /// Opens the bar, or reseeds the one already open: never a second.
 fn present(win: &BrowserWindow, mode: OmniMode, query: String, target: OmniTarget, cx: &mut Context<BrowserWindow>) {
     bars(cx).insert(win.id, Bar { mode, target, query, history: Vec::new(), asked: 0, completes: true });
-    ask_history(win.id, cx);
+    ask_history(win, cx);
     cx.notify();
 }
 
 /// Searches history for the bar's query; the answer lands only if no later search was asked.
-fn ask_history(win: WindowId, cx: &mut Context<BrowserWindow>) {
+fn ask_history(w: &BrowserWindow, cx: &mut Context<BrowserWindow>) {
+    let (win, profile) = (w.id, w.profile.clone());
     let Some(bar) = bars(cx).get_mut(&win) else { return };
     if bar.mode != OmniMode::Address {
         return;
@@ -100,7 +101,7 @@ fn ask_history(win: WindowId, cx: &mut Context<BrowserWindow>) {
         return;
     }
     let this = cx.weak_entity();
-    crate::history::search(cx, query, move |visits, cx| {
+    crate::history::search(cx, &profile, query, move |visits, cx| {
         let Some(bar) = bars(cx).get_mut(&win).filter(|b| b.asked == asked) else { return };
         bar.history = visits.into_iter().map(|v| OmniVisit { url: v.url, title: v.title }).collect();
         let _ = this.update(cx, |_, cx| cx.notify());
@@ -155,7 +156,7 @@ pub fn overlay(win: &BrowserWindow, _: &mut Window, cx: &mut Context<BrowserWind
                     bar.completes = e.text.len() > bar.query.len();
                     bar.query = e.text.to_string();
                 }
-                ask_history(win.id, cx);
+                ask_history(win, cx);
                 cx.notify();
             }))
             .on_activate(cx.listener(|win, e: &PaletteActivated, window, cx| activate(win, &e.id, window, cx)))
@@ -199,6 +200,8 @@ fn rows(win: &BrowserWindow, bar: &Bar, cx: &App) -> Vec<OmniRow> {
         reading: false,
         blocking: None,
         favicon: &|_| None,
+        profiles: &crate::profile::others(cx, &win.profile),
+        default_profile: win.profile == lynk_core::profiles::DEFAULT_ID,
         mac: target() == Target::MacOs,
     };
     omni_rows(&input)
@@ -257,6 +260,10 @@ fn command(id: &str) -> Option<&'static Command> {
         "next-tab" => NextTab.name(),
         "prev-tab" => PreviousTab.name(),
         "pin-tab" => TogglePin.name(),
+        "new-profile" => NewProfile.name(),
+        "rename-profile" => RenameProfile.name(),
+        "delete-profile" => DeleteProfile.name(),
+        "reset-pinned" => ResetPinnedPage.name(),
         "sleep-tab" => SleepTab.name(),
         "duplicate-tab" => DuplicateTab.name(),
         "move-new-window" => MoveTabToNewWindow.name(),
@@ -301,6 +308,9 @@ fn activate(win: &mut BrowserWindow, id: &str, window: &mut Window, cx: &mut Con
     }
     if let Some(tab) = id.strip_prefix("tab:").and_then(|t| t.parse().ok()) {
         return win.select(tab, cx);
+    }
+    if let Some(profile) = id.strip_prefix("profile:") {
+        return crate::profile::switch(win, &actions::SwitchProfile(profile.to_owned()), window, cx);
     }
     if let Some(handler) = id.strip_prefix("cmd:").and_then(command).and_then(|c| c.handler) {
         handler(win, win.active, window, cx);

@@ -65,7 +65,7 @@ const KEYS: &[Key] = &[
     k("devtools", "Developer tools", "primary+alt+i", "primary+shift+i"),
     k("clear-data", "Clear browsing data", "primary+shift+backspace", "primary+shift+delete"),
     k("fullscreen", "Full screen", "primary+ctrl+f", "F11"),
-    new("pin-tab", "Pin or unpin tab", "primary+shift+d", "primary+shift+d"),
+    k("pin-tab", "Pin or unpin tab", "primary+shift+d", "primary+shift+d"),
     new("open-as-split", "Open as split", "primary+enter", "primary+enter"),
     new("tidy", "Tidy tabs", "primary+alt+t", "primary+alt+t"),
     new("add-separator", "Add separator below", "", ""),

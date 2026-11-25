@@ -138,6 +138,19 @@ pub fn tab_hover(title: &str, url: &str) -> String {
     }
 }
 
+/// The letter a pinned tile shows while its site has no icon: the label's first, `www.` left
+/// out, upper case, or a middle dot for a label with none.
+pub fn tile_letter(label: &str) -> String {
+    let label = label.trim();
+    let label = label.strip_prefix("www.").unwrap_or(label);
+    label.chars().next().map_or_else(|| "\u{b7}".into(), |c| c.to_uppercase().collect())
+}
+
+/// "Reset to Pinned Page" has somewhere to go: the pinned tab has left the page it was pinned at.
+pub fn left_pinned_page(pinned_url: Option<&str>, url: &str) -> bool {
+    pinned_url.is_some_and(|p| !p.is_empty() && p != url)
+}
+
 /// How a window is named where another window offers to send a tab to it: after the tab it
 /// shows, the way Chrome's Move Tab menu names one.
 pub fn window_label(active_title: &str, active_url: &str, count: usize) -> String {
@@ -192,5 +205,17 @@ mod tests {
         assert_eq!(tab_audio(false, false), None);
         assert!(create_at_url("chrome://settings") && create_at_url("view-source:https://a.test/"));
         assert!(!create_at_url("https://chrome.test/"));
+    }
+
+    #[test]
+    fn tiles_and_pinned_pages() {
+        assert_eq!(tile_letter("www.example.com"), "E");
+        assert_eq!(tile_letter("  github"), "G");
+        assert_eq!(tile_letter("\u{e9}t\u{e9}"), "\u{c9}");
+        assert_eq!(tile_letter(""), "\u{b7}");
+        assert!(left_pinned_page(Some("https://a.test/"), "https://a.test/x"));
+        assert!(!left_pinned_page(Some("https://a.test/"), "https://a.test/"));
+        assert!(!left_pinned_page(None, "https://a.test/"));
+        assert!(!left_pinned_page(Some(""), "https://a.test/"), "a tab pinned on the new tab page has no page");
     }
 }

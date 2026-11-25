@@ -568,14 +568,17 @@ fn real_beforeunload_holds_the_close() {
 }
 
 /// Waits for the app to exit.
+/// Whether the process has exited. The test holds a launched app unreaped, so an exited one
+/// lingers as a zombie.
+fn gone(pid: u32) -> bool {
+    let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    stat.trim().is_empty() || stat.starts_with('Z')
+}
+
 fn exited(app: &AppHandle, secs: u64) {
-    let pid = app.pid().to_string();
-    // The test holds the child unreaped, so an exited app lingers as a zombie.
-    let gone = || {
-        let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid]).output().unwrap();
-        let stat = String::from_utf8_lossy(&out.stdout);
-        stat.trim().is_empty() || stat.starts_with('Z')
-    };
+    let pid = app.pid();
+    let gone = || gone(pid);
     let deadline = Instant::now() + Duration::from_secs(secs);
     while !gone() {
         assert!(
@@ -1908,26 +1911,34 @@ fn real_two_launches_at_once_share_one_session() {
         .env("ND_CEF_STYLE", "chrome")
         .env("ND_APP_DATA_DIR", profile.display().to_string())
         .arg(format!("{base}/press"));
-    match launch_app(options) {
-        Ok(app) => {
-            // This launch holds the profile; the other hands its address over and quits.
-            let deadline = Instant::now() + Duration::from_secs(20);
-            while other.try_wait().unwrap().is_none() {
-                assert!(
-                    Instant::now() < deadline,
-                    "the other launch kept running\nit:\n{}\nthis one:\n{}",
-                    main_thread_of(other.id()),
-                    main_thread_of(app.pid())
-                );
-                std::thread::sleep(Duration::from_millis(100));
-            }
+    // Either launch can take the profile. This one can open its automation socket and still
+    // lose, hand its address over and quit, so the one left running is the one that won.
+    let this = launch_app(options).ok();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let won = loop {
+        let this_gone = this.as_ref().is_none_or(|a| gone(a.pid()));
+        if this_gone {
+            break None;
+        }
+        if other.try_wait().unwrap().is_some() {
+            break this;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "both launches kept running\nthe other:\n{}\nthis one:\n{}",
+            main_thread_of(other.id()),
+            this.as_ref().map(|a| main_thread_of(a.pid())).unwrap_or_default()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    match won {
+        Some(app) => {
             activate(app.pid());
             until(&app, "both launches' tabs", 30, |a| rows(a).len() == 4);
             quit(&app);
         }
-        Err(_) => {
-            // This launch lost the race, handed its address to the other and quit; the other
-            // runs without automation, so its session file says when both tabs are in.
+        None => {
+            // The other runs without automation, so its session file says when both tabs are in.
             let deadline = Instant::now() + Duration::from_secs(30);
             while saved_urls(&profile).len() < 4 {
                 assert!(Instant::now() < deadline, "the session never held both launches' tabs");

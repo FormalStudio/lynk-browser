@@ -367,11 +367,7 @@ pub const COMMANDS: &[Command] = &[
         .extra_keys(&["f12"])
         .menu(MenuId::View)
         .enabled(has_address)
-        .handler(|w, id, _, _| {
-            if let Some(page) = view_of(w, id) {
-                page.open_dev_tools();
-            }
-        }),
+        .handler(crate::devtools::toggle),
     Command::new::<NextTab>("Next Tab").key("next-tab").menu(MenuId::Tabs).handler(|w, _, _, cx| w.cycle(1, cx)),
     Command::new::<PreviousTab>("Previous Tab")
         .key("prev-tab")

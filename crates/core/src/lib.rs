@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer};
 pub mod adblock;
 pub mod archive;
 pub mod bookmarks;
+pub mod devtools;
 pub mod downloads;
 pub mod extensions;
 pub mod favicons;

@@ -104,7 +104,8 @@ impl BrowserWindow {
             let pad = cx.theme().spacing.sm;
             shown = shown.child(div().absolute().top(pad).right(pad).child(bar));
         }
-        shown.child(held).into_any_element()
+        let held = held.children(crate::devtools::held(self, cx));
+        crate::devtools::dock(self, shown.child(held).into_any_element(), cx)
     }
 
     /// A 2 pt line in the secondary ink along the page's top edge while it loads.

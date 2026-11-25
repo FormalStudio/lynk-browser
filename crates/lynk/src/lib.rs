@@ -10,6 +10,7 @@
 
 pub mod actions;
 pub mod app;
+pub mod devtools;
 pub mod find;
 pub mod history;
 pub mod omnibox;

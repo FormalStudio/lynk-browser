@@ -231,6 +231,16 @@ stateDiagram-v2
 - **Errors.** A failed load sets `rt.error` and a dead renderer sets `rt.crashed`; `page::cover`
   draws "Unable to load this page" or "Aw, Snap!" over the page with a retry button.
 
+- **DevTools.** `devtools.rs` asks a tab's page for its DevTools (`WebView::dev_tools`, a page of
+  their own) and keeps them per tab, with the page they inspect; a tab whose page is replaced or
+  slept loses them. Each window keeps a `lynk_core::devtools::Dock`: the side (below, beside, or a
+  window of their own) and the page's share per docked side. `shell::content` hands the page
+  area to `devtools::dock`, which wraps it in an nd `split` with the DevTools and their bar when
+  the shown tab has them, and returns it unchanged otherwise or during the page's fullscreen.
+  Tabs not on show keep their DevTools in the holder like any page. The window remembers the
+  side for the next DevTools opened in it; closing the tab, moving it to another window or
+  closing the window closes them.
+
 ## Registries
 
 Later features plug in by appending to a list the shell owns. Each list is a `const` slice of
@@ -468,6 +478,7 @@ Shell, `crates/lynk/src`:
 | `omnibox.rs` | the command bar: its state per window, running the picked row | rank rows or parse typed text (core does) |
 | `history.rs` | recording visits and titles, searching them for the bar | rank matches (core does) |
 | `zoom.rs` | zoom steps, the foot glyph and popover | store levels outside `app` |
+| `devtools.rs` | each tab's DevTools, each window's dock, the split and the DevTools window | reach into the inspected page |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |
 | `main.rs` | calls `lynk::run` | anything else |
 
@@ -492,6 +503,7 @@ Core, `crates/core/src`:
 | `favicons` | the icon cache per origin and appearance | decode for drawing |
 | `permissions` | prompt sentences, decisions per origin | answer a prompt |
 | `zoom` | Chromium's zoom steps, levels per host | set a page's zoom |
+| `devtools` | a window's DevTools side and each side's share | hold DevTools |
 | `extensions` | extension rows, pins, popup bounds | talk to Chromium |
 | `webstore` | the store fixup and install hold scripts, permission lines | install |
 | `adblock` | `blocking.json`, the engine build and cache | hold the engine across a network call |

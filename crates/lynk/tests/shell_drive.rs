@@ -4911,6 +4911,74 @@ fn real_named_separators() {
     quit(&app);
 }
 
+/// The bar's Add Separator Below lands under the shown tab; the separator's menu renames it with
+/// its name selected and deletes it with the tabs kept; it takes no hover fill and a click never
+/// shows it; a tab drags across it, and it dropped on the pins goes back to its place.
+#[test]
+fn real_separator_menu_and_bar() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/alpha"), format!("{base}/beta"), format!("{base}/press")]);
+    until(&app, "three rows", 30, |a| titles(a).len() == 3);
+    for (n, title) in ["Alpha", "Beta", "Press"].into_iter().enumerate() {
+        press(&app, &format!("cmd-{}", n + 1));
+        until(&app, title, 15, |a| shown_title(a) == title);
+    }
+    press(&app, "cmd-2");
+    until(&app, "Beta shown", 15, |a| shown_title(a) == "Beta");
+    run_command(&app, "add separator", "Add Separator Below");
+    until(&app, "the name field focused", 10, |a| name_field(a).is_some_and(|f| f.1));
+    type_real(&app, "Work");
+    until(&app, "the name typed", 10, |a| name_field(a).is_some_and(|f| f.0 == "Work"));
+    hid(&app, key::ENTER, &[]);
+    until_order(&app, "the separator under the shown tab", &["Alpha", "Beta", "| Work", "Press"]);
+
+    pick_menu(&app, separator_at(&app, "Work"), "Rename Separator");
+    until(&app, "the rename field with the name", 10, |a| name_field(a).is_some_and(|f| f.1 && f.0 == "Work"));
+    type_real(&app, "Play");
+    until(&app, "the selected name replaced", 10, |a| name_field(a).is_some_and(|f| f.0 == "Play"));
+    hid(&app, key::ENTER, &[]);
+    until_order(&app, "renamed from its menu", &["Alpha", "Beta", "| Play", "Press"]);
+
+    let win = front_window(&app);
+    let (wx, wy, _, _) = win.bounds;
+    let sep = separator_at(&app, "Play");
+    let sidebar = app.get_by_test_id("sidebar").bounding_box().unwrap().expect("the sidebar is laid out");
+    let probe = (f64::from(sidebar.x + sidebar.width - 24.), f64::from(sep.1 - 7.));
+    os::move_to(&app, (wx + 400., wy + 300.));
+    std::thread::sleep(Duration::from_millis(400));
+    let rest = os::pixel(&app, &win, &shot(&app, "separator-rest"), probe);
+    os::move_to(&app, (wx + probe.0, wy + probe.1));
+    std::thread::sleep(Duration::from_millis(400));
+    let hovered = os::pixel(&app, &win, &shot(&app, "separator-hover"), probe);
+    assert_eq!(rest, hovered, "the separator took a hover fill");
+    real_click(&app, sep.0, sep.1);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(shown_title(&app), "Beta", "a click on the separator changed the shown tab");
+
+    let global = |p: (f32, f32)| (wx + f64::from(p.0), wy + f64::from(p.1));
+    let from = row_at(&app, 2);
+    let to = row_at(&app, 1);
+    os::drag(&app, global(from), f64::from(to.0 - from.0), f64::from(to.1 - from.1 - 6.), 20);
+    until_order(&app, "Press dragged across the separator", &["Alpha", "Press", "Beta", "| Play"]);
+
+    pick_menu(&app, row_at(&app, 0), "Pin Tab");
+    until(&app, "alpha pinned", 10, |a| tiles(a).len() == 1);
+    until_order(&app, "the list without alpha", &["Press", "Beta", "| Play"]);
+    let from = separator_at(&app, "Play");
+    let (_, (tx, ty, tw, th)) = tiles(&app)[0].clone();
+    os::drag(&app, global(from), f64::from(tx + tw * 1.5 - from.0), f64::from(ty + th / 2. - from.1), 20);
+    std::thread::sleep(Duration::from_millis(600));
+    until_order(&app, "the separator back in its place", &["Press", "Beta", "| Play"]);
+    assert_eq!(tiles(&app).len(), 1, "the separator made a tile");
+
+    pick_menu(&app, separator_at(&app, "Play"), "Delete Separator");
+    until_order(&app, "deleted from its menu, the tabs kept", &["Press", "Beta"]);
+    quit(&app);
+}
+
 /// Tidy Tabs groups the loose tabs under named separators, the same rows as the ones made by
 /// hand: by the system's on-device model where it has one, else by site; Undo Tidy puts the list
 /// back, and once the list changes it is no longer offered.

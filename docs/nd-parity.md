@@ -99,11 +99,11 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 
 ### Separators
 
-- [ ] "Add Separator Below" in the tab menu and the command bar puts a separator under the tab's row (under the shown tab from the bar) with its name field focused; Enter keeps the name, Esc or an empty name leaves an unnamed rule
+- [x] "Add Separator Below" in the tab menu and the command bar puts a separator under the tab's row (under the shown tab from the bar) with its name field focused; Enter keeps the name, Esc or an empty name leaves an unnamed rule (drive: `real_named_separators`, `real_separator_menu_and_bar`)
 - [ ] A separator draws as a hairline rule across the row, its name in secondary text at the favicons' column when it has one; it takes no hover fill and never shows as active
-- [ ] Separator menu: Rename Separator (the same inline field, the name selected) and Delete Separator; deleting keeps every tab under it in place
+- [x] Separator menu: Rename Separator (the same inline field, the name selected) and Delete Separator; deleting keeps every tab under it in place (drive: `real_separator_menu_and_bar`)
 - [ ] A separator drags like a tab row with the same slot line, and tabs drag across it; a separator dropped on the pinned block or into a folder goes back
-- [ ] From the keyboard: the bar's "Add Separator Below", "Rename Separator…" and "Delete Separator" act on the separator nearest above the shown tab
+- [x] From the keyboard: the bar's "Add Separator Below", "Rename Separator…" and "Delete Separator" act on the separator nearest above the shown tab (drive: `real_named_separators`, `real_separator_menu_and_bar`)
 - [ ] Separators, their names and their places restore after a restart, per space and profile
 - [ ] "Tidy Tabs" (command bar and the column's menu) sorts the loose tabs into groups and writes a named separator above each, the same rows a user adds by hand; pinned tabs, folders and splits stay where they are; with fewer than two loose tabs it is absent
 - [ ] [mac] Groups and names come from Apple's on-device model (Foundation Models) where the system has it, told only each tab's title, host and opener; an answer that leaves a tab out, repeats one or names one that is not loose is dropped and the tabs group by site (unit: `the_model_is_told_titles_hosts_and_openers_and_its_fenced_answer_reads`, `a_model_answer_that_leaves_a_tab_out_groups_by_site`, `tidy_writes_separators_leaves_pins_and_folders_and_undo_restores`; the drive `real_tidy_tabs_groups_by_site_and_undoes` checks model groups on a Mac whose model is ready, and the macbook's reports `modelNotReady`, so it has not run that path yet)

@@ -63,9 +63,10 @@ const BUSY: &str = r#"<!doctype html><title>Busy</title>
 const PRESS: &str = r#"<!doctype html><title>Press</title>
 <body style="margin:0;height:400px;background:#dfd" onpointerdown="document.title = 'Pressed'"></body>"#;
 
-/// Its title is "Keys:" and every printable key the page gets.
+/// Its title is "Keys:" and every printable key the page gets. Its text is painted at once:
+/// Chromium drops input to a page until its first contentful paint, up to 500 ms.
 const KEYS: &str = r#"<!doctype html><title>Keys:</title>
-<body style="margin:0;height:600px" onkeydown="if (event.key.length == 1) document.title += event.key"></body>"#;
+<body style="margin:0;height:600px" onkeydown="if (event.key.length == 1) document.title += event.key"><p>Keys</p></body>"#;
 
 const FULL: &str = r#"<!doctype html><title>Full</title>
 <body style="margin:0"><button style="width:100%;height:300px" onclick="document.documentElement.requestFullscreen()">Go fullscreen</button></body>"#;

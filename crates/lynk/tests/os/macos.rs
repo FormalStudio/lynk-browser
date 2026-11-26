@@ -33,6 +33,7 @@ pub mod key {
     pub const A: Code = 0;
     pub const H: Code = 4;
     pub const P: Code = 35;
+    pub const SPACE: Code = 49;
     pub const U: Code = 32;
     pub const F1: Code = 122;
     pub const F7: Code = 98;
@@ -51,6 +52,7 @@ pub const CMD: Modifier = Modifier::Command;
 
 /// Chrome's developer tools chord besides F12.
 pub const DEVTOOLS: (&str, Code, &[Modifier]) = ("Alt+Cmd+I", key::I, &[Modifier::Option, Modifier::Command]);
+pub const READER: (Code, &[Modifier]) = (key::R, &[Modifier::Shift, Modifier::Command]);
 pub const FLOAT: (Code, &[Modifier]) = (key::P, &[Modifier::Option, Modifier::Command]);
 pub const VIEW_SOURCE: (Code, &[Modifier]) = (key::U, &[Modifier::Option, Modifier::Command]);
 /// The sidebar's "New tab" row; Linux has a plus in the foot instead.

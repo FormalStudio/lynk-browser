@@ -163,6 +163,20 @@ const report = () => { if (document.title === 'Hide pressed') return;
 report();
 </script>"#;
 
+/// An article long enough for Readability and to scroll, on a green page.
+const ARTICLE: &str = r#"<!doctype html><title>Article</title>
+<body style="margin:0;background:#dfd"><nav>Home · News · About</nav>
+<article><h1>A long walk along the coast</h1>
+<p>The path leaves the harbour past the fish market and climbs onto the cliffs, where the wind comes straight off the water and the gulls hang still above the edge for minutes at a time.</p>
+<p>Two hours on, the first cove opens below: a crescent of grey shingle, a lifeboat ramp, and a café that has served the same three cakes since anyone in the village can remember.</p>
+<p>From there the walk turns inland through gorse and bracken, following an old miners' track whose stones are polished by a century of boots, past the ruins of an engine house with its chimney still standing.</p>
+<p>The last stretch drops back to the sea at a beach that only appears at low tide, so the walk is best timed by the tables pinned to the harbour noticeboard rather than by the clock.</p>
+<p>By evening the light goes gold and then pink over the headland, and the lighthouse starts its slow sweep across the bay while the café stacks its chairs for the night.</p>
+<p>Ten more paragraphs could follow here about the birds, the boats and the weather, and a reader would scroll past each of them to reach the end of the page.</p>
+<p>The tide tables, the bus back to the harbour and the opening hours of the café are all on the noticeboard by the lifeboat station, beside a map of the path.</p>
+<p>Walkers who want a shorter day can take the bus out to the engine house and walk only the last stretch back to the beach and the harbour beyond it.</p>
+</article></body>"#;
+
 /// A small video and a large playing one, both fed from a canvas, and a title that says which is
 /// in picture-in-picture: `Video <id>` or `Video none`.
 const VIDEO: &str = r#"<!doctype html><title>Video none</title>
@@ -277,6 +291,7 @@ fn respond(mut stream: std::net::TcpStream) {
         "/icon.svg" => ("200 OK", "Content-Type: image/svg+xml\r\n".to_owned(), ICON.to_owned()),
         "/ads" => page(ADS),
         "/hide" => page(HIDE),
+        "/article" => page(ARTICLE),
         "/video" => page(VIDEO),
         "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
         "/dark-scheme" => page(DARK_SCHEME),
@@ -1556,6 +1571,83 @@ fn real_float_video_lifts_the_playing_one_and_brings_it_back() {
     });
 }
 
+/// Reading mode in light then dark: Shift+Cmd+R lays the article over the green page in the
+/// appearance's ground, the command turns to Leave Reading Mode, Space scrolls the reader, Esc
+/// leaves, a same-document navigation leaves, and a page with no article says so.
+#[test]
+fn real_reading_mode_enters_scrolls_and_leaves() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for (appearance, ground) in [("light", [255u8, 255, 255]), ("dark", [0x1c, 0x1c, 0x1c])] {
+        let dir = profile(&format!("reader-{appearance}"));
+        let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-reader-{appearance}.toml"));
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let app = os::launch(
+            profile_options(&dir, &[format!("{base}/article")]).env("ND_THEME_TOML", theme.display().to_string()),
+        );
+        os::in_front(&app);
+        until(&app, "the article", 30, |a| titles(a) == ["Article"]);
+        let backdrop = |name: &str| page_backdrop(&app, &format!("reader-{name}-{appearance}"));
+        let green = [0xdd, 0xff, 0xdd];
+        let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 3);
+        let until_ground = |what: &str, want: [u8; 3]| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let got = backdrop(what);
+                if near(got, want) {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "{what}: wanted {want:?}, got {got:?}");
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        };
+        until_ground("page", green);
+        let (code, modifiers) = os::READER;
+        click_page(&app, 300.);
+        hid(&app, code, modifiers);
+        until_ground("on", ground);
+        let before = page_column(&app, &format!("reader-top-{appearance}"));
+        hid(&app, key::SPACE, &[]);
+        std::thread::sleep(Duration::from_millis(800));
+        let after = page_column(&app, &format!("reader-spaced-{appearance}"));
+        assert_ne!(before, after, "Space left the reader where it was");
+        open_bar(&app, key::K);
+        type_real(&app, "reading mode");
+        until_rows(&app, "Leave Reading Mode", |r| r.iter().any(|r| r.starts_with("Leave Reading Mode")));
+        hid(&app, key::ESCAPE, &[]);
+        bar_closed(&app);
+        // The bar took the keyboard; the reader has it again once the page is clicked.
+        click_page(&app, 300.);
+        hid(&app, key::ESCAPE, &[]);
+        until_ground("left by Esc", green);
+        open_bar(&app, key::K);
+        type_real(&app, "reading mode");
+        until_rows(&app, "Reading Mode again", |r| r.iter().any(|r| r.starts_with("Reading Mode")));
+        hid(&app, key::ESCAPE, &[]);
+        bar_closed(&app);
+        click_page(&app, 300.);
+        hid(&app, code, modifiers);
+        until_ground("on again", ground);
+        open_bar(&app, key::L);
+        os::type_text(&app, &format!("{base}/article#later\n"));
+        until_ground("left by a same-document navigation", green);
+        open_bar(&app, key::L);
+        os::type_text(&app, &format!("{base}/alpha\n"));
+        until(&app, "a page with no article", 30, |a| titles(a) == ["Alpha"]);
+        click_page(&app, 200.);
+        hid(&app, code, modifiers);
+        until(&app, "the no-article toast", 10, |a| {
+            a.tree(None).is_ok_and(|t| {
+                t.windows.iter().any(|w| w.root.iter().any(|n| n.name == "No article to read on this page"))
+            })
+        });
+        shot(&app, &format!("reader-none-{appearance}"));
+        quit(&app);
+    }
+}
+
 #[test]
 fn real_chrome_only_keys_open_nothing() {
     if !real_allowed() {
@@ -2304,6 +2396,18 @@ fn real_tab_moves_between_windows_without_a_reload() {
 
 /// The colour the page shows near its bottom right corner, where nothing of its own is drawn,
 /// read from a capture of the window.
+/// A column of the page's pixels down its middle, read off a fresh capture, to tell two apart.
+fn page_column(app: &App, name: &str) -> Vec<[u8; 3]> {
+    let path = shot(app, name);
+    let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+    let win = front_window(app);
+    (1..40)
+        .map(|i| {
+            os::pixel(app, &win, &path, (f64::from(b.x + b.width / 2.), f64::from(b.y + b.height * i as f32 / 40.)))
+        })
+        .collect()
+}
+
 fn page_backdrop(app: &App, name: &str) -> [u8; 3] {
     let path = shot(app, name);
     let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");

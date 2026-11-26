@@ -86,6 +86,7 @@ impl Live {
         view.add_user_script(UserScript::new("lynk-scroll", SCROLL_REPORT).in_world(SCROLL_WORLD));
         crate::blocking::prepare(&view);
         crate::hider::prepare(&view);
+        crate::reader::prepare(&view);
         crate::float::prepare(&view);
         Self { view, key: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), scroll_back }
     }

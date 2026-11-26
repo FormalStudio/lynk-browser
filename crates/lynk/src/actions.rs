@@ -368,7 +368,12 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<ShowDownloads>("Downloads").key("downloads").menu(MenuId::View).after_separator(),
     Command::new::<ShowBookmarks>("Bookmarks").key("bookmarks").menu(MenuId::View),
     Command::new::<BookmarkPage>("Bookmark This Page").key("bookmark-page").menu(MenuId::View).enabled(web_page),
-    Command::new::<ReadingMode>("Reading Mode").key("reader").menu(MenuId::View),
+    Command::new::<ReadingMode>("Reading Mode")
+        .key("reader")
+        .menu(MenuId::View)
+        .flips("Leave Reading Mode", crate::reader::reading)
+        .enabled(web_page)
+        .handler(crate::reader::toggle),
     Command::new::<ToggleAdBlocking>("Allow Ads on This Site")
         .menu(MenuId::View)
         .flips("Block Ads on This Site", crate::blocking::off_here)

@@ -274,6 +274,15 @@ stateDiagram-v2
   document there gets the rule in its head. Show Hidden Elements takes the site's rules back and
   reloads.
 
+- **Reading mode.** `reader.rs` runs `assets/reader.js` in the `lynk-reader` world: Readability
+  (vendored in `assets/readability/`, Apache-2.0) parses a clone of the page, and the article goes
+  over the page in a closed shadow root styled by `assets/reader.css`, which follows light and
+  dark through `prefers-color-scheme` (the page's scheme follows the app's appearance). The page
+  is never touched, so leaving restores nothing. The script answers `on`, `off` or `none`
+  (no article: a toast); Esc in the reader posts `lynkReader`; any `Navigated`, same-document
+  ones included, runs the leave script. The tabs reading are a global set, which flips the
+  command's label.
+
 - **View Source.** Opens `view-source:` in a tab right of the page, for web pages only. Chromium
   reports the source view as navigated to the address it shows, so `page.rs` keeps the tab's
   `view-source:` address, which is no web page and restores as a source view.
@@ -526,6 +535,7 @@ Shell, `crates/lynk/src`:
 | `zoom.rs` | zoom steps, the foot glyph and popover | store levels outside `app` |
 | `blocking.rs` | the request filter, per-tab blocked counts, the site switch and its padlock row, the scriptlet page, the user's hide rules | decide what a rule matches (core does) |
 | `hider.rs` | the element picker in the page and its commands | store rules (blocking does) |
+| `reader.rs` | reading mode over a page, which tabs read | change the page under the reader |
 | `float.rs` | lifting a page's video into picture-in-picture | draw the floating window (Chromium does) |
 | `devtools.rs` | each tab's DevTools, each window's dock, the split and the DevTools window | reach into the inspected page |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |

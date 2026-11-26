@@ -197,7 +197,7 @@ fn rows(win: &BrowserWindow, bar: &Bar, cx: &App) -> Vec<OmniRow> {
         chromium: true,
         pinned,
         can_sleep: win.can_sleep(win.active),
-        reading: false,
+        reading: crate::reader::reading(win, win.active, cx),
         blocking: win.active_tab().and_then(|t| crate::blocking::facts(t, cx)),
         favicon: &|_| None,
         profiles: &crate::profile::others(cx, &win.profile),

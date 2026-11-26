@@ -20,6 +20,7 @@ pub mod omnibox;
 pub mod page;
 pub mod process;
 pub mod profile;
+pub mod reader;
 pub mod separators;
 pub mod session;
 pub mod shell;

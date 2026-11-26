@@ -39,6 +39,7 @@ pub mod key {
     pub const A: Code = 30;
     pub const H: Code = 35;
     pub const P: Code = 25;
+    pub const SPACE: Code = 57;
     pub const U: Code = 22;
     pub const F1: Code = 59;
     pub const F7: Code = 65;
@@ -56,6 +57,7 @@ pub const LINE_END: (Code, &[Modifier]) = (key::END, &[]);
 pub const CMD: Modifier = Modifier::Control;
 
 pub const DEVTOOLS: (&str, Code, &[Modifier]) = ("Ctrl+Shift+I", key::I, &[Modifier::Control, Modifier::Shift]);
+pub const READER: (Code, &[Modifier]) = (key::R, &[Modifier::Control, Modifier::Shift]);
 pub const FLOAT: (Code, &[Modifier]) = (key::P, &[Modifier::Control, Modifier::Alt]);
 pub const VIEW_SOURCE: (Code, &[Modifier]) = (key::U, &[Modifier::Control]);
 pub const NEW_TAB: &str = "sidebar-new-tab";

@@ -16,6 +16,7 @@ nd = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main", d
 
 [dev-dependencies]
 nd = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main", features = ["cef", "test"] }
+nd-data = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 nd-test = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 ndshell = { git = "https://github.com/FormalStudio/NativeDesktop", branch = "main" }
 png = "0.18"

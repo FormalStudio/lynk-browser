@@ -3972,6 +3972,65 @@ fn real_pin_and_unpin() {
     until(&app, "a pinned tab closed", 10, |a| tile_names(a).len() == 1);
 }
 
+/// Whether the tab of the `index`th tile, in reading order, is asleep: no page left for it.
+fn tile_asleep(app: &App, index: usize) -> bool {
+    let Some((window, _)) = window_rows(app) else { return false };
+    let mut tiles: Vec<(f32, f32, &str)> = window
+        .root
+        .iter()
+        .filter(|n| n.visible)
+        .filter_map(|n| {
+            let tab = n.test_id.as_deref()?.strip_prefix("pin-").filter(|t| t.parse::<u64>().is_ok())?;
+            Some((n.bounds?.origin.y, n.bounds?.origin.x, tab))
+        })
+        .collect();
+    tiles.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    tiles.get(index).is_some_and(|(_, _, tab)| !window.root.iter().any(|n| page_of(n) == Some(*tab)))
+}
+
+/// Every item of a tile's menu, picked with the real pointer: Mute Tab mutes the tile's tab and
+/// the item flips to Unmute Tab, Put Tab to Sleep drops its page and keeps the tile, Reset to
+/// Pinned Page goes home, Unpin Tab heads the list and Close Tab closes it.
+#[test]
+fn real_pinned_tile_menu() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch_with(&[format!("{base}/alpha"), format!("{base}/beta"), format!("{base}/press")]);
+    until(&app, "three rows", 30, |a| titles(a).len() == 3 && shown_title(a) == "Alpha");
+    // Tabs load when first shown; Beta needs a page for Put Tab to Sleep to take away.
+    press(&app, "cmd-2");
+    until(&app, "Beta shown", 15, |a| shown_title(a) == "Beta");
+    press(&app, "cmd-1");
+    until(&app, "Alpha shown", 15, |a| shown_title(a) == "Alpha");
+    pick_menu(&app, row_at(&app, 0), "Pin Tab");
+    until(&app, "alpha pinned", 10, |a| tiles(a).len() == 1 && titles(a).len() == 2);
+    pick_menu(&app, row_at(&app, 0), "Pin Tab");
+    until(&app, "beta pinned", 10, |a| tiles(a).len() == 2 && titles(a).len() == 1);
+    assert_eq!(shown_title(&app), "Alpha");
+
+    pick_menu(&app, tile_at(&app, 0), "Mute Tab");
+    until(&app, "alpha muted", 10, |a| tile_names(a)[0].ends_with(" - Audio muted"));
+    pick_menu(&app, tile_at(&app, 0), "Unmute Tab");
+    until(&app, "alpha unmuted", 10, |a| !tile_names(a)[0].ends_with(" - Audio muted"));
+
+    until(&app, "beta loaded behind", 15, |a| !tile_asleep(a, 1));
+    pick_menu(&app, tile_at(&app, 1), "Put Tab to Sleep");
+    until(&app, "beta asleep with its tile", 10, |a| tile_asleep(a, 1) && tiles(a).len() == 2);
+
+    click_page(&app, 100.);
+    until(&app, "the pin left its page", 15, |a| shown_title(a) == "Beta");
+    pick_menu(&app, tile_at(&app, 0), "Reset");
+    until(&app, "back at its pinned page", 15, |a| shown_title(a) == "Alpha");
+
+    pick_menu(&app, tile_at(&app, 1), "Unpin");
+    until(&app, "beta heads the list", 10, |a| tiles(a).len() == 1 && titles(a).first().is_some_and(|t| t == "Beta"));
+    pick_menu(&app, tile_at(&app, 0), "Close Tab");
+    until(&app, "the pin closed", 10, |a| tiles(a).is_empty() && titles(a).len() == 2);
+    quit(&app);
+}
+
 /// Writes one `width` window as the profile's session: `pins` pinned tabs at `base/alpha?p<i>`,
 /// then `rows` tabs at `base/beta?<i>`, showing the first pin.
 fn write_pinned(profile: &std::path::Path, base: &str, pins: usize, rows: usize, width: u32) {

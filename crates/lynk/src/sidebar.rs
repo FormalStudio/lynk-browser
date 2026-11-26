@@ -415,7 +415,10 @@ impl BrowserWindow {
         Some(
             div()
                 .id(format!("pin-{id}"))
-                .role(nd::core::semantic::Role::Button, tab.label())
+                .role(
+                    nd::core::semantic::Role::Button,
+                    if tab.muted { format!("{} - Audio muted", tab.label()) } else { tab.label() },
+                )
                 .size_full()
                 .active(|pose| pose.scale(PRESSED_SCALE))
                 .on_tap(cx.listener(move |win, _: &TapEvent, window, cx| {

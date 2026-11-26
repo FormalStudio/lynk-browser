@@ -94,7 +94,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [x] Pin moves the tab to the end of the pinned block, unpin to the head of the rest; Next and Previous Tab follow the sidebar order (drive: `real_pin_and_unpin`; unit: `pin_goes_to_the_end_of_the_block_and_unpin_to_the_head_of_the_list`)
 - [x] "Reset to Pinned Page", enabled only once the pinned tab left its page (drive: `real_pin_reset_after_a_restart`; unit: `tiles_and_pinned_pages`, `a_pin_keeps_its_page_and_moves_by_the_pins`)
 - [ ] Tab menu: Reload, Duplicate Tab, Copy Address, Pin Tab, Mute or Unmute Tab, Move Tab to New Window, Put Tab to Sleep, Close Tab, Close Other Tabs (old drives `mac-tab-menu`, `linux-tab-menu`)
-- [ ] Pinned tile menu: Reset to Pinned Page, Unpin Tab, Mute Tab, Put Tab to Sleep, Close Tab
+- [x] Pinned tile menu: Reset to Pinned Page, Unpin Tab, Mute Tab, Put Tab to Sleep, Close Tab (drive: `real_pinned_tile_menu`)
 - [ ] Menu on the column off any tab: New Tab, Hide Sidebar, Use Compact Layout
 
 ### Separators

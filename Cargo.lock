@@ -3710,6 +3710,7 @@ version = "0.1.0"
 dependencies = [
  "lynk-core",
  "nd",
+ "nd-data",
  "nd-ipc",
  "nd-test",
  "ndshell",

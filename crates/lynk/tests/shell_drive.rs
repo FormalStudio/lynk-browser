@@ -3748,6 +3748,20 @@ fn key_title(app: &AppHandle) -> Option<String> {
 }
 
 /// Each profile's cookie store as Chromium left it on disk: `<dir>: <host> <name>, ...`.
+/// Each row of `sql`'s one text column, comma separated; "" for a store that is not there yet.
+/// Read in-process: a host without the sqlite3 tool would otherwise read every store as empty.
+fn sqlite_rows(db: &std::path::Path, sql: &str) -> String {
+    use nd_data::rusqlite::{Connection, OpenFlags};
+    if !db.exists() {
+        return String::new();
+    }
+    let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap_or_else(|e| panic!("opening {}: {e}", db.display()));
+    let mut statement = conn.prepare(sql).unwrap_or_else(|e| panic!("{sql} on {}: {e}", db.display()));
+    let rows = statement.query_map([], |r| r.get::<_, String>(0)).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    rows.map(|r| r.unwrap_or_else(|e| panic!("{sql}: {e}"))).collect::<Vec<_>>().join(", ")
+}
+
 fn profile_cookies(dir: &std::path::Path) -> String {
     let stores = [dir.join("cef/Default/Cookies")].into_iter().chain(
         std::fs::read_dir(dir.join("cef"))
@@ -3759,10 +3773,7 @@ fn profile_cookies(dir: &std::path::Path) -> String {
     );
     stores
         .map(|db| {
-            let out = std::process::Command::new("sqlite3")
-                .args(["-readonly", &db.display().to_string(), "select host_key || ' ' || name from cookies"])
-                .output();
-            let rows = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', ", ")).unwrap_or_default();
+            let rows = sqlite_rows(&db, "select host_key || ' ' || name from cookies");
             format!("{}: [{rows}]", db.strip_prefix(dir).unwrap_or(&db).display())
         })
         .collect::<Vec<_>>()
@@ -3939,11 +3950,7 @@ fn real_quit_right_after_a_change_keeps_it() {
     if zoom.as_object().is_none_or(|z| z.values().all(|f| f.as_f64() != Some(1.1))) {
         lost.push(format!("zoom in session.json: {zoom}"));
     }
-    let visits = std::process::Command::new("sqlite3")
-        .args(["-readonly", &dir.join("history.sqlite").display().to_string(), "select url from visits"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', ", "))
-        .unwrap_or_default();
+    let visits = sqlite_rows(&dir.join("history.sqlite"), "select url from visits");
     if !["/store", "/cookie"].iter().all(|p| visits.contains(p)) {
         lost.push(format!("history rows: [{visits}]"));
     }

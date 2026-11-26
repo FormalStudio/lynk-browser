@@ -32,6 +32,7 @@ pub mod key {
     pub const RIGHT: Code = 124;
     pub const A: Code = 0;
     pub const H: Code = 4;
+    pub const P: Code = 35;
     pub const U: Code = 32;
     pub const F1: Code = 122;
     pub const F7: Code = 98;
@@ -404,4 +405,39 @@ pub fn close_window(app: &App, front: &Win) {
 
 pub fn shot_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shell-{name}.{SHOT_EXT}"))
+}
+
+/// The system print panel, a window of the app's own.
+pub struct PrintDialog;
+
+pub fn launch_printing(options: LaunchOptions) -> (App, PrintDialog) {
+    (launch(options), PrintDialog)
+}
+
+impl PrintDialog {
+    /// The panel is up, a window of its own named Print; macOS names no page in it, so the
+    /// title reads empty.
+    pub fn asked(&self, app: &App) -> Option<String> {
+        let script = format!(
+            r#"tell application "System Events" to tell (first process whose unix id is {pid})
+                return exists (first window whose name is "Print" and subrole is "AXDialog")
+            end tell"#,
+            pid = app.pid()
+        );
+        let out = Command::new("osascript").args(["-e", &script]).output().unwrap();
+        (String::from_utf8_lossy(&out.stdout).trim() == "true").then(String::new)
+    }
+
+    /// Esc, the panel's Cancel: the button sits in a group, out of reach of `click_button`.
+    pub fn dismiss(&self, app: &App) {
+        let script = format!(
+            r#"tell application "System Events" to tell (first process whose unix id is {pid})
+                perform action "AXRaise" of window "Print"
+                key code 53
+            end tell"#,
+            pid = app.pid()
+        );
+        let out = Command::new("osascript").args(["-e", &script]).output().unwrap();
+        assert!(out.status.success(), "Esc did not reach the print panel: {}", String::from_utf8_lossy(&out.stderr));
+    }
 }

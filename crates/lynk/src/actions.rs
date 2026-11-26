@@ -322,6 +322,11 @@ pub const COMMANDS: &[Command] = &[
         .menu(MenuId::File)
         .handler(|w, _, _, cx| w.reopen(cx)),
     Command::new::<SavePage>("Save Page As\u{2026}").key("save-page").menu(MenuId::File).enabled(web_page),
+    Command::new::<Print>("Print\u{2026}").key("print").menu(MenuId::File).enabled(web_page).handler(|w, id, _, _| {
+        if let Some(page) = view_of(w, id) {
+            page.print();
+        }
+    }),
     Command::new::<OpenSettings>("Settings").key("settings").menu(MenuId::File).after_separator(),
     // macOS's app menu has its own Quit.
     Command::new::<Quit>("Quit").key("quit").menu(MenuId::File).not_on_mac().handler(|_, _, _, cx| cx.quit()),
@@ -456,7 +461,6 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<OpenWebStore>("Chrome Web Store").menu(MenuId::Extensions),
     Command::new::<ShowHistory>("Show All History").key("history").menu(MenuId::History),
     Command::new::<ClearBrowsingData>("Clear Browsing Data\u{2026}").key("clear-data").menu(MenuId::History),
-    Command::new::<Print>("Print\u{2026}"),
     Command::new::<NewProfile>("New Profile\u{2026}").handler(crate::profile::new_profile),
     Command::new::<RenameProfile>("Rename Profile\u{2026}").handler(crate::profile::rename_profile),
     Command::new::<DeleteProfile>("Delete Profile\u{2026}")

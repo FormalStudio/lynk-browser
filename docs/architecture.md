@@ -278,6 +278,9 @@ stateDiagram-v2
   reports the source view as navigated to the address it shows, so `page.rs` keeps the tab's
   `view-source:` address, which is no web page and restores as a source view.
 
+- **Print.** `WebView::print`: on macOS Chromium's print panel, a window of the app's own; on
+  Linux the desktop portal's dialog through nd.
+
 ## Registries
 
 Later features plug in by appending to a list the shell owns. Each list is a `const` slice of

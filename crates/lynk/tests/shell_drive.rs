@@ -1455,6 +1455,53 @@ fn real_view_source_opens_to_the_right() {
     assert_eq!(titles(&app).len(), 3, "the source tab opened a source of its own: {:?}", titles(&app));
 }
 
+/// Cmd+P (Ctrl+P) from the page, and on macOS Print from the File menu, each ask the system for a
+/// print dialog for the page; dismissed, it leaves the page as it was.
+#[test]
+fn real_print_asks_for_the_dialog() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let (app, dialog) = os::launch_printing(
+        LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).arg(format!("{base}/alpha")).env("ND_CEF_STYLE", "chrome"),
+    );
+    os::in_front(&app);
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    let printed = |what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let title = loop {
+            if let Some(title) = dialog.asked(&app) {
+                break title;
+            }
+            if Instant::now() > deadline {
+                let seen = shot(&app, "print-missing");
+                panic!("no print dialog {what}, {}\n{}", seen.display(), app.stderr_tail(40).join("\n"));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        if cfg!(target_os = "linux") {
+            assert_eq!(title, "Alpha", "the dialog {what} named another page");
+        }
+        shot(&app, &format!("print-{}", what.replace(' ', "-")));
+        dialog.dismiss(&app);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while dialog.asked(&app).is_some() {
+            assert!(Instant::now() < deadline, "the print dialog {what} stayed after Cancel");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+    click_page(&app, 200.);
+    hid(&app, key::P, &[os::CMD]);
+    printed("from the page");
+    #[cfg(target_os = "macos")]
+    {
+        os::menu(&app, "File", "Print\u{2026}");
+        printed("from the menu");
+    }
+    assert_eq!(titles(&app), ["Alpha"]);
+}
+
 #[test]
 fn real_chrome_only_keys_open_nothing() {
     if !real_allowed() {

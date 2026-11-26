@@ -20,12 +20,17 @@ pub const HEIGHT: f32 = 24.;
 /// The rule, as a share of the primary ink so one number holds in light and dark.
 const RULE: f32 = 0.16;
 
-/// The separator each window is naming.
+/// The separator each window is naming, and the text its field holds. The field is
+/// controlled, so a redraw of the row puts back whatever this says.
 #[derive(Default)]
-struct Naming(HashMap<WindowId, String>);
+struct Naming(HashMap<WindowId, (String, String)>);
 
 fn naming(cx: &App, win: WindowId) -> Option<&str> {
-    cx.try_global::<Naming>()?.0.get(&win).map(String::as_str)
+    cx.try_global::<Naming>()?.0.get(&win).map(|n| n.0.as_str())
+}
+
+fn typed(cx: &App, win: WindowId) -> &str {
+    cx.try_global::<Naming>().and_then(|n| n.0.get(&win)).map_or("", |n| n.1.as_str())
 }
 
 pub fn forget(cx: &mut App, win: WindowId) {
@@ -38,7 +43,8 @@ fn start(win: &mut BrowserWindow, id: String, window: &mut Window, cx: &mut Cont
     if !cx.has_global::<Naming>() {
         cx.set_global(Naming::default());
     }
-    cx.global_mut::<Naming>().0.insert(win.id, id);
+    let name = crate::sidebar::separator_name(win.tree(), &id).to_owned();
+    cx.global_mut::<Naming>().0.insert(win.id, (id, name));
     window.focus(FIELD);
     win.sync_rows(cx);
     cx.notify();
@@ -107,8 +113,8 @@ fn delete(win: &mut BrowserWindow, id: &str, cx: &mut Context<BrowserWindow>) {
 }
 
 /// What the row's version hashes: a change to either redraws it.
-pub fn drawn(cx: &App, win: WindowId, id: &str, name: &str) -> (String, bool) {
-    (name.to_owned(), naming(cx, win) == Some(id))
+pub fn drawn(cx: &App, win: WindowId, id: &str, name: &str) -> (String, Option<String>) {
+    (name.to_owned(), (naming(cx, win) == Some(id)).then(|| typed(cx, win).to_owned()))
 }
 
 /// A hairline across the row, after the name when it has one; while it is being named, the
@@ -122,8 +128,15 @@ pub fn row(win: &BrowserWindow, id: SharedString, name: &str, cx: &mut Context<B
         Some(
             text_field(FIELD)
                 .placeholder("Separator name")
-                .text(name.to_owned())
+                .text(typed(cx, me).to_owned())
                 .select_on_focus(0..name.chars().count())
+                .on_change(cx.listener(move |win, e: &TextChanged, _, cx| {
+                    if let Some(n) = cx.try_global_mut::<Naming>().and_then(|n| n.0.get_mut(&win.id)) {
+                        n.1 = e.text.to_string();
+                    }
+                    win.sync_rows(cx);
+                    cx.notify();
+                }))
                 .on_end_editing(cx.listener(move |win, e: &TextEditingEnded, _, cx| {
                     finish(win, &done, Some(&e.text), cx);
                 }))

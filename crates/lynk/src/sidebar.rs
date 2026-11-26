@@ -592,7 +592,7 @@ fn tree_slot(tree: &SidebarTree, slot: usize) -> usize {
     list_rows(tree).get(slot).map_or(tree.items.len(), |(_, at)| *at)
 }
 
-fn separator_name<'a>(tree: &'a SidebarTree, id: &str) -> &'a str {
+pub fn separator_name<'a>(tree: &'a SidebarTree, id: &str) -> &'a str {
     tree.items
         .iter()
         .find_map(|i| match i {

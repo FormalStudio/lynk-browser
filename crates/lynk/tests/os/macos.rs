@@ -139,7 +139,8 @@ pub fn in_front(app: &App) {
 
 /// Every window of the process as accessibility sees it, the ones nd does not list included
 /// (Chromium's), each with whether it is main and focused, and which one the process reports
-/// focused: where the key went when none of the app's own windows has it.
+/// focused, and the element that has the keyboard: where a key went when none of the app's own
+/// windows or fields has it.
 pub fn focus_report(app: &App) -> String {
     let script = format!(
         r#"tell application "System Events" to tell (first process whose unix id is {pid})
@@ -148,6 +149,12 @@ pub fn focus_report(app: &App) -> String {
                 set out to out & (name of (value of attribute "AXFocusedWindow"))
             on error
                 set out to out & "none"
+            end try
+            try
+                set e to value of attribute "AXFocusedUIElement"
+                set out to out & linefeed & "focused element: " & (role of e) & " " & (description of e) & " value " & (value of e as text)
+            on error
+                set out to out & linefeed & "focused element: none"
             end try
             repeat with w in windows
                 set out to out & linefeed & "  " & (name of w) & " role " & (subrole of w) & " main " & (value of attribute "AXMain" of w) & " focused " & (value of attribute "AXFocused" of w) & " at " & (position of w as text) & " size " & (size of w as text)

@@ -3819,6 +3819,17 @@ fn until_order(app: &App, what: &str, want: &[&str]) {
     }
 }
 
+/// The separator name field's text and whether it has the keyboard, while one is open.
+fn name_field(app: &AppHandle) -> Option<(String, bool)> {
+    let tree = app.tree(None).ok()?;
+    tree.windows.iter().find_map(|w| {
+        w.root
+            .iter()
+            .find(|n| n.test_id.as_deref() == Some("separator-name"))
+            .map(|n| (n.value.clone().unwrap_or_default(), n.focused))
+    })
+}
+
 /// Named separators: one added under a tab from its menu opens with its name field focused and
 /// Enter keeps the name, Esc leaves an unnamed rule, the bar renames and deletes the one nearest
 /// above the shown tab, a separator drags like a row, and all of it comes back after a restart.
@@ -3838,8 +3849,20 @@ fn real_named_separators() {
     press(&app, "cmd-1");
 
     pick_menu(&app, row_at(&app, 0), "Add Separator");
-    until(&app, "the name field", 10, |a| has(a, "separator-name"));
+    until(&app, "the name field focused", 10, |a| name_field(a).is_some_and(|f| f.1));
     type_real(&app, "Reading");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while name_field(&app).is_none_or(|f| f.0 != "Reading") {
+        assert!(
+            Instant::now() < deadline,
+            "the typed name never reached its field: {:?}\nwindows {:?}\n{}\n{}",
+            name_field(&app),
+            app.windows(),
+            os::focus_report(&app),
+            app.stderr_tail(30).join("\n")
+        );
+        std::thread::sleep(Duration::from_millis(150));
+    }
     hid(&app, key::ENTER, &[]);
     until_order(&app, "the named separator", &["Alpha", "| Reading", "Beta", "Press"]);
     shot(&app, "separator-named");

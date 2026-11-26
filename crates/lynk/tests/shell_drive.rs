@@ -4024,12 +4024,15 @@ fn real_pinned_grid_at_two_widths() {
             }
             shot(&app, &format!("pins-{n}-at-{width}"));
             let before_rows = rows(&app);
+            let fixed = |a: &App| ["controls-row", "sidebar-foot"].map(|id| a.get_by_test_id(id).bounding_box().unwrap());
+            let fixed_before = fixed(&app);
             let (wx, wy, _, _) = front_window(&app).bounds;
             let at = row_at(&app, 3);
             os::scroll(&app, (wx + f64::from(at.0), wy + f64::from(at.1)), -800, 8);
             until(&app, "the list scrolled", 10, |a| rows(a) != before_rows);
             let after: Vec<_> = settled_tiles(&app).into_iter().map(|t| t.1).collect();
             assert_eq!(after, laid.iter().map(|t| t.1).collect::<Vec<_>>(), "the tiles moved with the list");
+            assert_eq!(fixed(&app), fixed_before, "the controls row or the foot moved with the list");
             quit(&app);
             drop(app);
         }

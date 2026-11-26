@@ -159,7 +159,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [x] View source: Alt+Cmd+U (Ctrl+U) opens `view-source:` in a tab to the right, http, https and file only; drive `real_view_source_opens_to_the_right` (macOS, Linux)
 - [x] Print: Cmd+P opens the system print panel for the page (lane `webview-print`); drive `real_print_asks_for_the_dialog` (macOS, Linux)
 - [ ] Save Page As (Cmd+S): the page downloaded again with its cookies, through a save panel, named after its title, HTML only
-- [ ] Floating video: Alt+Cmd+P lifts the playing (else the largest) video, same-origin frames included, into Chromium's picture-in-picture window, and the same chord brings it back (lane `cef-user-gesture-js`; old drives `mac-pip-drive`, `linux-pip-drive`)
+- [x] Floating video: Alt+Cmd+P lifts the playing (else the largest) video, same-origin frames included, into Chromium's picture-in-picture window, and the same chord brings it back (lane `cef-user-gesture-js`; old drives `mac-pip-drive`, `linux-pip-drive`); drive `real_float_video_lifts_the_playing_one_and_brings_it_back` (macOS, Linux)
 - [ ] A page's own picture-in-picture, document picture-in-picture (Meet) included; "Back to tab" brings its tab forward
 - [ ] Reading mode: Shift+Cmd+R runs Readability over a copy of the page in a shadow-root overlay, follows light and dark, Space and Page Down scroll it, Esc and a same-document navigation leave it; the menu label flips (old drives `mac-reader-drive`, `linux-reader-drive`; unit: port of `reader.test.ts`)
 - [ ] Chromium's own context menu, with "Search with <engine>" added for selections and no duplicated items

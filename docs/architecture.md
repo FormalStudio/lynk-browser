@@ -281,6 +281,12 @@ stateDiagram-v2
 - **Print.** `WebView::print`: on macOS Chromium's print panel, a window of the app's own; on
   Linux the desktop portal's dialog through nd.
 
+- **Floating video.** `float.rs` runs a script in the `lynk-float` world with a user gesture,
+  which `requestPictureInPicture` needs: the playing video (else the largest with a picture),
+  same-origin frames included, goes into Chromium's own picture-in-picture window, or comes back
+  when one is floating. The promise's answer comes back as a `lynkFloat` message; no video or a
+  refusal is a toast.
+
 ## Registries
 
 Later features plug in by appending to a list the shell owns. Each list is a `const` slice of
@@ -520,6 +526,7 @@ Shell, `crates/lynk/src`:
 | `zoom.rs` | zoom steps, the foot glyph and popover | store levels outside `app` |
 | `blocking.rs` | the request filter, per-tab blocked counts, the site switch and its padlock row, the scriptlet page, the user's hide rules | decide what a rule matches (core does) |
 | `hider.rs` | the element picker in the page and its commands | store rules (blocking does) |
+| `float.rs` | lifting a page's video into picture-in-picture | draw the floating window (Chromium does) |
 | `devtools.rs` | each tab's DevTools, each window's dock, the split and the DevTools window | reach into the inspected page |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |
 | `main.rs` | calls `lynk::run` | anything else |

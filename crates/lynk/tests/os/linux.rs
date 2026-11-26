@@ -56,6 +56,7 @@ pub const LINE_END: (Code, &[Modifier]) = (key::END, &[]);
 pub const CMD: Modifier = Modifier::Control;
 
 pub const DEVTOOLS: (&str, Code, &[Modifier]) = ("Ctrl+Shift+I", key::I, &[Modifier::Control, Modifier::Shift]);
+pub const FLOAT: (Code, &[Modifier]) = (key::P, &[Modifier::Control, Modifier::Alt]);
 pub const VIEW_SOURCE: (Code, &[Modifier]) = (key::U, &[Modifier::Control]);
 pub const NEW_TAB: &str = "sidebar-new-tab";
 /// ndshell writes frames as BMP; `scripts/linux-gate shots` brings them back.

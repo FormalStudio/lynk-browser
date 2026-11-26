@@ -51,6 +51,7 @@ pub const CMD: Modifier = Modifier::Command;
 
 /// Chrome's developer tools chord besides F12.
 pub const DEVTOOLS: (&str, Code, &[Modifier]) = ("Alt+Cmd+I", key::I, &[Modifier::Option, Modifier::Command]);
+pub const FLOAT: (Code, &[Modifier]) = (key::P, &[Modifier::Option, Modifier::Command]);
 pub const VIEW_SOURCE: (Code, &[Modifier]) = (key::U, &[Modifier::Option, Modifier::Command]);
 /// The sidebar's "New tab" row; Linux has a plus in the foot instead.
 pub const NEW_TAB: &str = "new-tab-row";

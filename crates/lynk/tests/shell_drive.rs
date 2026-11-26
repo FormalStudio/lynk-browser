@@ -163,6 +163,26 @@ const report = () => { if (document.title === 'Hide pressed') return;
 report();
 </script>"#;
 
+/// A small video and a large playing one, both fed from a canvas, and a title that says which is
+/// in picture-in-picture: `Video <id>` or `Video none`.
+const VIDEO: &str = r#"<!doctype html><title>Video none</title>
+<body style="margin:0;background:#222">
+<video id=small muted style="width:160px;height:90px"></video>
+<video id=big muted style="width:640px;height:360px"></video>
+<script>
+const feed = (hue) => { const c = document.createElement('canvas'); c.width = 320; c.height = 180;
+  const g = c.getContext('2d'); let t = 0;
+  setInterval(() => { g.fillStyle = `hsl(${hue + t++ % 60} 70% 50%)`; g.fillRect(0, 0, 320, 180); }, 33);
+  return c.captureStream(30); };
+small.srcObject = feed(0); big.srcObject = feed(200);
+small.onloadedmetadata = () => small.pause();
+big.onloadedmetadata = () => big.play();
+for (const v of [small, big]) {
+  v.addEventListener('enterpictureinpicture', () => document.title = 'Video ' + v.id);
+  v.addEventListener('leavepictureinpicture', () => document.title = 'Video none');
+}
+</script>"#;
+
 const ADS: &str = r#"<!doctype html><title>Ads</title>
 <script src="/pagead/conversion.js"></script>
 <img src="/banner_ads/b.png" alt="">
@@ -257,6 +277,7 @@ fn respond(mut stream: std::net::TcpStream) {
         "/icon.svg" => ("200 OK", "Content-Type: image/svg+xml\r\n".to_owned(), ICON.to_owned()),
         "/ads" => page(ADS),
         "/hide" => page(HIDE),
+        "/video" => page(VIDEO),
         "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
         "/dark-scheme" => page(DARK_SCHEME),
         "/both-schemes" => page(BOTH_SCHEMES),
@@ -1500,6 +1521,39 @@ fn real_print_asks_for_the_dialog() {
         printed("from the menu");
     }
     assert_eq!(titles(&app), ["Alpha"]);
+}
+
+/// Alt+Cmd+P lifts the playing video, not the larger paused one or the first, into Chromium's
+/// picture-in-picture window, the same chord brings it back, and a page with no video says so.
+#[test]
+fn real_float_video_lifts_the_playing_one_and_brings_it_back() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/video"));
+    os::in_front(&app);
+    until(&app, "the videos", 30, |a| titles(a) == ["Video none"]);
+    let windows = os::every_window(&app);
+    std::thread::sleep(Duration::from_secs(1));
+    let (code, modifiers) = os::FLOAT;
+    hid(&app, code, modifiers);
+    until(&app, "the playing video floating", 15, |a| titles(a) == ["Video big"]);
+    until(&app, "the picture-in-picture window", 10, |a| os::every_window(a) > windows);
+    shot(&app, "float-on");
+    // Hyprland gives the keyboard to the new window; the user clicks back into the page.
+    click_page(&app, 500.);
+    hid(&app, code, modifiers);
+    until(&app, "the video back in its page", 15, |a| titles(a) == ["Video none"]);
+    until(&app, "the picture-in-picture window gone", 10, |a| os::every_window(a) == windows);
+    open_bar(&app, key::L);
+    os::type_text(&app, &format!("{base}/alpha\n"));
+    until(&app, "a page with no video", 30, |a| titles(a) == ["Alpha"]);
+    hid(&app, code, modifiers);
+    until(&app, "the no-video toast", 10, |a| {
+        a.tree(None)
+            .is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == "No video to float on this page")))
+    });
 }
 
 #[test]

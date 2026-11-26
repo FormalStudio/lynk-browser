@@ -13,6 +13,7 @@ pub mod app;
 pub mod blocking;
 pub mod devtools;
 pub mod find;
+pub mod float;
 pub mod hider;
 pub mod history;
 pub mod omnibox;

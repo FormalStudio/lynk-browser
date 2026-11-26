@@ -382,7 +382,11 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<RestoreHidden>("Show Hidden Elements")
         .enabled(crate::hider::has_hidden)
         .handler(crate::hider::restore),
-    Command::new::<FloatVideo>("Float Video").key("float").menu(MenuId::View),
+    Command::new::<FloatVideo>("Float Video")
+        .key("float")
+        .menu(MenuId::View)
+        .enabled(web_page)
+        .handler(crate::float::toggle),
     Command::new::<ZoomIn>("Zoom In")
         .key("zoom-in")
         .extra_keys(&["secondary-="])

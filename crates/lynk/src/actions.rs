@@ -51,6 +51,7 @@ actions!(
         ReadingMode,
         ToggleAdBlocking,
         HideElement,
+        RestoreHidden,
         FloatVideo,
         ZoomIn,
         ZoomOut,
@@ -368,7 +369,14 @@ pub const COMMANDS: &[Command] = &[
         .flips("Block Ads on This Site", crate::blocking::off_here)
         .enabled(web_page)
         .handler(crate::blocking::toggle),
-    Command::new::<HideElement>("Hide Element").key("hide-element").menu(MenuId::View).enabled(web_page),
+    Command::new::<HideElement>("Hide Element")
+        .key("hide-element")
+        .menu(MenuId::View)
+        .enabled(web_page)
+        .handler(crate::hider::toggle),
+    Command::new::<RestoreHidden>("Show Hidden Elements")
+        .enabled(crate::hider::has_hidden)
+        .handler(crate::hider::restore),
     Command::new::<FloatVideo>("Float Video").key("float").menu(MenuId::View),
     Command::new::<ZoomIn>("Zoom In")
         .key("zoom-in")

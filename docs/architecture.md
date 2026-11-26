@@ -264,6 +264,16 @@ stateDiagram-v2
   holder, which imports `js/resources/scriptlets.js` over the `lynk-ubo:` scheme (served from the
   release folder only) and posts each function's source back.
 
+- **Element hider.** `hider.rs` puts a sleeping picker in the `lynk-hider` world of every page's
+  main frame. Hide Element wakes it: it outlines the element under the pointer with its name,
+  swallows every press, and on pointerdown hides the element and posts `{pick: {selector, label,
+  note}}` (`lynkHider`). Its outline and hint live in a closed shadow root with constructed
+  sheets, so neither the page's styles nor its policy reach them. A pick goes to
+  `blocking::hide`, which stores it as the user's `site##selector` rule and swaps a `Blocker`
+  with the same compiled lists and the new user engine (`Blocker::with_user`), so the next
+  document there gets the rule in its head. Show Hidden Elements takes the site's rules back and
+  reloads.
+
 ## Registries
 
 Later features plug in by appending to a list the shell owns. Each list is a `const` slice of
@@ -501,7 +511,8 @@ Shell, `crates/lynk/src`:
 | `omnibox.rs` | the command bar: its state per window, running the picked row | rank rows or parse typed text (core does) |
 | `history.rs` | recording visits and titles, searching them for the bar | rank matches (core does) |
 | `zoom.rs` | zoom steps, the foot glyph and popover | store levels outside `app` |
-| `blocking.rs` | the request filter, per-tab blocked counts, the site switch and its padlock row, the scriptlet page | decide what a rule matches (core does) |
+| `blocking.rs` | the request filter, per-tab blocked counts, the site switch and its padlock row, the scriptlet page, the user's hide rules | decide what a rule matches (core does) |
+| `hider.rs` | the element picker in the page and its commands | store rules (blocking does) |
 | `devtools.rs` | each tab's DevTools, each window's dock, the split and the DevTools window | reach into the inspected page |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |
 | `main.rs` | calls `lynk::run` | anything else |

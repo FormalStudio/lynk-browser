@@ -150,6 +150,19 @@ const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own
 /// `/banner_ads/*`), an element its generic `##.ad_banner` hides (except on 127.0.0.1, where
 /// EasyList's `@@://127.0.0.1$generichide` turns generic rules off) and one the user hid on
 /// 127.0.0.1. The title reports what each did: `Ads <ad_banner> <promo> <script>`.
+/// A banner the page acts on when pressed and an article. The title says what each is, `Hide
+/// <banner> <article>`, `Hide pressed` once the page took a press on the banner.
+const HIDE: &str = r#"<!doctype html><title>Hide</title>
+<body style="margin:0;font:16px system-ui">
+<div id=banner style="height:160px;background:#fd8;display:grid;place-items:center" onpointerdown="document.title = 'Hide pressed'">Sponsored banner</div>
+<article id=article style="height:400px;padding:24px">An article worth keeping</article>
+<script>
+const state = (id) => getComputedStyle(document.getElementById(id)).display === 'none' ? 'gone' : 'shown';
+const report = () => { if (document.title === 'Hide pressed') return;
+  document.title = `Hide ${state('banner')} ${state('article')}`; setTimeout(report, 100); };
+report();
+</script>"#;
+
 const ADS: &str = r#"<!doctype html><title>Ads</title>
 <script src="/pagead/conversion.js"></script>
 <img src="/banner_ads/b.png" alt="">
@@ -243,6 +256,7 @@ fn respond(mut stream: std::net::TcpStream) {
         "/csp.js" => ("200 OK", "Content-Type: text/javascript\r\n".to_owned(), CSP_SCRIPT.to_owned()),
         "/icon.svg" => ("200 OK", "Content-Type: image/svg+xml\r\n".to_owned(), ICON.to_owned()),
         "/ads" => page(ADS),
+        "/hide" => page(HIDE),
         "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
         "/dark-scheme" => page(DARK_SCHEME),
         "/both-schemes" => page(BOTH_SCHEMES),
@@ -1313,6 +1327,101 @@ fn real_blocking_counts_hides_and_switches_off() {
     open_bar(&app, key::L);
     os::type_text(&app, &format!("{v6}/ads\n"));
     until(&app, "the generic rule on [::1]", 30, |a| titles(a) == ["Ads none block stopped"]);
+}
+
+/// The element hider on a local page, in light then dark: Shift+Cmd+H outlines the element
+/// under the pointer and a press hides it without the page hearing the press; Esc puts the
+/// picker away, so the next press reaches the page; the element stays hidden across a reload,
+/// from the head; Show Hidden Elements brings it back.
+#[test]
+fn real_hide_element_picks_keeps_and_restores() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for appearance in ["light", "dark"] {
+        let dir = blocking_profile(&format!("hider-{appearance}"));
+        let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-hider-{appearance}.toml"));
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let app = os::launch(
+            profile_options(&dir, &[format!("{base}/hide")]).env("ND_THEME_TOML", theme.display().to_string()),
+        );
+        os::in_front(&app);
+        until(&app, "the page", 30, |a| titles(a) == ["Hide shown shown"]);
+        // An app that quit just before hands activation on to the next in line a moment after this
+        // one came forward, and an inactive app's page hears no pointer moves.
+        os::activate(&app);
+        let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+        let (wx, wy, _, _) = front_window(&app).bounds;
+        let at = |y: f32| (wx + f64::from(b.x + b.width / 2.), wy + f64::from(b.y + y));
+        // The outline is the picker's blue, drawn on the hovered element's left edge; read off the
+        // capture. A move can land before the picker listens, so the pointer stirs a point while
+        // it waits, as a hand would.
+        let outlined = |name: &str, y: f32| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            for stir in 0.. {
+                if stir > 0 {
+                    os::move_to(&app, at(y + (stir % 2) as f32));
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                let path = shot(&app, name);
+                let edge = os::pixel(&app, &front_window(&app), &path, (f64::from(b.x) + 1., f64::from(b.y + y)));
+                if edge[2] >= 200 && edge[0] <= 60 {
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{name}: no outline on the hovered element, edge {edge:?}\n{}\n{}",
+                    os::focus_report(&app),
+                    app.stderr_tail(40).join("\n")
+                );
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        };
+        // The pointer may still rest where the last run's window was; a page that appeared under
+        // it never saw it enter, and hears no moves until it does.
+        os::move_to(&app, (wx - 40., wy + 40.));
+        std::thread::sleep(Duration::from_millis(300));
+        click_page(&app, 300.);
+        hid(&app, key::H, &[os::CMD, Modifier::Shift]);
+        os::move_to(&app, at(60.));
+        std::thread::sleep(Duration::from_millis(300));
+        os::move_to(&app, at(80.));
+        outlined(&format!("hider-outline-{appearance}"), 80.);
+        os::click(&app, at(80.));
+        until(&app, "the banner hidden, the page none the wiser", 10, |a| titles(a) == ["Hide gone shown"]);
+        os::move_to(&app, at(280.));
+        std::thread::sleep(Duration::from_millis(300));
+        os::move_to(&app, at(300.));
+        outlined(&format!("hider-next-{appearance}"), 300.);
+        hid(&app, key::ESCAPE, &[]);
+        os::click(&app, at(60.));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(titles(&app), ["Hide gone shown"], "a press after Esc hid the article");
+        let rules = lynk_core::adblock::open(&dir).get().user_rules();
+        assert!(rules.contains("127.0.0.1###banner"), "{rules}");
+        // The engine compiles off the main thread; until it is in, a reload shows the banner.
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            hid(&app, key::R, &[os::CMD]);
+            std::thread::sleep(Duration::from_secs(2));
+            if titles(&app) == ["Hide gone shown"] {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the reload showed the banner, title {:?}", titles(&app));
+        }
+        open_bar(&app, key::K);
+        type_real(&app, "show hidden");
+        let rows =
+            until_rows(&app, "Show Hidden Elements", |r| r.iter().any(|r| r.starts_with("Show Hidden Elements")));
+        for _ in 0..rows.iter().position(|r| r.starts_with("Show Hidden Elements")).unwrap() {
+            hid(&app, key::DOWN, &[]);
+        }
+        hid(&app, key::ENTER, &[]);
+        until(&app, "the banner back after the reload", 20, |a| titles(a) == ["Hide shown shown"]);
+        assert!(!lynk_core::adblock::open(&dir).get().user_rules().contains("#banner"));
+        quit(&app);
+    }
 }
 
 #[test]

@@ -44,7 +44,7 @@ pub enum PageEvent<'a> {
 pub type Observer = fn(&mut BrowserWindow, TabId, &PageEvent, &mut Window, &mut Context<BrowserWindow>);
 
 /// The modules listening to every tab's page, in the order they hear an event.
-pub const OBSERVERS: &[Observer] = &[crate::history::record, crate::blocking::observe];
+pub const OBSERVERS: &[Observer] = &[crate::history::record, crate::blocking::observe, crate::hider::observe];
 
 fn observe(win: &mut BrowserWindow, id: TabId, event: PageEvent, window: &mut Window, cx: &mut Context<BrowserWindow>) {
     for observer in OBSERVERS {

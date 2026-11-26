@@ -221,7 +221,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] The compiled engine cached on disk and restored off the main thread; the window never waits on it
 - [x] Per-site switch: "Allow Ads on This Site" and "Block Ads on …" (command, View menu, padlock switch), kept in `offSites`; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux)
 - [x] Blocked count per page, reset on navigation, shown in the padlock popover; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux)
-- [ ] Hide Element (Shift+Cmd+H): a picker in an isolated world, labels the element under the pointer, a click hides it on that site for good as a `site##selector` rule; Esc or the chord again puts it away
+- [x] Hide Element (Shift+Cmd+H): a picker in an isolated world, labels the element under the pointer, a click hides it on that site for good as a `site##selector` rule; Esc or the chord again puts it away; drive `real_hide_element_picks_keeps_and_restores` (macOS, Linux)
 - [ ] Show Hidden Elements restores one or all; Update Filter Lists refreshes now
 - [ ] `blocking.json` and `adblock/` carried over from the 0.5.11 profile
 

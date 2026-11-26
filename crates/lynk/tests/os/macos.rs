@@ -31,6 +31,7 @@ pub mod key {
     pub const LEFT: Code = 123;
     pub const RIGHT: Code = 124;
     pub const A: Code = 0;
+    pub const H: Code = 4;
     pub const F1: Code = 122;
     pub const F7: Code = 98;
     pub const F12: Code = 111;

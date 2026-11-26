@@ -37,6 +37,7 @@ pub mod key {
     pub const HOME: Code = 102;
     pub const END: Code = 107;
     pub const A: Code = 30;
+    pub const H: Code = 35;
     pub const F1: Code = 59;
     pub const F7: Code = 65;
     pub const F11: Code = 87;

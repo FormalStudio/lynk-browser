@@ -291,6 +291,7 @@ fn command(id: &str) -> Option<&'static Command> {
         "float" => FloatVideo.name(),
         "blocking" => ToggleAdBlocking.name(),
         "hide-element" => HideElement.name(),
+        "restore-hidden" => RestoreHidden.name(),
         "downloads-all" => ShowDownloads.name(),
         "history" => ShowHistory.name(),
         "bookmarks" => ShowBookmarks.name(),

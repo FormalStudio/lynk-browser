@@ -66,11 +66,13 @@ pub fn install(cx: &mut App) {
     });
 }
 
-/// Tab ids are unique across every profile, so a launch starts past the last one any profile's
-/// session handed out, open or not.
+/// Tab and item ids are unique across every profile, so a launch starts past the last one any
+/// profile's session handed out, open or not.
 pub fn raise_tab_ids(cx: &mut App, dir: &Path) {
-    let next = stored::open(dir).get().next_tab_id;
-    cx.global_mut::<app::Browser>().raise_tab_ids(next.saturating_sub(1));
+    let state = stored::open(dir).get();
+    let browser = cx.global_mut::<app::Browser>();
+    browser.raise_tab_ids(state.next_tab_id.saturating_sub(1));
+    browser.raise_item_ids(state.next_item_id);
 }
 
 /// Opens `profile`'s session in `dir` and returns its windows, or none when it holds nothing
@@ -85,6 +87,7 @@ pub fn open(cx: &mut App, profile: &str, dir: &Path) -> Vec<Restored> {
     let browser = cx.global_mut::<app::Browser>();
     browser.zoom_by_host.insert(profile.to_owned(), state.zoom_by_host.clone());
     browser.raise_tab_ids(state.next_tab_id.saturating_sub(1));
+    browser.raise_item_ids(state.next_item_id);
     let windows = if state.windows.iter().flat_map(|w| &w.tabs).all(|t| t.url.is_empty()) {
         Vec::new()
     } else {

@@ -739,6 +739,16 @@ impl SidebarTree {
         }
     }
 
+    /// The nearest separator above a tab's row in the list, what the keyboard's separator
+    /// commands act on. `None` for a pinned tab or one with no separator above it.
+    pub fn separator_above(&self, tab: &str) -> Option<&str> {
+        let at = self.root_index_of(tab)?;
+        self.items[..at].iter().rev().find_map(|i| match i {
+            Item::Separator { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+    }
+
     /// The row directly above a row in the list, `None` at the top.
     pub fn row_above(&self, id: &str) -> Option<&str> {
         let at = self.row_index(id)?;
@@ -970,6 +980,16 @@ mod tests {
         t.delete_separator("s1").unwrap();
         assert_eq!(t.tab_ids().len(), before);
         assert_eq!(t.delete_separator("f1"), Err(TreeError::UnknownRow));
+    }
+
+    #[test]
+    fn the_separator_above_a_tab_is_the_nearest_one_up_the_list() {
+        let t = sample();
+        assert_eq!(rows(&t), ["a", "b", "s1", "c", "f1", "f2"]);
+        assert_eq!(t.separator_above("c"), Some("s1"));
+        assert_eq!(t.separator_above("d"), Some("s1"), "a tab in a folder goes by its folder's row");
+        assert_eq!(t.separator_above("a"), None);
+        assert_eq!(t.separator_above("p1"), None, "pinned");
     }
 
     #[test]

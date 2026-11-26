@@ -138,6 +138,11 @@ pub const COMMANDS: &[OmniCommand] = &[
     cmd("rename-profile", "Rename Profile\u{2026}", "avatar-default-symbolic", None, "person account"),
     cmd("delete-profile", "Delete Profile\u{2026}", "edit-delete-symbolic", None, "person account remove"),
     cmd("quit", "Quit", "window-close-symbolic", Some("quit"), "exit"),
+    cmd("add-separator", "Add Separator Below", "list-add-symbolic", None, "section divider group"),
+    cmd("rename-separator", "Rename Separator\u{2026}", "document-edit-symbolic", None, "section divider"),
+    cmd("delete-separator", "Delete Separator", "edit-delete-symbolic", None, "section divider remove"),
+    cmd("tidy", "Tidy Tabs", "view-sort-ascending-symbolic", None, "group sort organise organize separators"),
+    cmd("undo-tidy", "Undo Tidy", "edit-undo-symbolic", None, "ungroup"),
 ];
 
 /// Commands that need Chromium: extensions, and the page scripts only it accepts.

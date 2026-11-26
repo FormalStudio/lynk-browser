@@ -97,6 +97,19 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Pinned tile menu: Reset to Pinned Page, Unpin Tab, Mute Tab, Put Tab to Sleep, Close Tab
 - [ ] Menu on the column off any tab: New Tab, Hide Sidebar, Use Compact Layout
 
+### Separators
+
+- [ ] "Add Separator Below" in the tab menu and the command bar puts a separator under the tab's row (under the shown tab from the bar) with its name field focused; Enter keeps the name, Esc or an empty name leaves an unnamed rule
+- [ ] A separator draws as a hairline rule across the row, its name in secondary text at the favicons' column when it has one; it takes no hover fill and never shows as active
+- [ ] Separator menu: Rename Separator (the same inline field, the name selected) and Delete Separator; deleting keeps every tab under it in place
+- [ ] A separator drags like a tab row with the same slot line, and tabs drag across it; a separator dropped on the pinned block or into a folder goes back
+- [ ] From the keyboard: the bar's "Add Separator Below", "Rename Separator…" and "Delete Separator" act on the separator nearest above the shown tab
+- [ ] Separators, their names and their places restore after a restart, per space and profile
+- [ ] "Tidy Tabs" (command bar and the column's menu) sorts the loose tabs into groups and writes a named separator above each, the same rows a user adds by hand; pinned tabs, folders and splits stay where they are; with fewer than two loose tabs it is absent
+- [ ] [mac] Groups and names come from Apple's on-device model (Foundation Models) where the system has it, told only each tab's title, host and opener; an answer that leaves a tab out, repeats one or names one that is not loose is dropped and the tabs group by site
+- [ ] Without a model the tabs group by site, named after the site; [linux] always, until a local model is offered
+- [ ] "Undo Tidy" right after a tidy puts the list back as it was; once the list has changed since, it is absent rather than undoing over the change
+
 ## Command bar
 - [x] Cmd+T: address mode, empty field, Enter opens a new tab; on a blank tab it loads in place; drive `real_command_bar_opens_sites` (macOS)
 - [ ] Cmd+L (or a click on the active row or compact tab): the current address, all selected, Enter loads in this tab; a second Cmd+L closes it

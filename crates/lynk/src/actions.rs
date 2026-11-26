@@ -79,8 +79,23 @@ actions!(
         NewProfile,
         RenameProfile,
         DeleteProfile,
+        AddSeparatorBelow,
+        RenameNearestSeparator,
+        DeleteNearestSeparator,
+        TidyTabs,
+        UndoTidy,
     ]
 );
+
+/// Names a separator in place, from its own menu.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = lynk, no_json)]
+pub struct RenameSeparator(pub SharedString);
+
+/// Deletes a separator, from its own menu; the tabs around it stay.
+#[derive(Clone, PartialEq, Debug, Action)]
+#[action(namespace = lynk, no_json)]
+pub struct DeleteSeparator(pub SharedString);
 
 /// Brings a profile forward by id, from the foot's profile menu or the command bar.
 #[derive(Clone, PartialEq, Debug, Action)]
@@ -439,6 +454,18 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<DeleteProfile>("Delete Profile\u{2026}")
         .enabled(|w, _, _| w.profile != lynk_core::profiles::DEFAULT_ID)
         .handler(crate::profile::delete_profile),
+    Command::new::<AddSeparatorBelow>("Add Separator Below")
+        .enabled(crate::separators::can_add_below)
+        .handler(crate::separators::add_below),
+    // The keyboard's way to a separator: the one nearest above the shown tab.
+    Command::new::<RenameNearestSeparator>("Rename Separator\u{2026}")
+        .enabled(crate::separators::has_above)
+        .handler(crate::separators::rename_above),
+    Command::new::<DeleteNearestSeparator>("Delete Separator")
+        .enabled(crate::separators::has_above)
+        .handler(crate::separators::delete_above),
+    Command::new::<TidyTabs>("Tidy Tabs").enabled(crate::tidy::can_tidy).handler(crate::tidy::tidy),
+    Command::new::<UndoTidy>("Undo Tidy").enabled(crate::tidy::can_undo).handler(crate::tidy::undo),
     Command::new::<SelectLastTab>("Select Last Tab").handler(|w, _, _, cx| {
         if let Some(last) = w.tab_count().checked_sub(1) {
             w.select_at(last, cx);

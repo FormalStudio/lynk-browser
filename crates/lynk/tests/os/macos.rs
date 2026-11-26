@@ -130,13 +130,45 @@ pub fn in_front(app: &App) {
     while !key(app) {
         assert!(
             Instant::now() < deadline,
-            "no window of the app became key; in front: {}, windows {:?}",
+            "no window of the app became key; in front: {}, windows {:?}\n{}",
             front_app(),
-            app.windows()
+            app.windows(),
+            focus_report(app)
         );
         ndshell::input::activate(app.pid());
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+/// Every window of the process as accessibility sees it, the ones nd does not list included
+/// (Chromium's), each with whether it is main and focused, and which one the process reports
+/// focused, and the element that has the keyboard: where a key went when none of the app's own
+/// windows or fields has it.
+pub fn focus_report(app: &App) -> String {
+    let script = format!(
+        r#"tell application "System Events" to tell (first process whose unix id is {pid})
+            set out to "focused window: "
+            try
+                set out to out & (name of (value of attribute "AXFocusedWindow"))
+            on error
+                set out to out & "none"
+            end try
+            try
+                set e to value of attribute "AXFocusedUIElement"
+                set out to out & linefeed & "focused element: " & (role of e) & " " & (description of e) & " value " & (value of e as text)
+            on error
+                set out to out & linefeed & "focused element: none"
+            end try
+            repeat with w in windows
+                set out to out & linefeed & "  " & (name of w) & " role " & (subrole of w) & " main " & (value of attribute "AXMain" of w) & " focused " & (value of attribute "AXFocused" of w) & " at " & (position of w as text) & " size " & (size of w as text)
+            end repeat
+            return out
+        end tell"#,
+        pid = app.pid()
+    );
+    let out = Command::new("osascript").args(["-e", &script]).output();
+    out.map(|o| format!("{}{}", String::from_utf8_lossy(&o.stdout).trim(), String::from_utf8_lossy(&o.stderr).trim()))
+        .unwrap_or_default()
 }
 
 /// The top of a process's main thread stack, sampled for a second: where a hung app is stuck.

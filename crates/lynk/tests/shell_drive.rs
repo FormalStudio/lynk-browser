@@ -259,6 +259,18 @@ fn respond(mut stream: std::net::TcpStream) {
         "/cookie" => {
             page(&format!("<!doctype html><title>Cookie {}</title>", if cookie.is_empty() { "none" } else { &cookie }))
         }
+        // The cookie set, then the page that reads it back, in the same tab.
+        "/set-cookie-read" => (
+            "200 OK",
+            "Set-Cookie: who=one; Path=/; Max-Age=3600\r\n".to_owned(),
+            "<!doctype html><script>location.replace('/cookie')</script>".to_owned(),
+        ),
+        // localStorage written, then the page that reads it back. Its title carries a number of
+        // its own load, so a title kept from before a restart does not read as a fresh one.
+        "/store-set" => page("<!doctype html><script>localStorage.x='kept';location.replace('/store')</script>"),
+        "/store" => {
+            page("<!doctype html><script>document.title='Stored '+(localStorage.x||'none')+' #'+Math.random()</script>")
+        }
         "/loop" => ("302 Found", "Location: /loop\r\n".to_owned(), String::new()),
         "/late" => {
             std::thread::sleep(Duration::from_secs(3));
@@ -1679,7 +1691,10 @@ fn pick_menu(app: &App, at: (f32, f32), item: &str) {
     // and type-select then lands on another item.
     let deadline = Instant::now() + Duration::from_secs(10);
     while os::open_menus(app) <= before {
-        assert!(Instant::now() < deadline, "the menu for {item} never opened");
+        if Instant::now() >= deadline {
+            shot(app, "menu-never-opened");
+            panic!("the menu for {item} never opened at {at:?}; rows {:?}", rows(app));
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
     for c in item.to_ascii_lowercase().chars() {
@@ -3681,12 +3696,16 @@ fn run_command(app: &App, typed: &str, row: &str) {
     open_bar(app, key::K);
     type_real(app, typed);
     let deadline = Instant::now() + Duration::from_secs(10);
+    // Rows read before the field holds all of `typed` can belong to a shorter query and reorder.
     let at = loop {
+        let field = bar_field(app).unwrap_or_default();
         let rows = bar_rows(app);
-        if let Some(at) = rows.iter().position(|r| r.starts_with(row)) {
+        if field.split('|').next() == Some(typed)
+            && let Some(at) = rows.iter().position(|r| r.starts_with(row))
+        {
             break at;
         }
-        assert!(Instant::now() < deadline, "no {row} row for {typed:?}: {rows:?}");
+        assert!(Instant::now() < deadline, "no {row} row for {typed:?}, field {field:?}: {rows:?}");
         std::thread::sleep(Duration::from_millis(150));
     };
     for _ in 0..at {
@@ -3721,7 +3740,7 @@ fn all_titles(app: &App) -> Vec<String> {
 }
 
 /// The title of the app's key window.
-fn key_title(app: &App) -> Option<String> {
+fn key_title(app: &AppHandle) -> Option<String> {
     app.windows()
         .ok()
         .and_then(|w| w.as_array().cloned())
@@ -3752,7 +3771,7 @@ fn profile_cookies(dir: &std::path::Path) -> String {
 
 /// Every window with its profile's tabs, key state and frame, and `profiles.json`, for a
 /// restore that did not come back as it should.
-fn profile_windows(app: &App, dir: &std::path::Path) -> String {
+fn profile_windows(app: &AppHandle, dir: &std::path::Path) -> String {
     let tree = app.tree(None).map(|t| {
         t.windows.iter().map(|w| format!("{:?} tabs {:?}", w.title, window_titles(w))).collect::<Vec<_>>().join("; ")
     });
@@ -3793,7 +3812,7 @@ fn real_two_profiles_keep_their_cookies_apart() {
     until(&app, "Work sent no cookie", 15, |a| all_titles(a).contains(&"Cookie none".to_owned()));
     shot(&app, "profiles-two-windows");
     run_command(&app, "switch to default", "Switch to Default");
-    until(&app, "Default's window key", 10, |a| key_title(a).as_deref() == Some("Set"));
+    key_within(&app, &dir, "Set", 10);
     open_bar(&app, key::T);
     paste(&app, &format!("{base}/cookie"));
     std::thread::sleep(Duration::from_millis(300));
@@ -3824,15 +3843,127 @@ fn real_two_profiles_keep_their_cookies_apart() {
         }
         std::thread::sleep(Duration::from_millis(150));
     }
+    // A relaunch leaves exactly one of the restored windows key, with no click.
+    let keys = |a: &AppHandle| {
+        a.windows().ok().and_then(|w| w.as_array().map(|ws| ws.iter().filter(|w| w["key"] == true).count()))
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while keys(&app) != Some(1) {
+        if Instant::now() > deadline {
+            shot(&app, "profiles-two-restart-no-key");
+            panic!(
+                "{:?} windows key after the relaunch, not one\n{}\n{}\n{}",
+                keys(&app),
+                profile_windows(&app, &dir),
+                os::focus_report(&app),
+                app.stderr_tail(40).join("\n")
+            );
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
     for (row, title) in [("Switch to Default", "Cookie who=one"), ("Switch to Work", "Cookie none")] {
         os::in_front(&app);
         // The profile in front offers no switch to itself.
         if key_title(&app).as_deref() != Some(title) {
             run_command(&app, &row.to_lowercase(), row);
         }
-        until(&app, title, 10, |a| key_title(a).as_deref() == Some(title));
+        key_within(&app, &dir, title, 10);
     }
     quit(&app);
+}
+
+/// Waits `secs` for the window showing `title` to be key. Past that it watches 30 s more, so the
+/// failure says whether the window was late or never came, with every window's state.
+#[track_caller]
+fn key_within(app: &App, dir: &std::path::Path, title: &str, secs: u64) {
+    let start = Instant::now();
+    let is_key = |a: &AppHandle| key_title(a).as_deref() == Some(title);
+    while start.elapsed() < Duration::from_secs(secs) {
+        if is_key(app) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    let state = profile_windows(app, dir);
+    let focus = os::focus_report(app);
+    shot(app, "key-timeout");
+    let late = loop {
+        if is_key(app) {
+            break Some(start.elapsed());
+        }
+        if start.elapsed() > Duration::from_secs(secs + 30) {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    };
+    panic!(
+        "{title:?} not key within {secs}s ({}); at the timeout\n{state}\n{focus}\n{}",
+        late.map_or("never, after 30 s more".to_owned(), |t| format!("key after {t:?}")),
+        app.stderr_tail(40).join("\n")
+    );
+}
+
+/// What a page or the user changed moments before a quit is there at the next launch: a cookie,
+/// localStorage, a zoom level and the history rows. The quit comes within a second or two of the
+/// changes, before any engine timer would have written them. Every kind is checked before the
+/// case fails, so a failure names all that was lost.
+#[test]
+fn real_quit_right_after_a_change_keeps_it() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = profile("quit-fast");
+    let app = launch_on(&dir, &[format!("{base}/store-set")]);
+    until(&app, "the stored value", 30, |a| shown_title(a).starts_with("Stored kept"));
+    let stored = shown_title(&app);
+    open_bar(&app, key::T);
+    paste(&app, &format!("{base}/set-cookie-read"));
+    std::thread::sleep(Duration::from_millis(300));
+    hid(&app, key::ENTER, &[]);
+    bar_closed(&app);
+    until(&app, "the cookie sent back", 15, |a| shown_title(a) == "Cookie who=one");
+    let set = Instant::now();
+    press(&app, "cmd-=");
+    until(&app, "110%", 10, |a| text_of(a, "zoom-value").as_deref() == Some("110%"));
+    let since = set.elapsed();
+    quit(&app);
+    drop(app);
+
+    let mut lost = Vec::new();
+    let cookies = profile_cookies(&dir);
+    if !cookies.contains("who") {
+        lost.push(format!("cookie on disk: {cookies}"));
+    }
+    let zoom = session_of(&dir)["zoomByHost"].clone();
+    if zoom.as_object().is_none_or(|z| z.values().all(|f| f.as_f64() != Some(1.1))) {
+        lost.push(format!("zoom in session.json: {zoom}"));
+    }
+    let visits = std::process::Command::new("sqlite3")
+        .args(["-readonly", &dir.join("history.sqlite").display().to_string(), "select url from visits"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().replace('\n', ", "))
+        .unwrap_or_default();
+    if !["/store", "/cookie"].iter().all(|p| visits.contains(p)) {
+        lost.push(format!("history rows: [{visits}]"));
+    }
+
+    // The shown tab reloads at launch and sends what the profile kept; the other loads when shown.
+    let app = launch_on(&dir, &[]);
+    until(&app, "the cookie page reloaded", 30, |a| shown_title(a).starts_with("Cookie "));
+    if shown_title(&app) != "Cookie who=one" {
+        lost.push(format!("cookie sent after launch: {:?}", shown_title(&app)));
+    }
+    if !has(&app, "zoom") {
+        lost.push("zoom glyph after launch".to_owned());
+    }
+    press(&app, "cmd-1");
+    until(&app, "the stored page reloaded", 15, |a| shown_title(a).starts_with("Stored ") && shown_title(a) != stored);
+    if !shown_title(&app).starts_with("Stored kept") {
+        lost.push(format!("localStorage after launch: {:?}", shown_title(&app)));
+    }
+    quit(&app);
+    assert!(lost.is_empty(), "lost at a quit {since:?} after the cookie was set:\n{}", lost.join("\n"));
 }
 
 /// Deleting the profile whose window is open asks first, closes that window without asking its
@@ -4177,5 +4308,212 @@ fn real_a_row_dragged_in_the_list_marks_its_slot() {
         let now: Vec<String> = rows(a).into_iter().map(|r| r.0).collect();
         now == [before[1].0.clone(), before[0].0.clone(), before[2].0.clone()]
     });
+    quit(&app);
+}
+
+/// The first window's list top to bottom: a tab as its title, a separator as `| <name>`.
+fn sidebar_order(app: &AppHandle) -> Vec<String> {
+    let Ok(tree) = app.tree(None) else { return Vec::new() };
+    let window = &tree.windows[0];
+    let name_of = |id: &str| {
+        window
+            .root
+            .iter()
+            .find(|n| n.test_id.as_deref() == Some(&format!("separator-title-{id}")))
+            .map_or(String::new(), |n| n.name.clone())
+    };
+    let mut rows: Vec<(f32, String)> = window
+        .root
+        .iter()
+        .filter(|n| n.visible)
+        .filter_map(|n| {
+            let y = n.bounds?.origin.y;
+            let id = n.test_id.as_deref()?;
+            if id.starts_with("tab-title-") {
+                Some((y, n.name.clone()))
+            } else if let Some(sep) = id.strip_prefix("separator-")
+                && !sep.starts_with("title-")
+                && sep != "name"
+            {
+                Some((y, format!("| {}", name_of(sep)).trim_end().to_owned()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
+/// The centre of the first window's separator row named `name` (`""` for an unnamed one), in
+/// window points.
+fn separator_at(app: &App, name: &str) -> (f32, f32) {
+    let tree = app.tree(None).unwrap();
+    let window = &tree.windows[0];
+    let order = sidebar_order(app);
+    let wanted = format!("| {name}").trim_end().to_owned();
+    let nth = order.iter().filter(|r| r.starts_with('|')).position(|r| *r == wanted).expect("the separator");
+    let mut seps: Vec<_> = window
+        .root
+        .iter()
+        .filter(|n| {
+            n.test_id
+                .as_deref()
+                .and_then(|t| t.strip_prefix("separator-"))
+                .is_some_and(|s| !s.starts_with("title-") && s != "name")
+        })
+        .filter_map(|n| n.bounds)
+        .collect();
+    seps.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
+    let r = seps[nth];
+    (r.origin.x + r.size.width / 2., r.origin.y + r.size.height / 2.)
+}
+
+/// Waits for the first window's list to read `want`, naming what it read when it does not.
+#[track_caller]
+fn until_order(app: &App, what: &str, want: &[&str]) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while sidebar_order(app) != want {
+        if Instant::now() > deadline {
+            shot(app, "order-timeout");
+            panic!("timed out waiting for {what}: the list reads {:?}, not {want:?}", sidebar_order(app));
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+/// The separator name field's text and whether it has the keyboard, while one is open.
+fn name_field(app: &AppHandle) -> Option<(String, bool)> {
+    let tree = app.tree(None).ok()?;
+    tree.windows.iter().find_map(|w| {
+        w.root
+            .iter()
+            .find(|n| n.test_id.as_deref() == Some("separator-name"))
+            .map(|n| (n.value.clone().unwrap_or_default(), n.focused))
+    })
+}
+
+/// Named separators: one added under a tab from its menu opens with its name field focused and
+/// Enter keeps the name, Esc leaves an unnamed rule, the bar renames and deletes the one nearest
+/// above the shown tab, a separator drags like a row, and all of it comes back after a restart.
+#[test]
+fn real_named_separators() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = profile("separators");
+    let app = launch_on(&dir, &[format!("{base}/alpha"), format!("{base}/beta"), format!("{base}/press")]);
+    until(&app, "three rows", 30, |a| titles(a).len() == 3);
+    for (n, title) in ["Alpha", "Beta", "Press"].into_iter().enumerate() {
+        press(&app, &format!("cmd-{}", n + 1));
+        until(&app, title, 15, |a| shown_title(a) == title);
+    }
+    press(&app, "cmd-1");
+
+    pick_menu(&app, row_at(&app, 0), "Add Separator");
+    until(&app, "the name field focused", 10, |a| name_field(a).is_some_and(|f| f.1));
+    type_real(&app, "Reading");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while name_field(&app).is_none_or(|f| f.0 != "Reading") {
+        assert!(
+            Instant::now() < deadline,
+            "the typed name never reached its field: {:?}\nwindows {:?}\n{}\n{}",
+            name_field(&app),
+            app.windows(),
+            os::focus_report(&app),
+            app.stderr_tail(30).join("\n")
+        );
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    hid(&app, key::ENTER, &[]);
+    until_order(&app, "the named separator", &["Alpha", "| Reading", "Beta", "Press"]);
+    shot(&app, "separator-named");
+
+    pick_menu(&app, row_at(&app, 1), "Add Separator");
+    until(&app, "the second name field", 10, |a| has(a, "separator-name"));
+    hid(&app, key::ESCAPE, &[]);
+    until_order(&app, "an unnamed rule", &["Alpha", "| Reading", "Beta", "|", "Press"]);
+
+    press(&app, "cmd-3");
+    until(&app, "Press shown", 10, |a| shown_title(a) == "Press");
+    run_command(&app, "rename separator", "Rename Separator");
+    until(&app, "the rename field", 10, |a| has(a, "separator-name"));
+    type_real(&app, "Later");
+    hid(&app, key::ENTER, &[]);
+    until_order(&app, "the rule named", &["Alpha", "| Reading", "Beta", "| Later", "Press"]);
+
+    // The separator drags to the end of the list, past the tabs.
+    let (wx, wy, _, _) = front_window(&app).bounds;
+    let global = |p: (f32, f32)| (wx + f64::from(p.0), wy + f64::from(p.1));
+    let from = global(separator_at(&app, "Reading"));
+    let last = row_at(&app, 2);
+    let to = global((last.0, last.1 + 14.));
+    os::hold(&app, from);
+    for i in 1..=20 {
+        let t = f64::from(i) / 20.;
+        let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+        os::drag_move(&app, at);
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    std::thread::sleep(Duration::from_millis(400));
+    shot(&app, "separator-drag");
+    os::release(&app, to);
+    until_order(&app, "the separator at the end", &["Alpha", "Beta", "| Later", "Press", "| Reading"]);
+
+    run_command(&app, "delete separator", "Delete Separator");
+    until_order(&app, "Later deleted", &["Alpha", "Beta", "Press", "| Reading"]);
+    quit(&app);
+    drop(app);
+
+    let app = launch_on(&dir, &[]);
+    until(&app, "three rows again", 30, |a| titles(a).len() == 3);
+    until_order(&app, "the separator after a restart", &["Alpha", "Beta", "Press", "| Reading"]);
+    quit(&app);
+}
+
+/// Tidy Tabs groups the loose tabs by site under named separators, the same rows as the ones
+/// made by hand; Undo Tidy puts the list back, and once the list changes it is no longer offered.
+#[test]
+fn real_tidy_tabs_groups_by_site_and_undoes() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let other = base.replace("127.0.0.1", "localhost");
+    let app = launch_with(&[
+        format!("{base}/alpha"),
+        format!("{other}/beta"),
+        format!("{base}/plain"),
+        format!("{other}/press"),
+    ]);
+    until(&app, "four rows", 30, |a| titles(a).len() == 4);
+    for (n, title) in ["Alpha", "Beta", "Plain", "Press"].into_iter().enumerate() {
+        press(&app, &format!("cmd-{}", n + 1));
+        until(&app, title, 15, |a| shown_title(a) == title);
+    }
+    let untidy = sidebar_order(&app);
+    assert_eq!(untidy, ["Alpha", "Beta", "Plain", "Press"]);
+    let (here, there) = (base.trim_start_matches("http://"), other.trim_start_matches("http://"));
+    let tidied =
+        [format!("| {here}"), "Alpha".into(), "Plain".into(), format!("| {there}"), "Beta".into(), "Press".into()];
+
+    run_command(&app, "tidy tabs", "Tidy Tabs");
+    until(&app, "the tabs grouped by site", 10, |a| sidebar_order(a) == tidied);
+    shot(&app, "tidy-by-site");
+    run_command(&app, "undo tidy", "Undo Tidy");
+    until(&app, "the list as it was", 10, |a| sidebar_order(a) == untidy);
+
+    run_command(&app, "tidy tabs", "Tidy Tabs");
+    until(&app, "grouped again", 10, |a| sidebar_order(a) == tidied);
+    press(&app, "cmd-w");
+    until(&app, "a tab closed", 10, |a| titles(a).len() == 3);
+    open_bar(&app, key::K);
+    type_real(&app, "undo tidy");
+    std::thread::sleep(Duration::from_millis(600));
+    let rows = bar_rows(&app);
+    assert!(!rows.iter().any(|r| r.starts_with("Undo Tidy")), "undo offered over a change: {rows:?}");
+    hid(&app, key::ESCAPE, &[]);
+    bar_closed(&app);
     quit(&app);
 }

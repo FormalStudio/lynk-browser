@@ -23,6 +23,8 @@ pub struct Browser {
     windows: Vec<(WindowId, Entity<BrowserWindow>)>,
     next_tab: TabId,
     next_window: u64,
+    /// The number the next separator, folder or split id takes.
+    next_item: u64,
     /// Addresses of closed tabs with the profile each was in, newest last.
     closed: Vec<(String, String)>,
     /// Zoom levels per host, per profile.
@@ -40,6 +42,11 @@ impl Browser {
         self.next_tab = self.next_tab.max(last);
     }
 
+    /// Item ids from here on start at `next` or later, past every profile's.
+    pub fn raise_item_ids(&mut self, next: u64) {
+        self.next_item = self.next_item.max(next);
+    }
+
     pub fn last_tab_id(&self) -> TabId {
         self.next_tab
     }
@@ -49,6 +56,15 @@ pub fn next_tab_id(cx: &mut App) -> TabId {
     let browser = cx.global_mut::<Browser>();
     browser.next_tab += 1;
     browser.next_tab
+}
+
+/// A fresh id for a separator, folder or split, unique across profiles as tab ids are.
+pub fn next_item_id(cx: &mut App) -> String {
+    let browser = cx.global_mut::<Browser>();
+    browser.next_item = browser.next_item.max(1);
+    let id = format!("i{}", browser.next_item);
+    browser.next_item += 1;
+    id
 }
 
 /// A tab's address goes on its profile's closed stack, unless it never had one.

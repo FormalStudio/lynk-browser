@@ -144,6 +144,13 @@ pub struct TidyUndo {
     after: Vec<Item>,
 }
 
+impl TidyUndo {
+    /// Whether [`undo`] would still put the list back: nothing changed since the tidy.
+    pub fn holds(&self, tree: &SidebarTree) -> bool {
+        tree.items == self.after
+    }
+}
+
 /// The Tidy action: the model's answer when there is one and it holds up, else grouping by
 /// site. `new_id` names each separator.
 pub fn tidy(
@@ -357,7 +364,9 @@ mod tests {
     fn undo_refuses_once_the_list_changed() {
         let (mut tree, tabs) = sample();
         let (u, _) = tidy(&mut tree, &tabs, None, ids()).unwrap();
+        assert!(u.holds(&tree));
         tree.close_tab("b");
+        assert!(!u.holds(&tree));
         assert_eq!(undo(&mut tree, u), Err(TidyError::Stale));
     }
 

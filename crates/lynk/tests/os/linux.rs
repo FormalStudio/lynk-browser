@@ -171,6 +171,12 @@ pub fn activate(_: &App) {}
 
 /// Where a hung process's main thread waits, as the kernel reports it; reading its stack needs
 /// ptrace, which Yama allows only on the test's own children.
+/// Where the focus went, for a failure that finds no key window. The compositor's state is in
+/// the failure's own capture here.
+pub fn focus_report(_: &App) -> String {
+    String::new()
+}
+
 pub fn main_thread_of(pid: u32) -> String {
     let wchan = std::fs::read_to_string(format!("/proc/{pid}/wchan")).unwrap_or_default();
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();

@@ -4911,8 +4911,9 @@ fn real_named_separators() {
     quit(&app);
 }
 
-/// Tidy Tabs groups the loose tabs by site under named separators, the same rows as the ones
-/// made by hand; Undo Tidy puts the list back, and once the list changes it is no longer offered.
+/// Tidy Tabs groups the loose tabs under named separators, the same rows as the ones made by
+/// hand: by the system's on-device model where it has one, else by site; Undo Tidy puts the list
+/// back, and once the list changes it is no longer offered.
 #[test]
 fn real_tidy_tabs_groups_by_site_and_undoes() {
     if !real_allowed() {
@@ -4937,14 +4938,28 @@ fn real_tidy_tabs_groups_by_site_and_undoes() {
     let tidied =
         [format!("| {here}"), "Alpha".into(), "Plain".into(), format!("| {there}"), "Beta".into(), "Press".into()];
 
+    // Where the system has an on-device model its groups win, so the order is the model's: every
+    // tab once, each group under a named separator.
+    let grouped = |a: &App| {
+        let order = sidebar_order(a);
+        if a.stderr_tail(400).iter().any(|l| l.contains("lynk: tidy grouped by Model")) {
+            let mut tabs: Vec<_> = order.iter().filter(|r| !r.starts_with('|')).cloned().collect();
+            tabs.sort();
+            order.first().is_some_and(|r| r.len() > 2 && r.starts_with("| "))
+                && tabs == ["Alpha", "Beta", "Plain", "Press"]
+                && order.windows(2).all(|w| !(w[0].starts_with('|') && w[1].starts_with('|')))
+        } else {
+            order == tidied
+        }
+    };
     run_command(&app, "tidy tabs", "Tidy Tabs");
-    until(&app, "the tabs grouped by site", 10, |a| sidebar_order(a) == tidied);
-    shot(&app, "tidy-by-site");
+    until(&app, "the tabs grouped", 30, grouped);
+    shot(&app, "tidy-grouped");
     run_command(&app, "undo tidy", "Undo Tidy");
     until(&app, "the list as it was", 10, |a| sidebar_order(a) == untidy);
 
     run_command(&app, "tidy tabs", "Tidy Tabs");
-    until(&app, "grouped again", 10, |a| sidebar_order(a) == tidied);
+    until(&app, "grouped again", 30, grouped);
     press(&app, "cmd-w");
     until(&app, "a tab closed", 10, |a| titles(a).len() == 3);
     open_bar(&app, key::K);

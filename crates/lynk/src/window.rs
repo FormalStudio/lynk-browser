@@ -12,7 +12,7 @@ use lynk_core::session::{OpenDisposition, Placement, place_opened_tab, tab_id, t
 use lynk_core::sidebar_tree::{Dest, SidebarTree};
 use lynk_core::spaces::neighbour;
 use lynk_core::tabstate::left_pinned_page;
-use lynk_core::tidy::{TidyTab, TidyUndo};
+use lynk_core::tidy::{TidyGroup, TidyTab, TidyUndo};
 use nd::core::WindowId;
 use nd::prelude::*;
 use nd::virtual_list::ListState;
@@ -576,8 +576,9 @@ impl BrowserWindow {
 
     /// Sorts the loose tabs into groups under new separators; the undo for it, or `None` when
     /// there was nothing to tidy.
-    pub fn tidy(&mut self, tabs: &[TidyTab], cx: &mut Context<Self>) -> Option<TidyUndo> {
-        let (undo, _) = lynk_core::tidy::tidy(&mut self.tree, tabs, None, || app::next_item_id(cx)).ok()?;
+    pub fn tidy(&mut self, tabs: &[TidyTab], answer: Option<Vec<TidyGroup>>, cx: &mut Context<Self>) -> Option<TidyUndo> {
+        let (undo, source) = lynk_core::tidy::tidy(&mut self.tree, tabs, answer, || app::next_item_id(cx)).ok()?;
+        eprintln!("lynk: tidy grouped by {source:?}");
         self.changed(cx);
         Some(undo)
     }

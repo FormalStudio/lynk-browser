@@ -106,9 +106,9 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] From the keyboard: the bar's "Add Separator Below", "Rename Separator…" and "Delete Separator" act on the separator nearest above the shown tab
 - [ ] Separators, their names and their places restore after a restart, per space and profile
 - [ ] "Tidy Tabs" (command bar and the column's menu) sorts the loose tabs into groups and writes a named separator above each, the same rows a user adds by hand; pinned tabs, folders and splits stay where they are; with fewer than two loose tabs it is absent
-- [ ] [mac] Groups and names come from Apple's on-device model (Foundation Models) where the system has it, told only each tab's title, host and opener; an answer that leaves a tab out, repeats one or names one that is not loose is dropped and the tabs group by site
-- [ ] Without a model the tabs group by site, named after the site; [linux] always, until a local model is offered
-- [ ] "Undo Tidy" right after a tidy puts the list back as it was; once the list has changed since, it is absent rather than undoing over the change
+- [ ] [mac] Groups and names come from Apple's on-device model (Foundation Models) where the system has it, told only each tab's title, host and opener; an answer that leaves a tab out, repeats one or names one that is not loose is dropped and the tabs group by site (unit: `the_model_is_told_titles_hosts_and_openers_and_its_fenced_answer_reads`, `a_model_answer_that_leaves_a_tab_out_groups_by_site`, `tidy_writes_separators_leaves_pins_and_folders_and_undo_restores`; the drive `real_tidy_tabs_groups_by_site_and_undoes` checks model groups on a Mac whose model is ready, and the macbook's reports `modelNotReady`, so it has not run that path yet)
+- [x] Without a model the tabs group by site, named after the site; [linux] always, until a local model is offered (drive: `real_tidy_tabs_groups_by_site_and_undoes` on macOS without a ready model; unit: `grouping_by_site_needs_two_tabs_and_follows_openers`, `real_bad_answers_fall_back_to_sites`)
+- [x] "Undo Tidy" right after a tidy puts the list back as it was; once the list has changed since, it is absent rather than undoing over the change (drive: `real_tidy_tabs_groups_by_site_and_undoes`; unit: `undo_refuses_once_the_list_changed`)
 
 ## Command bar
 - [x] Cmd+T: address mode, empty field, Enter opens a new tab; on a blank tab it loads in place; drive `real_command_bar_opens_sites` (macOS)

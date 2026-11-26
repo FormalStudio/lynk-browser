@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::Deserialize;
+
 use crate::sidebar_tree::{Item, SidebarTree};
 use crate::url::strip_www;
 
@@ -20,7 +22,7 @@ pub struct TidyTab {
     pub opener: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct TidyGroup {
     pub name: String,
     pub tabs: Vec<String>,
@@ -97,6 +99,30 @@ pub fn group_by_site(tabs: &[TidyTab]) -> Vec<TidyGroup> {
         groups.push(TidyGroup { name: OTHER_GROUP.into(), tabs: other });
     }
     groups
+}
+
+/// What the model is asked to do. Its answer is read by [`parse_answer`] and held to
+/// [`validate`], so the rules here are asked for, not trusted.
+pub const MODEL_INSTRUCTIONS: &str = "You sort a web browser's open tabs into a few groups by \
+what the user is doing in them. You are given a JSON array of tabs, each with an id, its title, \
+its host and the id of the tab it was opened from. Answer with only a JSON array of groups, each \
+{\"name\": a short name of one to three words, \"tabs\": the ids in it}. Put every id in exactly \
+one group, use only the ids given, and make at most 12 groups.";
+
+/// The tabs as the model is told about them: id, title, host and opener, nothing else.
+pub fn model_prompt(tabs: &[TidyTab]) -> String {
+    let tabs: Vec<_> = tabs
+        .iter()
+        .map(|t| serde_json::json!({ "id": t.id, "title": t.title, "host": t.host, "opener": t.opener }))
+        .collect();
+    serde_json::Value::Array(tabs).to_string()
+}
+
+/// The groups in a model's answer: the JSON array in it, which models often wrap in a code
+/// fence or a sentence. `None` when there is no such array.
+pub fn parse_answer(text: &str) -> Option<Vec<TidyGroup>> {
+    let json = &text[text.find('[')?..=text.rfind(']')?];
+    serde_json::from_str(json).ok()
 }
 
 /// Accepts an answer only if it places every loose tab exactly once, names no other tab, gives
@@ -251,6 +277,26 @@ mod tests {
         let tree =
             SidebarTree { items: tabs.iter().map(|t| Item::tab(t.id.clone())).collect(), ..SidebarTree::default() };
         (tree, tabs)
+    }
+
+    #[test]
+    fn the_model_is_told_titles_hosts_and_openers_and_its_fenced_answer_reads() {
+        let (_, tabs) = sample();
+        let prompt: serde_json::Value = serde_json::from_str(&model_prompt(&tabs)).unwrap();
+        assert_eq!(prompt[3], serde_json::json!({ "id": "d", "title": "d", "host": "", "opener": "c" }));
+        assert_eq!(prompt[0].as_object().unwrap().len(), 4);
+        let answer = "Here you go:\n```json\n[{\"name\": \"Code\", \"tabs\": [\"a\", \"c\"]}, {\"name\": \"News\", \"tabs\": [\"b\", \"d\"]}]\n```";
+        assert_eq!(parse_answer(answer), Some(vec![g("Code", &["a", "c"]), g("News", &["b", "d"])]));
+        assert_eq!(parse_answer("I cannot help with that."), None);
+        assert_eq!(parse_answer("[{\"name\": \"Code\"}]"), None);
+    }
+
+    #[test]
+    fn a_model_answer_that_leaves_a_tab_out_groups_by_site() {
+        let (mut tree, tabs) = sample();
+        let answer = parse_answer("[{\"name\": \"Code\", \"tabs\": [\"a\", \"c\", \"d\"]}]");
+        let (_, source) = tidy(&mut tree, &tabs, answer, ids()).unwrap();
+        assert_eq!(source, Source::Site);
     }
 
     #[test]

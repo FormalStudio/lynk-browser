@@ -1424,6 +1424,37 @@ fn real_hide_element_picks_keeps_and_restores() {
     }
 }
 
+/// Alt+Cmd+U (Ctrl+U) from a focused page opens its source in a new tab right of it, ahead of the
+/// tab after it, and does nothing from the source tab, which is no web page.
+#[test]
+fn real_view_source_opens_to_the_right() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = os::launch(
+        LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+            .arg(format!("{base}/alpha"))
+            .arg(format!("{base}/beta"))
+            .env("ND_CEF_STYLE", "chrome"),
+    );
+    os::in_front(&app);
+    until(&app, "two tabs", 30, |a| titles(a).len() == 2 && titles(a)[0] == "Alpha");
+    click_page(&app, 200.);
+    let (code, modifiers) = os::VIEW_SOURCE;
+    hid(&app, code, modifiers);
+    let source = format!("view-source:{}/alpha", base.trim_start_matches("http://"));
+    until(&app, "the source right of its page", 20, |a| {
+        let t = titles(a);
+        t.len() == 3 && t[0] == "Alpha" && t[1] == source && t[2].ends_with("/beta")
+    });
+    shot(&app, "view-source");
+    click_page(&app, 200.);
+    hid(&app, code, modifiers);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(titles(&app).len(), 3, "the source tab opened a source of its own: {:?}", titles(&app));
+}
+
 #[test]
 fn real_chrome_only_keys_open_nothing() {
     if !real_allowed() {

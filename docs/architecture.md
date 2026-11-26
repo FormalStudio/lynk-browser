@@ -274,6 +274,10 @@ stateDiagram-v2
   document there gets the rule in its head. Show Hidden Elements takes the site's rules back and
   reloads.
 
+- **View Source.** Opens `view-source:` in a tab right of the page, for web pages only. Chromium
+  reports the source view as navigated to the address it shows, so `page.rs` keeps the tab's
+  `view-source:` address, which is no web page and restores as a source view.
+
 ## Registries
 
 Later features plug in by appending to a list the shell owns. Each list is a `const` slice of

@@ -156,7 +156,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Zoom: Cmd+plus, Cmd+minus, Cmd+0 and ctrl-wheel, Chromium's steps (25% to 500%), remembered per host
 - [x] Zoom glyph while not 100%, its popover (Zoom Out, value, Zoom In, Reset), shown for 1.5 s after a chord or menu step (old `zoom-shots`); drive `real_zoom_steps_and_glyph`, shot `shell-zoom-popover.png` (macOS)
 - [ ] Developer tools: Alt+Cmd+I (Ctrl+Shift+I), and F12 anywhere in the window
-- [ ] View source: Alt+Cmd+U (Ctrl+U) opens `view-source:` in a tab to the right, http, https and file only
+- [x] View source: Alt+Cmd+U (Ctrl+U) opens `view-source:` in a tab to the right, http, https and file only; drive `real_view_source_opens_to_the_right` (macOS, Linux)
 - [ ] Print: Cmd+P opens the system print panel for the page (lane `webview-print`)
 - [ ] Save Page As (Cmd+S): the page downloaded again with its cookies, through a save panel, named after its title, HTML only
 - [ ] Floating video: Alt+Cmd+P lifts the playing (else the largest) video, same-origin frames included, into Chromium's picture-in-picture window, and the same chord brings it back (lane `cef-user-gesture-js`; old drives `mac-pip-drive`, `linux-pip-drive`)

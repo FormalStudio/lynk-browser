@@ -38,6 +38,7 @@ pub mod key {
     pub const END: Code = 107;
     pub const A: Code = 30;
     pub const H: Code = 35;
+    pub const U: Code = 22;
     pub const F1: Code = 59;
     pub const F7: Code = 65;
     pub const F11: Code = 87;
@@ -54,6 +55,7 @@ pub const LINE_END: (Code, &[Modifier]) = (key::END, &[]);
 pub const CMD: Modifier = Modifier::Control;
 
 pub const DEVTOOLS: (&str, Code, &[Modifier]) = ("Ctrl+Shift+I", key::I, &[Modifier::Control, Modifier::Shift]);
+pub const VIEW_SOURCE: (Code, &[Modifier]) = (key::U, &[Modifier::Control]);
 pub const NEW_TAB: &str = "sidebar-new-tab";
 /// ndshell writes frames as BMP; `scripts/linux-gate shots` brings them back.
 pub const SHOT_EXT: &str = "bmp";

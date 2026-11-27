@@ -140,6 +140,21 @@ const FRAMED: &str = r#"<!doctype html><title>Framed</title>
 /// An element EasyList's generic `##.ad_banner` hides, reported to the framing page.
 const AD_FRAME: &str = r#"<!doctype html><div class="ad_banner">Ad</div><p>Frame</p>
 <script>setInterval(() => parent.postMessage(getComputedStyle(document.querySelector('.ad_banner')).display, '*'), 200);</script>"#;
+/// Requests the uBO lists answer: `/468x60/*$image,redirect=1x1.gif` swaps the banner for a 1x1
+/// stand-in, and EasyList's `/pagead/conversion.js$script` is stopped in a frame from another
+/// site, given in the query. The title reports both: `Net <banner> <frame's script>`.
+const NET: &str = r#"<!doctype html><title>Net</title>
+<img id=banner src="/468x60/net.png">
+<iframe id=frame width=400 height=200></iframe>
+<script>
+let frame = 'waiting';
+addEventListener('message', (e) => { frame = e.data; });
+document.getElementById('frame').src = decodeURIComponent(location.search.slice(1));
+const b = document.getElementById('banner');
+setInterval(() => { document.title = `Net ${!b.complete ? 'loading' : b.naturalWidth === 1 ? 'swapped' : 'kept'} ${frame}`; }, 200);
+</script>"#;
+const NET_FRAME: &str = r#"<!doctype html><script src="/pagead/conversion.js"></script>
+<script>setInterval(() => parent.postMessage(window.converted ? 'ran' : 'stopped', '*'), 200);</script>"#;
 /// A page with an icon of its own.
 const ICONIC: &str = "<!doctype html><title>Iconic</title><link rel=icon href=/icon.svg><p>Its own icon.";
 const ICON: &str =
@@ -259,7 +274,8 @@ fn respond(mut stream: std::net::TcpStream) {
     let target = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
     REQUESTS.lock().unwrap().push(target.clone());
     let path = target.split('?').next().unwrap_or("/");
-    if path == "/icon.png" {
+    // `/468x60/` is a banner the uBO lists answer with a 1x1 stand-in; unanswered, it is the icon.
+    if path == "/icon.png" || path.starts_with("/468x60/") {
         let icon = include_bytes!("fixtures/icon.png");
         let _ = write!(
             stream,
@@ -286,6 +302,8 @@ fn respond(mut stream: std::net::TcpStream) {
         "/procedural" => page(PROCEDURAL),
         "/framed" => page(FRAMED),
         "/ad-frame" => page(AD_FRAME),
+        "/net" => page(NET),
+        "/net-frame" => page(NET_FRAME),
         "/csp" => ("200 OK", CSP_POLICY.to_owned(), CSP.to_owned()),
         "/csp.js" => ("200 OK", "Content-Type: text/javascript\r\n".to_owned(), CSP_SCRIPT.to_owned()),
         "/icon.svg" => ("200 OK", "Content-Type: image/svg+xml\r\n".to_owned(), ICON.to_owned()),
@@ -1310,6 +1328,29 @@ fn real_blocking_hides_in_a_cross_site_frame() {
     let deadline = Instant::now() + Duration::from_secs(90);
     while titles(&app) != ["Framed none"] {
         assert!(Instant::now() < deadline, "the frame kept its ad, title {:?}", titles(&app));
+        click_page(&app, 300.);
+        hid(&app, key::R, &[os::CMD]);
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// The uBO lists on requests, on by default in a profile that only has them: a redirect rule
+/// answers an image with its stand-in, and a frame from another site, in a process of its own,
+/// has EasyList's script stopped.
+#[test]
+fn real_blocking_blocks_and_redirects_requests() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let v6 = serve_at("[::1]:0");
+    let dir = blocking_profile("net");
+    let app = launch_on(&dir, &[format!("{base}/net?{v6}/net-frame")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Net")));
+    // The engine compiles off the main thread; the page loaded before it went through.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while titles(&app) != ["Net swapped stopped"] {
+        assert!(Instant::now() < deadline, "the requests went through, title {:?}", titles(&app));
         click_page(&app, 300.);
         hid(&app, key::R, &[os::CMD]);
         std::thread::sleep(Duration::from_secs(3));

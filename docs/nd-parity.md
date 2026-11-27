@@ -210,8 +210,8 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Dark Reader installs from the store and darkens a page; its popup toggles it; the setting survives a restart
 
 ## Ad blocking
-- [ ] adblock-rust with uBlock Origin's default lists, scriptlets and redirects, on by default (lane `cef-request-filter`; old drives `adblock-drive`, `adblock-shots`)
-- [ ] Network requests blocked or redirected per rule, cross-site frames included
+- [x] adblock-rust with uBlock Origin's default lists, scriptlets and redirects, on by default (lane `cef-request-filter`; old drives `adblock-drive`, `adblock-shots`); drive `real_blocking_blocks_and_redirects_requests` (macOS, Linux)
+- [x] Network requests blocked or redirected per rule, cross-site frames included; drive `real_blocking_blocks_and_redirects_requests` (macOS, Linux)
 - [x] Cosmetic filters and scriptlets applied at document start; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux), scriptlets by `blocker` tests
 - [x] Generic cosmetic rules in cross-site frames; drive `real_blocking_hides_in_a_cross_site_frame` (macOS, Linux)
 - [x] Cosmetic filters and scriptlets under a page policy that refuses inline style and script; drive `real_blocking_reaches_a_page_under_a_strict_policy` (macOS, Linux)

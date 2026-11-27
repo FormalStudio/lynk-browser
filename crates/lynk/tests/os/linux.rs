@@ -38,6 +38,7 @@ pub mod key {
     pub const END: Code = 107;
     pub const A: Code = 30;
     pub const H: Code = 35;
+    pub const S: Code = 31;
     pub const P: Code = 25;
     pub const SPACE: Code = 57;
     pub const U: Code = 22;
@@ -523,5 +524,77 @@ impl PrintDialog {
     /// The fake answered already; this forgets the dialog.
     pub fn dismiss(&self, _: &App) {
         self.asked.lock().unwrap().clear();
+    }
+}
+
+/// The save dialog: `org.freedesktop.portal.FileChooser` on the run's private bus, which records
+/// the name each `SaveFile` proposes and answers with that name in `dir`.
+pub struct SaveDialog {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    _bus: zbus::blocking::Connection,
+}
+
+struct FakeChooser {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    dir: PathBuf,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.FileChooser")]
+impl FakeChooser {
+    async fn save_file(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+        _parent: String,
+        _title: String,
+        options: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+    ) -> zbus::fdo::Result<zbus::zvariant::OwnedObjectPath> {
+        let sender = header.sender().map(|s| s.trim_start_matches(':').replace('.', "_")).unwrap_or_default();
+        let text = |key: &str| options.get(key).and_then(|v| String::try_from(v.try_clone().ok()?).ok());
+        let path =
+            format!("/org/freedesktop/portal/desktop/request/{sender}/{}", text("handle_token").unwrap_or_default());
+        let name = text("current_name").unwrap_or_default();
+        self.asked.lock().unwrap().push(name.clone());
+        // A URI: the proposed name has spaces, which a file URI carries percent-encoded.
+        let path_bytes = self.dir.join(&name).into_os_string().into_encoded_bytes();
+        let uri = path_bytes.iter().fold(String::from("file://"), |mut uri, &b| {
+            if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+                uri.push(char::from(b));
+            } else {
+                uri.push_str(&format!("%{b:02X}"));
+            }
+            uri
+        });
+        // The answer comes after the reply, as a user's would: ashpd listens on the request only
+        // once the call returned its path, and misses a response sent before.
+        let (conn, request) = (conn.clone(), path.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let results = std::collections::HashMap::from([("uris", zbus::zvariant::Value::from(vec![uri]))]);
+            zbus::block_on(conn.emit_signal(
+                None::<()>,
+                request.as_str(),
+                "org.freedesktop.portal.Request",
+                "Response",
+                &(0u32, results),
+            ))
+            .expect("the file chooser's response");
+        });
+        zbus::zvariant::OwnedObjectPath::try_from(path).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+}
+
+/// Launches the app with [`SaveDialog`] on its session bus, saving into `dir`.
+pub fn launch_saving(options: LaunchOptions, dir: &Path) -> (App, SaveDialog) {
+    let asked = std::sync::Arc::default();
+    let (app, bus) =
+        launch_with_portal(options, FakeChooser { asked: std::sync::Arc::clone(&asked), dir: dir.to_owned() });
+    (app, SaveDialog { asked, _bus: bus })
+}
+
+impl SaveDialog {
+    /// The name the dialog proposed, once it was asked for; the fake has saved it already.
+    pub fn save(&self, _: &App) -> Option<String> {
+        self.asked.lock().unwrap().pop()
     }
 }

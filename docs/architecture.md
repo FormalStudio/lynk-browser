@@ -290,6 +290,11 @@ stateDiagram-v2
 - **Print.** `WebView::print`: on macOS Chromium's print panel, a window of the app's own; on
   Linux the desktop portal's dialog through nd.
 
+- **Save Page As.** `save_page.rs` downloads the page's own address again with `start_download`,
+  so the profile's cookies go with it, and answers only that download, through
+  `nd::system::window::save` (the save panel, the portal's file chooser on Linux) with core's
+  `saved_page_name`.
+
 - **Floating video.** `float.rs` runs a script in the `lynk-float` world with a user gesture,
   which `requestPictureInPicture` needs: the playing video (else the largest with a picture),
   same-origin frames included, goes into Chromium's own picture-in-picture window, or comes back
@@ -536,6 +541,7 @@ Shell, `crates/lynk/src`:
 | `blocking.rs` | the request filter, per-tab blocked counts, the site switch and its padlock row, the scriptlet page, the user's hide rules | decide what a rule matches (core does) |
 | `hider.rs` | the element picker in the page and its commands | store rules (blocking does) |
 | `reader.rs` | reading mode over a page, which tabs read | change the page under the reader |
+| `save_page.rs` | Save Page As: the download it starts and its save panel | answer downloads it did not start |
 | `float.rs` | lifting a page's video into picture-in-picture | draw the floating window (Chromium does) |
 | `devtools.rs` | each tab's DevTools, each window's dock, the split and the DevTools window | reach into the inspected page |
 | `site_info.rs` | the padlock and its popover, `ROWS` | decide a security verdict (core does) |

@@ -49,6 +49,7 @@ pub const OBSERVERS: &[Observer] = &[
     crate::blocking::observe,
     crate::hider::observe,
     crate::reader::observe,
+    crate::save_page::observe,
     crate::float::observe,
 ];
 

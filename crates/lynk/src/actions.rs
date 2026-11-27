@@ -321,7 +321,11 @@ pub const COMMANDS: &[Command] = &[
         .key("reopen-tab")
         .menu(MenuId::File)
         .handler(|w, _, _, cx| w.reopen(cx)),
-    Command::new::<SavePage>("Save Page As\u{2026}").key("save-page").menu(MenuId::File).enabled(web_page),
+    Command::new::<SavePage>("Save Page As\u{2026}")
+        .key("save-page")
+        .menu(MenuId::File)
+        .enabled(web_page)
+        .handler(crate::save_page::save),
     Command::new::<Print>("Print\u{2026}").key("print").menu(MenuId::File).enabled(web_page).handler(|w, id, _, _| {
         if let Some(page) = view_of(w, id) {
             page.print();

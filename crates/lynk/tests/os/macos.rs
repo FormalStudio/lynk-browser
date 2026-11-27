@@ -32,6 +32,7 @@ pub mod key {
     pub const RIGHT: Code = 124;
     pub const A: Code = 0;
     pub const H: Code = 4;
+    pub const S: Code = 1;
     pub const P: Code = 35;
     pub const SPACE: Code = 49;
     pub const U: Code = 32;
@@ -442,5 +443,48 @@ impl PrintDialog {
         );
         let out = Command::new("osascript").args(["-e", &script]).output().unwrap();
         assert!(out.status.success(), "Esc did not reach the print panel: {}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+/// The system save panel, a sheet on the window, saving into `dir`.
+pub struct SaveDialog(PathBuf);
+
+pub fn launch_saving(options: LaunchOptions, dir: &Path) -> (App, SaveDialog) {
+    (launch(options), SaveDialog(dir.to_owned()))
+}
+
+impl SaveDialog {
+    /// Once the panel is up: the name it proposes, after going to the folder (Shift+Cmd+G) and
+    /// pressing Return, its default Save. Its controls sit in groups; the name field is the one
+    /// the panel opens focused on.
+    pub fn save(&self, app: &App) -> Option<String> {
+        let script = format!(
+            r#"tell application "System Events" to tell (first process whose unix id is {pid})
+                set s to missing value
+                repeat with w in windows
+                    if (count of sheets of w) > 0 then
+                        set s to sheet 1 of w
+                        exit repeat
+                    end if
+                end repeat
+                if s is missing value then return ""
+                set proposed to value of (value of attribute "AXFocusedUIElement")
+                if proposed is missing value or proposed is "" then return ""
+                keystroke "g" using {{command down, shift down}}
+                delay 1
+                keystroke "{dir}"
+                delay 0.5
+                keystroke return
+                delay 1
+                keystroke return
+                return proposed
+            end tell"#,
+            pid = app.pid(),
+            dir = self.0.display()
+        );
+        let out = Command::new("osascript").args(["-e", &script]).output().unwrap();
+        assert!(out.status.success(), "the save panel: {}", String::from_utf8_lossy(&out.stderr));
+        let proposed = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        (!proposed.is_empty()).then_some(proposed)
     }
 }

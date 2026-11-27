@@ -1538,6 +1538,47 @@ fn real_print_asks_for_the_dialog() {
     assert_eq!(titles(&app), ["Alpha"]);
 }
 
+/// Cmd+S (Ctrl+S) from the page asks where to save it, proposing its title as an HTML file, and
+/// writes the page there as the server sends it to this profile, cookie included.
+#[test]
+fn real_save_page_writes_the_page_with_its_cookies() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = profile("save-page");
+    let into = dir.join("saved");
+    std::fs::create_dir_all(&into).unwrap();
+    let (app, dialog) = os::launch_saving(profile_options(&dir, &[format!("{base}/set-cookie")]), &into);
+    os::in_front(&app);
+    until(&app, "the cookie set", 30, |a| titles(a) == ["Set"]);
+    open_bar(&app, key::L);
+    os::type_text(&app, &format!("{base}/cookie\n"));
+    until(&app, "the page reading its cookie", 30, |a| titles(a) == ["Cookie who=one"]);
+    click_page(&app, 200.);
+    hid(&app, key::S, &[os::CMD]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let proposed = loop {
+        if let Some(name) = dialog.save(&app) {
+            break name;
+        }
+        if Instant::now() > deadline {
+            let seen = shot(&app, "save-missing");
+            panic!("no save dialog, {}\n{}", seen.display(), app.stderr_tail(40).join("\n"));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    assert_eq!(proposed, "Cookie who=one.html");
+    let saved = into.join(&proposed);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while std::fs::read_to_string(&saved).map_or(true, |t| !t.contains("</title>")) {
+        assert!(Instant::now() < deadline, "nothing saved at {}\n{}", saved.display(), app.stderr_tail(40).join("\n"));
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    assert_eq!(std::fs::read_to_string(&saved).unwrap(), "<!doctype html><title>Cookie who=one</title>");
+    assert_eq!(titles(&app), ["Cookie who=one"]);
+}
+
 /// Alt+Cmd+P lifts the playing video, not the larger paused one or the first, into Chromium's
 /// picture-in-picture window, the same chord brings it back, and a page with no video says so.
 #[test]

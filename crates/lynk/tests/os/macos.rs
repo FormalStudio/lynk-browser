@@ -123,7 +123,12 @@ pub fn activate(app: &App) {
     // A loaded machine takes a while to register a Chromium app with the window server.
     let deadline = Instant::now() + Duration::from_secs(30);
     while !(ndshell::input::activate(app.pid()) && front_pid() == Some(app.pid())) {
-        assert!(Instant::now() < deadline, "the app would not come forward; in front: {}", front_app());
+        assert!(
+            Instant::now() < deadline,
+            "the app would not come forward; in front: {}\n{}",
+            front_app(),
+            app.stderr_tail(40).join("\n")
+        );
         std::thread::sleep(Duration::from_millis(200));
     }
     std::thread::sleep(Duration::from_millis(300));
@@ -139,10 +144,11 @@ pub fn in_front(app: &App) {
     while !key(app) {
         assert!(
             Instant::now() < deadline,
-            "no window of the app became key; in front: {}, windows {:?}\n{}",
+            "no window of the app became key; in front: {}, windows {:?}\n{}\n{}",
             front_app(),
             app.windows(),
-            focus_report(app)
+            focus_report(app),
+            app.stderr_tail(40).join("\n")
         );
         ndshell::input::activate(app.pid());
         std::thread::sleep(Duration::from_millis(200));

@@ -461,6 +461,7 @@ impl BrowserWindow {
     }
 
     fn close_window(&mut self, cx: &mut Context<Self>) {
+        eprintln!("lynk: closing window {:?} with {} tabs", self.id, self.tabs.len());
         self.let_go(cx);
         cx.close_window(self.id);
     }

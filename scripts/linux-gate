@@ -38,7 +38,9 @@ export ND_LINUX_GATE_TIMEOUT_MIN=${ND_LINUX_GATE_TIMEOUT_MIN:-150}
 cargo_config() {
   cat "$root/.cargo/config.toml"
   [ "${LYNK_LOCAL_ND:-0}" = 1 ] || return 0
-  crates=$(sed -n '/^name = /{s/^name = "\(.*\)"/\1/;h;}; /^source = "git+https:\/\/github.com\/FormalStudio\/NativeDesktop/{x;p;}' "$root/Cargo.lock" | sort -u)
+  # The committed lock: a macbook build with scripts/local-nd.toml rewrites the working one
+  # without the git sources this reads.
+  crates=$(git -C "$root" show HEAD:Cargo.lock | sed -n '/^name = /{s/^name = "\(.*\)"/\1/;h;}; /^source = "git+https:\/\/github.com\/FormalStudio\/NativeDesktop/{x;p;}' | sort -u)
   echo '[patch."https://github.com/FormalStudio/NativeDesktop"]'
   for crate in $crates; do
     for path in "crates/$crate" "vendor/$crate"; do

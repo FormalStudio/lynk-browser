@@ -677,6 +677,7 @@ mod tests {
                 "Close Tab",
                 "Reopen Closed Tab",
                 "Save Page As\u{2026}",
+                "Print\u{2026}",
                 "Settings",
                 "Quit"
             ]

@@ -4083,7 +4083,8 @@ fn real_pinned_grid_at_two_widths() {
             }
             shot(&app, &format!("pins-{n}-at-{width}"));
             let before_rows = rows(&app);
-            let fixed = |a: &App| ["controls-row", "sidebar-foot"].map(|id| a.get_by_test_id(id).bounding_box().unwrap());
+            let fixed =
+                |a: &App| ["controls-row", "sidebar-foot"].map(|id| a.get_by_test_id(id).bounding_box().unwrap());
             let fixed_before = fixed(&app);
             let (wx, wy, _, _) = front_window(&app).bounds;
             let at = row_at(&app, 3);

@@ -576,7 +576,12 @@ impl BrowserWindow {
 
     /// Sorts the loose tabs into groups under new separators; the undo for it, or `None` when
     /// there was nothing to tidy.
-    pub fn tidy(&mut self, tabs: &[TidyTab], answer: Option<Vec<TidyGroup>>, cx: &mut Context<Self>) -> Option<TidyUndo> {
+    pub fn tidy(
+        &mut self,
+        tabs: &[TidyTab],
+        answer: Option<Vec<TidyGroup>>,
+        cx: &mut Context<Self>,
+    ) -> Option<TidyUndo> {
         let (undo, source) = lynk_core::tidy::tidy(&mut self.tree, tabs, answer, || app::next_item_id(cx)).ok()?;
         eprintln!("lynk: tidy grouped by {source:?}");
         self.changed(cx);

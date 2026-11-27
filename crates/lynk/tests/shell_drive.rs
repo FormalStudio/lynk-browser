@@ -1654,6 +1654,17 @@ fn real_reading_mode_enters_scrolls_and_leaves() {
         std::thread::sleep(Duration::from_millis(800));
         let after = page_column(&app, &format!("reader-spaced-{appearance}"));
         assert_ne!(before, after, "Space left the reader where it was");
+        hid(&app, key::PAGE_UP, &[]);
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(
+            page_column(&app, &format!("reader-up-{appearance}")),
+            before,
+            "Page Up left the reader below its top"
+        );
+        hid(&app, key::PAGE_DOWN, &[]);
+        std::thread::sleep(Duration::from_millis(800));
+        let paged = page_column(&app, &format!("reader-paged-{appearance}"));
+        assert_ne!(before, paged, "Page Down left the reader where it was");
         open_bar(&app, key::K);
         type_real(&app, "reading mode");
         until_rows(&app, "Leave Reading Mode", |r| r.iter().any(|r| r.starts_with("Leave Reading Mode")));

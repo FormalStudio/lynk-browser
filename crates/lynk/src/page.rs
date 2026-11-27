@@ -44,7 +44,14 @@ pub enum PageEvent<'a> {
 pub type Observer = fn(&mut BrowserWindow, TabId, &PageEvent, &mut Window, &mut Context<BrowserWindow>);
 
 /// The modules listening to every tab's page, in the order they hear an event.
-pub const OBSERVERS: &[Observer] = &[crate::history::record, crate::blocking::observe];
+pub const OBSERVERS: &[Observer] = &[
+    crate::history::record,
+    crate::blocking::observe,
+    crate::hider::observe,
+    crate::reader::observe,
+    crate::save_page::observe,
+    crate::float::observe,
+];
 
 fn observe(win: &mut BrowserWindow, id: TabId, event: PageEvent, window: &mut Window, cx: &mut Context<BrowserWindow>) {
     for observer in OBSERVERS {
@@ -216,7 +223,11 @@ fn navigated(w: &mut BrowserWindow, id: TabId, url: &str, cx: &mut Context<Brows
         w.changed(cx);
         return;
     }
-    tab.url = url.to_owned();
+    // Chromium reports a source view at the address it shows the source of; the tab keeps
+    // `view-source:`, so it reads as no web page and restores as a source view.
+    if tab.url.strip_prefix("view-source:") != Some(url) {
+        tab.url = url.to_owned();
+    }
     tab.rt.error = None;
     tab.find.count = None;
     tab.find.found = None;

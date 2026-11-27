@@ -37,6 +37,11 @@ pub mod key {
     pub const HOME: Code = 102;
     pub const END: Code = 107;
     pub const A: Code = 30;
+    pub const H: Code = 35;
+    pub const S: Code = 31;
+    pub const P: Code = 25;
+    pub const SPACE: Code = 57;
+    pub const U: Code = 22;
     pub const F1: Code = 59;
     pub const F7: Code = 65;
     pub const F11: Code = 87;
@@ -53,6 +58,9 @@ pub const LINE_END: (Code, &[Modifier]) = (key::END, &[]);
 pub const CMD: Modifier = Modifier::Control;
 
 pub const DEVTOOLS: (&str, Code, &[Modifier]) = ("Ctrl+Shift+I", key::I, &[Modifier::Control, Modifier::Shift]);
+pub const READER: (Code, &[Modifier]) = (key::R, &[Modifier::Control, Modifier::Shift]);
+pub const FLOAT: (Code, &[Modifier]) = (key::P, &[Modifier::Control, Modifier::Alt]);
+pub const VIEW_SOURCE: (Code, &[Modifier]) = (key::U, &[Modifier::Control]);
 pub const NEW_TAB: &str = "sidebar-new-tab";
 /// ndshell writes frames as BMP; `scripts/linux-gate shots` brings them back.
 pub const SHOT_EXT: &str = "bmp";
@@ -444,4 +452,149 @@ pub fn wm_fullscreen(app: &App, on: bool) {
 
 pub fn shot_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shell-{name}.{SHOT_EXT}"))
+}
+
+/// The print dialog the app's page asks for: `org.freedesktop.portal.Print` on the run's private
+/// bus, which records the title of the dialog asked for and answers it cancelled.
+pub struct PrintDialog {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    _bus: zbus::blocking::Connection,
+}
+
+struct FakePrint {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.Print")]
+impl FakePrint {
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_print(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+        _parent: String,
+        title: String,
+        _settings: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+        _page_setup: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+        options: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+    ) -> zbus::fdo::Result<zbus::zvariant::OwnedObjectPath> {
+        let sender = header.sender().map(|s| s.trim_start_matches(':').replace('.', "_")).unwrap_or_default();
+        let token = options.get("handle_token").and_then(|v| String::try_from(v.try_clone().ok()?).ok());
+        let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{}", token.unwrap_or_default());
+        self.asked.lock().unwrap().push(title);
+        let none = std::collections::HashMap::<&str, zbus::zvariant::Value<'_>>::new();
+        conn.emit_signal(None::<()>, path.as_str(), "org.freedesktop.portal.Request", "Response", &(1u32, none))
+            .await
+            .map_err(|e| zbus::fdo::Error::Failed(e.to_string()))?;
+        zbus::zvariant::OwnedObjectPath::try_from(path).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+}
+
+/// Launches the app on the run's private session bus with `portal` as its desktop portal.
+/// The bus would activate the user's keyring for Chromium's cookie key and wait on it for good,
+/// so the fake holds that name too, and Chromium falls back to its own key at once.
+fn launch_with_portal(
+    options: LaunchOptions,
+    portal: impl zbus::object_server::Interface,
+) -> (App, zbus::blocking::Connection) {
+    let display = Display::start();
+    let bus = zbus::blocking::connection::Builder::address(display.hyprland.bus_address())
+        .and_then(|b| b.name("org.freedesktop.portal.Desktop"))
+        .and_then(|b| b.name("org.freedesktop.secrets"))
+        .and_then(|b| b.serve_at("/org/freedesktop/portal/desktop", portal))
+        .and_then(|b| b.build())
+        .unwrap_or_else(|e| panic!("fake portal: {e}"));
+    let bus_address = display.hyprland.bus_address().to_owned();
+    (launch_on(options.env("DBUS_SESSION_BUS_ADDRESS", bus_address), display), bus)
+}
+
+/// Launches the app with [`PrintDialog`] on its session bus.
+pub fn launch_printing(options: LaunchOptions) -> (App, PrintDialog) {
+    let asked = std::sync::Arc::default();
+    let (app, bus) = launch_with_portal(options, FakePrint { asked: std::sync::Arc::clone(&asked) });
+    (app, PrintDialog { asked, _bus: bus })
+}
+
+impl PrintDialog {
+    /// The title of the page the last dialog was asked for.
+    pub fn asked(&self, _: &App) -> Option<String> {
+        self.asked.lock().unwrap().last().cloned()
+    }
+
+    /// The fake answered already; this forgets the dialog.
+    pub fn dismiss(&self, _: &App) {
+        self.asked.lock().unwrap().clear();
+    }
+}
+
+/// The save dialog: `org.freedesktop.portal.FileChooser` on the run's private bus, which records
+/// the name each `SaveFile` proposes and answers with that name in `dir`.
+pub struct SaveDialog {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    _bus: zbus::blocking::Connection,
+}
+
+struct FakeChooser {
+    asked: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    dir: PathBuf,
+}
+
+#[zbus::interface(name = "org.freedesktop.portal.FileChooser")]
+impl FakeChooser {
+    async fn save_file(
+        &self,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+        _parent: String,
+        _title: String,
+        options: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+    ) -> zbus::fdo::Result<zbus::zvariant::OwnedObjectPath> {
+        let sender = header.sender().map(|s| s.trim_start_matches(':').replace('.', "_")).unwrap_or_default();
+        let text = |key: &str| options.get(key).and_then(|v| String::try_from(v.try_clone().ok()?).ok());
+        let path =
+            format!("/org/freedesktop/portal/desktop/request/{sender}/{}", text("handle_token").unwrap_or_default());
+        let name = text("current_name").unwrap_or_default();
+        self.asked.lock().unwrap().push(name.clone());
+        // A URI: the proposed name has spaces, which a file URI carries percent-encoded.
+        let path_bytes = self.dir.join(&name).into_os_string().into_encoded_bytes();
+        let uri = path_bytes.iter().fold(String::from("file://"), |mut uri, &b| {
+            if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) {
+                uri.push(char::from(b));
+            } else {
+                uri.push_str(&format!("%{b:02X}"));
+            }
+            uri
+        });
+        // The answer comes after the reply, as a user's would: ashpd listens on the request only
+        // once the call returned its path, and misses a response sent before.
+        let (conn, request) = (conn.clone(), path.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let results = std::collections::HashMap::from([("uris", zbus::zvariant::Value::from(vec![uri]))]);
+            zbus::block_on(conn.emit_signal(
+                None::<()>,
+                request.as_str(),
+                "org.freedesktop.portal.Request",
+                "Response",
+                &(0u32, results),
+            ))
+            .expect("the file chooser's response");
+        });
+        zbus::zvariant::OwnedObjectPath::try_from(path).map_err(|e| zbus::fdo::Error::Failed(e.to_string()))
+    }
+}
+
+/// Launches the app with [`SaveDialog`] on its session bus, saving into `dir`.
+pub fn launch_saving(options: LaunchOptions, dir: &Path) -> (App, SaveDialog) {
+    let asked = std::sync::Arc::default();
+    let (app, bus) =
+        launch_with_portal(options, FakeChooser { asked: std::sync::Arc::clone(&asked), dir: dir.to_owned() });
+    (app, SaveDialog { asked, _bus: bus })
+}
+
+impl SaveDialog {
+    /// The name the dialog proposed, once it was asked for; the fake has saved it already.
+    pub fn save(&self, _: &App) -> Option<String> {
+        self.asked.lock().unwrap().pop()
+    }
 }

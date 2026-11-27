@@ -5,9 +5,13 @@
 //! which sites blocking is off for nor reaches a page.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use adblock::Engine;
 use adblock::request::Request;
+use adblock::resources::Resource;
+
+use crate::adblock::{BlockingState, user_engine};
 use base64::Engine as _;
 
 /// What a request gets.
@@ -25,8 +29,10 @@ pub enum Decision {
 }
 
 pub struct Blocker {
-    lists: Engine,
+    lists: Arc<Engine>,
     user: Engine,
+    /// The release's resources, which the user's scriptlets need too.
+    resources: Arc<Vec<Resource>>,
 }
 
 /// A document's cosmetics: rules that hide by address, and the scriptlets for it.
@@ -43,8 +49,23 @@ pub struct Cosmetics {
 }
 
 impl Blocker {
-    pub fn new(lists: Engine, user: Engine) -> Self {
-        Self { lists, user }
+    /// `lists` already holds `resources`.
+    pub fn new(lists: Engine, state: &BlockingState, resources: Vec<Resource>) -> Self {
+        let resources = Arc::new(resources);
+        Self { lists: Arc::new(lists), user: Self::user(state, &resources), resources }
+    }
+
+    /// The same lists with the user's rules as `state` has them now, for a rule the user just
+    /// made or took back; the lists are not compiled again.
+    pub fn with_user(&self, state: &BlockingState) -> Self {
+        let resources = self.resources.clone();
+        Self { lists: self.lists.clone(), user: Self::user(state, &resources), resources }
+    }
+
+    fn user(state: &BlockingState, resources: &[Resource]) -> Engine {
+        let mut user = user_engine(state);
+        user.use_resources(resources.to_vec());
+        user
     }
 
     /// `source` is the page's address, `kind` Chromium's resource type name (`script`, `image`,
@@ -135,7 +156,7 @@ mod tests {
     use adblock::resources::{MimeType, PermissionMask, Resource, ResourceType};
 
     use super::*;
-    use crate::adblock::{BlockingState, user_engine};
+    use crate::adblock::BlockingState;
     use crate::ublock::{Scriptlet, scriptlet_resources};
 
     /// Lines as they stand in EasyList, EasyPrivacy, uBlock filters and Peter Lowe's list.
@@ -180,9 +201,7 @@ $removeparam=utm_source
         let mut resources = scriptlet_resources(&[set]);
         resources.push(gpt);
         lists.use_resources(resources.clone());
-        let mut user = user_engine(state);
-        user.use_resources(resources);
-        Blocker::new(lists, user)
+        Blocker::new(lists, state, resources)
     }
 
     #[test]
@@ -284,6 +303,20 @@ $removeparam=utm_source
         assert!(rules.iter().any(|r| r["action"]["type"] == "remove"));
         assert!(c.hide.is_empty(), "procedural rules stay out of the style sheet: {:?}", c.hide);
         assert!(b.cosmetics("https://other.example/").procedural.is_empty());
+    }
+
+    #[test]
+    fn a_new_user_rule_joins_the_same_lists() {
+        let b = blocker(&BlockingState::default());
+        assert_eq!(b.cosmetics("https://www.reddit.com/").hide, ["shreddit-ad-post"]);
+        let mut state = BlockingState::default();
+        state.hide("www.reddit.com", "#banner", "Banner", "", 1);
+        let b = b.with_user(&state);
+        assert_eq!(b.cosmetics("https://www.reddit.com/").hide, ["#banner", "shreddit-ad-post"]);
+        assert_eq!(
+            b.check("https://ad.doubleclick.net/ddm/adj/x", "https://www.reddit.com/", "script", "GET"),
+            Decision::Block
+        );
     }
 
     #[test]

@@ -141,6 +141,21 @@ const FRAMED: &str = r#"<!doctype html><title>Framed</title>
 /// An element EasyList's generic `##.ad_banner` hides, reported to the framing page.
 const AD_FRAME: &str = r#"<!doctype html><div class="ad_banner">Ad</div><p>Frame</p>
 <script>setInterval(() => parent.postMessage(getComputedStyle(document.querySelector('.ad_banner')).display, '*'), 200);</script>"#;
+/// Requests the uBO lists answer: `/468x60/*$image,redirect=1x1.gif` swaps the banner for a 1x1
+/// stand-in, and EasyList's `/pagead/conversion.js$script` is stopped in a frame from another
+/// site, given in the query. The title reports both: `Net <banner> <frame's script>`.
+const NET: &str = r#"<!doctype html><title>Net</title>
+<img id=banner src="/468x60/net.png">
+<iframe id=frame width=400 height=200></iframe>
+<script>
+let frame = 'waiting';
+addEventListener('message', (e) => { frame = e.data; });
+document.getElementById('frame').src = decodeURIComponent(location.search.slice(1));
+const b = document.getElementById('banner');
+setInterval(() => { document.title = `Net ${!b.complete ? 'loading' : b.naturalWidth === 1 ? 'swapped' : 'kept'} ${frame}`; }, 200);
+</script>"#;
+const NET_FRAME: &str = r#"<!doctype html><script src="/pagead/conversion.js"></script>
+<script>setInterval(() => parent.postMessage(window.converted ? 'ran' : 'stopped', '*'), 200);</script>"#;
 /// A page with an icon of its own.
 const ICONIC: &str = "<!doctype html><title>Iconic</title><link rel=icon href=/icon.svg><p>Its own icon.";
 const ICON: &str =
@@ -151,6 +166,53 @@ const PLAIN: &str = "<!doctype html><title>Plain</title><p>No colours of its own
 /// `/banner_ads/*`), an element its generic `##.ad_banner` hides (except on 127.0.0.1, where
 /// EasyList's `@@://127.0.0.1$generichide` turns generic rules off) and one the user hid on
 /// 127.0.0.1. The title reports what each did: `Ads <ad_banner> <promo> <script>`.
+/// A banner the page acts on when pressed and an article. The title says what each is, `Hide
+/// <banner> <article>`, `Hide pressed` once the page took a press on the banner.
+const HIDE: &str = r#"<!doctype html><title>Hide</title>
+<body style="margin:0;font:16px system-ui">
+<div id=banner style="height:160px;background:#fd8;display:grid;place-items:center" onpointerdown="document.title = 'Hide pressed'">Sponsored banner</div>
+<article id=article style="height:400px;padding:24px">An article worth keeping</article>
+<script>
+const state = (id) => getComputedStyle(document.getElementById(id)).display === 'none' ? 'gone' : 'shown';
+const report = () => { if (document.title === 'Hide pressed') return;
+  document.title = `Hide ${state('banner')} ${state('article')}`; setTimeout(report, 100); };
+report();
+</script>"#;
+
+/// An article long enough for Readability and to scroll, on a green page.
+const ARTICLE: &str = r#"<!doctype html><title>Article</title>
+<body style="margin:0;background:#dfd"><nav>Home · News · About</nav>
+<article><h1>A long walk along the coast</h1>
+<p>The path leaves the harbour past the fish market and climbs onto the cliffs, where the wind comes straight off the water and the gulls hang still above the edge for minutes at a time.</p>
+<p>Two hours on, the first cove opens below: a crescent of grey shingle, a lifeboat ramp, and a café that has served the same three cakes since anyone in the village can remember.</p>
+<p>From there the walk turns inland through gorse and bracken, following an old miners' track whose stones are polished by a century of boots, past the ruins of an engine house with its chimney still standing.</p>
+<p>The last stretch drops back to the sea at a beach that only appears at low tide, so the walk is best timed by the tables pinned to the harbour noticeboard rather than by the clock.</p>
+<p>By evening the light goes gold and then pink over the headland, and the lighthouse starts its slow sweep across the bay while the café stacks its chairs for the night.</p>
+<p>Ten more paragraphs could follow here about the birds, the boats and the weather, and a reader would scroll past each of them to reach the end of the page.</p>
+<p>The tide tables, the bus back to the harbour and the opening hours of the café are all on the noticeboard by the lifeboat station, beside a map of the path.</p>
+<p>Walkers who want a shorter day can take the bus out to the engine house and walk only the last stretch back to the beach and the harbour beyond it.</p>
+</article></body>"#;
+
+/// A small video and a large playing one, both fed from a canvas, and a title that says which is
+/// in picture-in-picture: `Video <id>` or `Video none`.
+const VIDEO: &str = r#"<!doctype html><title>Video none</title>
+<body style="margin:0;background:#222">
+<video id=small muted style="width:160px;height:90px"></video>
+<video id=big muted style="width:640px;height:360px"></video>
+<script>
+const feed = (hue) => { const c = document.createElement('canvas'); c.width = 320; c.height = 180;
+  const g = c.getContext('2d'); let t = 0;
+  setInterval(() => { g.fillStyle = `hsl(${hue + t++ % 60} 70% 50%)`; g.fillRect(0, 0, 320, 180); }, 33);
+  return c.captureStream(30); };
+small.srcObject = feed(0); big.srcObject = feed(200);
+small.onloadedmetadata = () => small.pause();
+big.onloadedmetadata = () => big.play();
+for (const v of [small, big]) {
+  v.addEventListener('enterpictureinpicture', () => document.title = 'Video ' + v.id);
+  v.addEventListener('leavepictureinpicture', () => document.title = 'Video none');
+}
+</script>"#;
+
 const ADS: &str = r#"<!doctype html><title>Ads</title>
 <script src="/pagead/conversion.js"></script>
 <img src="/banner_ads/b.png" alt="">
@@ -213,7 +275,8 @@ fn respond(mut stream: std::net::TcpStream) {
     let target = line.split_whitespace().nth(1).unwrap_or("/").to_owned();
     REQUESTS.lock().unwrap().push(target.clone());
     let path = target.split('?').next().unwrap_or("/");
-    if path == "/icon.png" {
+    // `/468x60/` is a banner the uBO lists answer with a 1x1 stand-in; unanswered, it is the icon.
+    if path == "/icon.png" || path.starts_with("/468x60/") {
         let icon = include_bytes!("fixtures/icon.png");
         let _ = write!(
             stream,
@@ -240,10 +303,15 @@ fn respond(mut stream: std::net::TcpStream) {
         "/procedural" => page(PROCEDURAL),
         "/framed" => page(FRAMED),
         "/ad-frame" => page(AD_FRAME),
+        "/net" => page(NET),
+        "/net-frame" => page(NET_FRAME),
         "/csp" => ("200 OK", CSP_POLICY.to_owned(), CSP.to_owned()),
         "/csp.js" => ("200 OK", "Content-Type: text/javascript\r\n".to_owned(), CSP_SCRIPT.to_owned()),
         "/icon.svg" => ("200 OK", "Content-Type: image/svg+xml\r\n".to_owned(), ICON.to_owned()),
         "/ads" => page(ADS),
+        "/hide" => page(HIDE),
+        "/article" => page(ARTICLE),
+        "/video" => page(VIDEO),
         "/pagead/conversion.js" => ("200 OK", String::new(), "window.converted = true;".to_owned()),
         "/dark-scheme" => page(DARK_SCHEME),
         "/both-schemes" => page(BOTH_SCHEMES),
@@ -1267,6 +1335,29 @@ fn real_blocking_hides_in_a_cross_site_frame() {
     }
 }
 
+/// The uBO lists on requests, on by default in a profile that only has them: a redirect rule
+/// answers an image with its stand-in, and a frame from another site, in a process of its own,
+/// has EasyList's script stopped.
+#[test]
+fn real_blocking_blocks_and_redirects_requests() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let v6 = serve_at("[::1]:0");
+    let dir = blocking_profile("net");
+    let app = launch_on(&dir, &[format!("{base}/net?{v6}/net-frame")]);
+    until(&app, "the page", 30, |a| titles(a).first().is_some_and(|t| t.starts_with("Net")));
+    // The engine compiles off the main thread; the page loaded before it went through.
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while titles(&app) != ["Net swapped stopped"] {
+        assert!(Instant::now() < deadline, "the requests went through, title {:?}", titles(&app));
+        click_page(&app, 300.);
+        hid(&app, key::R, &[os::CMD]);
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
 /// The blocker on a local page: EasyList's requests stopped and counted in the padlock, the
 /// user's rule hiding its element from the head, EasyList's generic rule held off on 127.0.0.1 by
 /// its own exception and hiding its element on `[::1]`; the switch turns it all off for the site
@@ -1314,6 +1405,341 @@ fn real_blocking_counts_hides_and_switches_off() {
     open_bar(&app, key::L);
     os::type_text(&app, &format!("{v6}/ads\n"));
     until(&app, "the generic rule on [::1]", 30, |a| titles(a) == ["Ads none block stopped"]);
+}
+
+/// The element hider on a local page, in light then dark: Shift+Cmd+H outlines the element
+/// under the pointer and a press hides it without the page hearing the press; Esc puts the
+/// picker away, so the next press reaches the page; the element stays hidden across a reload,
+/// from the head; Show Hidden Elements brings it back.
+#[test]
+fn real_hide_element_picks_keeps_and_restores() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for appearance in ["light", "dark"] {
+        let dir = blocking_profile(&format!("hider-{appearance}"));
+        let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-hider-{appearance}.toml"));
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let app = os::launch(
+            profile_options(&dir, &[format!("{base}/hide")]).env("ND_THEME_TOML", theme.display().to_string()),
+        );
+        os::in_front(&app);
+        until(&app, "the page", 30, |a| titles(a) == ["Hide shown shown"]);
+        // An app that quit just before hands activation on to the next in line a moment after this
+        // one came forward, and an inactive app's page hears no pointer moves.
+        os::activate(&app);
+        let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+        let (wx, wy, _, _) = front_window(&app).bounds;
+        let at = |y: f32| (wx + f64::from(b.x + b.width / 2.), wy + f64::from(b.y + y));
+        // The outline is the picker's blue, drawn on the hovered element's left edge; read off the
+        // capture. A move can land before the picker listens, so the pointer stirs a point while
+        // it waits, as a hand would.
+        let outlined = |name: &str, y: f32| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            for stir in 0.. {
+                if stir > 0 {
+                    os::move_to(&app, at(y + (stir % 2) as f32));
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                let path = shot(&app, name);
+                let edge = os::pixel(&app, &front_window(&app), &path, (f64::from(b.x) + 1., f64::from(b.y + y)));
+                if edge[2] >= 200 && edge[0] <= 60 {
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "{name}: no outline on the hovered element, edge {edge:?}\n{}\n{}",
+                    os::focus_report(&app),
+                    app.stderr_tail(40).join("\n")
+                );
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        };
+        // The pointer may still rest where the last run's window was; a page that appeared under
+        // it never saw it enter, and hears no moves until it does.
+        os::move_to(&app, (wx - 40., wy + 40.));
+        std::thread::sleep(Duration::from_millis(300));
+        click_page(&app, 300.);
+        hid(&app, key::H, &[os::CMD, Modifier::Shift]);
+        os::move_to(&app, at(60.));
+        std::thread::sleep(Duration::from_millis(300));
+        os::move_to(&app, at(80.));
+        outlined(&format!("hider-outline-{appearance}"), 80.);
+        os::click(&app, at(80.));
+        until(&app, "the banner hidden, the page none the wiser", 10, |a| titles(a) == ["Hide gone shown"]);
+        os::move_to(&app, at(280.));
+        std::thread::sleep(Duration::from_millis(300));
+        os::move_to(&app, at(300.));
+        outlined(&format!("hider-next-{appearance}"), 300.);
+        hid(&app, key::ESCAPE, &[]);
+        os::click(&app, at(60.));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(titles(&app), ["Hide gone shown"], "a press after Esc hid the article");
+        let rules = lynk_core::adblock::open(&dir).get().user_rules();
+        assert!(rules.contains("127.0.0.1###banner"), "{rules}");
+        // The engine compiles off the main thread; until it is in, a reload shows the banner.
+        let deadline = Instant::now() + Duration::from_secs(90);
+        loop {
+            hid(&app, key::R, &[os::CMD]);
+            std::thread::sleep(Duration::from_secs(2));
+            if titles(&app) == ["Hide gone shown"] {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the reload showed the banner, title {:?}", titles(&app));
+        }
+        open_bar(&app, key::K);
+        type_real(&app, "show hidden");
+        let rows =
+            until_rows(&app, "Show Hidden Elements", |r| r.iter().any(|r| r.starts_with("Show Hidden Elements")));
+        for _ in 0..rows.iter().position(|r| r.starts_with("Show Hidden Elements")).unwrap() {
+            hid(&app, key::DOWN, &[]);
+        }
+        hid(&app, key::ENTER, &[]);
+        until(&app, "the banner back after the reload", 20, |a| titles(a) == ["Hide shown shown"]);
+        assert!(!lynk_core::adblock::open(&dir).get().user_rules().contains("#banner"));
+        quit(&app);
+    }
+}
+
+/// Alt+Cmd+U (Ctrl+U) from a focused page opens its source in a new tab right of it, ahead of the
+/// tab after it, and does nothing from the source tab, which is no web page.
+#[test]
+fn real_view_source_opens_to_the_right() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = os::launch(
+        LaunchOptions::new(env!("CARGO_BIN_EXE_lynk"))
+            .arg(format!("{base}/alpha"))
+            .arg(format!("{base}/beta"))
+            .env("ND_CEF_STYLE", "chrome"),
+    );
+    os::in_front(&app);
+    until(&app, "two tabs", 30, |a| titles(a).len() == 2 && titles(a)[0] == "Alpha");
+    click_page(&app, 200.);
+    let (code, modifiers) = os::VIEW_SOURCE;
+    hid(&app, code, modifiers);
+    let source = format!("view-source:{}/alpha", base.trim_start_matches("http://"));
+    until(&app, "the source right of its page", 20, |a| {
+        let t = titles(a);
+        t.len() == 3 && t[0] == "Alpha" && t[1] == source && t[2].ends_with("/beta")
+    });
+    shot(&app, "view-source");
+    click_page(&app, 200.);
+    hid(&app, code, modifiers);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(titles(&app).len(), 3, "the source tab opened a source of its own: {:?}", titles(&app));
+}
+
+/// Cmd+P (Ctrl+P) from the page, and on macOS Print from the File menu, each ask the system for a
+/// print dialog for the page; dismissed, it leaves the page as it was.
+#[test]
+fn real_print_asks_for_the_dialog() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let (app, dialog) = os::launch_printing(
+        LaunchOptions::new(env!("CARGO_BIN_EXE_lynk")).arg(format!("{base}/alpha")).env("ND_CEF_STYLE", "chrome"),
+    );
+    os::in_front(&app);
+    until(&app, "the page", 30, |a| titles(a) == ["Alpha"]);
+    let printed = |what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let title = loop {
+            if let Some(title) = dialog.asked(&app) {
+                break title;
+            }
+            if Instant::now() > deadline {
+                let seen = shot(&app, "print-missing");
+                panic!("no print dialog {what}, {}\n{}", seen.display(), app.stderr_tail(40).join("\n"));
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        if cfg!(target_os = "linux") {
+            assert_eq!(title, "Alpha", "the dialog {what} named another page");
+        }
+        shot(&app, &format!("print-{}", what.replace(' ', "-")));
+        dialog.dismiss(&app);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while dialog.asked(&app).is_some() {
+            assert!(Instant::now() < deadline, "the print dialog {what} stayed after Cancel");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    };
+    click_page(&app, 200.);
+    hid(&app, key::P, &[os::CMD]);
+    printed("from the page");
+    #[cfg(target_os = "macos")]
+    {
+        os::menu(&app, "File", "Print\u{2026}");
+        printed("from the menu");
+    }
+    assert_eq!(titles(&app), ["Alpha"]);
+}
+
+/// Cmd+S (Ctrl+S) from the page asks where to save it, proposing its title as an HTML file, and
+/// writes the page there as the server sends it to this profile, cookie included.
+#[test]
+fn real_save_page_writes_the_page_with_its_cookies() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let dir = profile("save-page");
+    let into = dir.join("saved");
+    std::fs::create_dir_all(&into).unwrap();
+    let (app, dialog) = os::launch_saving(profile_options(&dir, &[format!("{base}/set-cookie")]), &into);
+    os::in_front(&app);
+    until(&app, "the cookie set", 30, |a| titles(a) == ["Set"]);
+    open_bar(&app, key::L);
+    os::type_text(&app, &format!("{base}/cookie\n"));
+    until(&app, "the page reading its cookie", 30, |a| titles(a) == ["Cookie who=one"]);
+    click_page(&app, 200.);
+    hid(&app, key::S, &[os::CMD]);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let proposed = loop {
+        if let Some(name) = dialog.save(&app) {
+            break name;
+        }
+        if Instant::now() > deadline {
+            let seen = shot(&app, "save-missing");
+            panic!("no save dialog, {}\n{}", seen.display(), app.stderr_tail(40).join("\n"));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    };
+    assert_eq!(proposed, "Cookie who=one.html");
+    let saved = into.join(&proposed);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while std::fs::read_to_string(&saved).map_or(true, |t| !t.contains("</title>")) {
+        assert!(Instant::now() < deadline, "nothing saved at {}\n{}", saved.display(), app.stderr_tail(40).join("\n"));
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    assert_eq!(std::fs::read_to_string(&saved).unwrap(), "<!doctype html><title>Cookie who=one</title>");
+    assert_eq!(titles(&app), ["Cookie who=one"]);
+}
+
+/// Alt+Cmd+P lifts the playing video, not the larger paused one or the first, into Chromium's
+/// picture-in-picture window, the same chord brings it back, and a page with no video says so.
+#[test]
+fn real_float_video_lifts_the_playing_one_and_brings_it_back() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    let app = launch(&format!("{base}/video"));
+    os::in_front(&app);
+    until(&app, "the videos", 30, |a| titles(a) == ["Video none"]);
+    let windows = os::every_window(&app);
+    std::thread::sleep(Duration::from_secs(1));
+    let (code, modifiers) = os::FLOAT;
+    hid(&app, code, modifiers);
+    until(&app, "the playing video floating", 15, |a| titles(a) == ["Video big"]);
+    until(&app, "the picture-in-picture window", 10, |a| os::every_window(a) > windows);
+    shot(&app, "float-on");
+    // Hyprland gives the keyboard to the new window; the user clicks back into the page.
+    click_page(&app, 500.);
+    hid(&app, code, modifiers);
+    until(&app, "the video back in its page", 15, |a| titles(a) == ["Video none"]);
+    until(&app, "the picture-in-picture window gone", 10, |a| os::every_window(a) == windows);
+    open_bar(&app, key::L);
+    os::type_text(&app, &format!("{base}/alpha\n"));
+    until(&app, "a page with no video", 30, |a| titles(a) == ["Alpha"]);
+    hid(&app, code, modifiers);
+    until(&app, "the no-video toast", 10, |a| {
+        a.tree(None)
+            .is_ok_and(|t| t.windows.iter().any(|w| w.root.iter().any(|n| n.name == "No video to float on this page")))
+    });
+}
+
+/// Reading mode in light then dark: Shift+Cmd+R lays the article over the green page in the
+/// appearance's ground, the command turns to Leave Reading Mode, Space scrolls the reader, Esc
+/// leaves, a same-document navigation leaves, and a page with no article says so.
+#[test]
+fn real_reading_mode_enters_scrolls_and_leaves() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for (appearance, ground) in [("light", [255u8, 255, 255]), ("dark", [0x1c, 0x1c, 0x1c])] {
+        let dir = profile(&format!("reader-{appearance}"));
+        let theme = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("lynk-reader-{appearance}.toml"));
+        std::fs::write(&theme, format!("appearance = \"{appearance}\"\n")).unwrap();
+        let app = os::launch(
+            profile_options(&dir, &[format!("{base}/article")]).env("ND_THEME_TOML", theme.display().to_string()),
+        );
+        os::in_front(&app);
+        until(&app, "the article", 30, |a| titles(a) == ["Article"]);
+        let backdrop = |name: &str| page_backdrop(&app, &format!("reader-{name}-{appearance}"));
+        let green = [0xdd, 0xff, 0xdd];
+        let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 3);
+        let until_ground = |what: &str, want: [u8; 3]| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let got = backdrop(what);
+                if near(got, want) {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "{what}: wanted {want:?}, got {got:?}");
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        };
+        until_ground("page", green);
+        let (code, modifiers) = os::READER;
+        click_page(&app, 300.);
+        hid(&app, code, modifiers);
+        until_ground("on", ground);
+        let before = page_column(&app, &format!("reader-top-{appearance}"));
+        hid(&app, key::SPACE, &[]);
+        std::thread::sleep(Duration::from_millis(800));
+        let after = page_column(&app, &format!("reader-spaced-{appearance}"));
+        assert_ne!(before, after, "Space left the reader where it was");
+        hid(&app, key::PAGE_UP, &[]);
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(
+            page_column(&app, &format!("reader-up-{appearance}")),
+            before,
+            "Page Up left the reader below its top"
+        );
+        hid(&app, key::PAGE_DOWN, &[]);
+        std::thread::sleep(Duration::from_millis(800));
+        let paged = page_column(&app, &format!("reader-paged-{appearance}"));
+        assert_ne!(before, paged, "Page Down left the reader where it was");
+        open_bar(&app, key::K);
+        type_real(&app, "reading mode");
+        until_rows(&app, "Leave Reading Mode", |r| r.iter().any(|r| r.starts_with("Leave Reading Mode")));
+        hid(&app, key::ESCAPE, &[]);
+        bar_closed(&app);
+        // The bar took the keyboard; the reader has it again once the page is clicked.
+        click_page(&app, 300.);
+        hid(&app, key::ESCAPE, &[]);
+        until_ground("left by Esc", green);
+        open_bar(&app, key::K);
+        type_real(&app, "reading mode");
+        until_rows(&app, "Reading Mode again", |r| r.iter().any(|r| r.starts_with("Reading Mode")));
+        hid(&app, key::ESCAPE, &[]);
+        bar_closed(&app);
+        click_page(&app, 300.);
+        hid(&app, code, modifiers);
+        until_ground("on again", ground);
+        open_bar(&app, key::L);
+        os::type_text(&app, &format!("{base}/article#later\n"));
+        until_ground("left by a same-document navigation", green);
+        open_bar(&app, key::L);
+        os::type_text(&app, &format!("{base}/alpha\n"));
+        until(&app, "a page with no article", 30, |a| titles(a) == ["Alpha"]);
+        click_page(&app, 200.);
+        hid(&app, code, modifiers);
+        until(&app, "the no-article toast", 10, |a| {
+            a.tree(None).is_ok_and(|t| {
+                t.windows.iter().any(|w| w.root.iter().any(|n| n.name == "No article to read on this page"))
+            })
+        });
+        shot(&app, &format!("reader-none-{appearance}"));
+        quit(&app);
+    }
 }
 
 #[test]
@@ -2042,6 +2468,18 @@ fn real_tab_moves_between_windows_without_a_reload() {
 
 /// The colour the page shows near its bottom right corner, where nothing of its own is drawn,
 /// read from a capture of the window.
+/// A column of the page's pixels down its middle, read off a fresh capture, to tell two apart.
+fn page_column(app: &App, name: &str) -> Vec<[u8; 3]> {
+    let path = shot(app, name);
+    let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");
+    let win = front_window(app);
+    (1..40)
+        .map(|i| {
+            os::pixel(app, &win, &path, (f64::from(b.x + b.width / 2.), f64::from(b.y + b.height * i as f32 / 40.)))
+        })
+        .collect()
+}
+
 fn page_backdrop(app: &App, name: &str) -> [u8; 3] {
     let path = shot(app, name);
     let b = app.get_by_test_id("content").bounding_box().unwrap().expect("the page is laid out");

@@ -51,6 +51,7 @@ actions!(
         ReadingMode,
         ToggleAdBlocking,
         HideElement,
+        RestoreHidden,
         FloatVideo,
         ZoomIn,
         ZoomOut,
@@ -321,7 +322,16 @@ pub const COMMANDS: &[Command] = &[
         .key("reopen-tab")
         .menu(MenuId::File)
         .handler(|w, _, _, cx| w.reopen(cx)),
-    Command::new::<SavePage>("Save Page As\u{2026}").key("save-page").menu(MenuId::File).enabled(web_page),
+    Command::new::<SavePage>("Save Page As\u{2026}")
+        .key("save-page")
+        .menu(MenuId::File)
+        .enabled(web_page)
+        .handler(crate::save_page::save),
+    Command::new::<Print>("Print\u{2026}").key("print").menu(MenuId::File).enabled(web_page).handler(|w, id, _, _| {
+        if let Some(page) = view_of(w, id) {
+            page.print();
+        }
+    }),
     Command::new::<OpenSettings>("Settings").key("settings").menu(MenuId::File).after_separator(),
     // macOS's app menu has its own Quit.
     Command::new::<Quit>("Quit").key("quit").menu(MenuId::File).not_on_mac().handler(|_, _, _, cx| cx.quit()),
@@ -363,14 +373,30 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<ShowDownloads>("Downloads").key("downloads").menu(MenuId::View).after_separator(),
     Command::new::<ShowBookmarks>("Bookmarks").key("bookmarks").menu(MenuId::View),
     Command::new::<BookmarkPage>("Bookmark This Page").key("bookmark-page").menu(MenuId::View).enabled(web_page),
-    Command::new::<ReadingMode>("Reading Mode").key("reader").menu(MenuId::View),
+    Command::new::<ReadingMode>("Reading Mode")
+        .key("reader")
+        .menu(MenuId::View)
+        .flips("Leave Reading Mode", crate::reader::reading)
+        .enabled(web_page)
+        .handler(crate::reader::toggle),
     Command::new::<ToggleAdBlocking>("Allow Ads on This Site")
         .menu(MenuId::View)
         .flips("Block Ads on This Site", crate::blocking::off_here)
         .enabled(web_page)
         .handler(crate::blocking::toggle),
-    Command::new::<HideElement>("Hide Element").key("hide-element").menu(MenuId::View).enabled(web_page),
-    Command::new::<FloatVideo>("Float Video").key("float").menu(MenuId::View),
+    Command::new::<HideElement>("Hide Element")
+        .key("hide-element")
+        .menu(MenuId::View)
+        .enabled(web_page)
+        .handler(crate::hider::toggle),
+    Command::new::<RestoreHidden>("Show Hidden Elements")
+        .enabled(crate::hider::has_hidden)
+        .handler(crate::hider::restore),
+    Command::new::<FloatVideo>("Float Video")
+        .key("float")
+        .menu(MenuId::View)
+        .enabled(web_page)
+        .handler(crate::float::toggle),
     Command::new::<ZoomIn>("Zoom In")
         .key("zoom-in")
         .extra_keys(&["secondary-="])
@@ -450,7 +476,6 @@ pub const COMMANDS: &[Command] = &[
     Command::new::<OpenWebStore>("Chrome Web Store").menu(MenuId::Extensions),
     Command::new::<ShowHistory>("Show All History").key("history").menu(MenuId::History),
     Command::new::<ClearBrowsingData>("Clear Browsing Data\u{2026}").key("clear-data").menu(MenuId::History),
-    Command::new::<Print>("Print\u{2026}"),
     Command::new::<NewProfile>("New Profile\u{2026}").handler(crate::profile::new_profile),
     Command::new::<RenameProfile>("Rename Profile\u{2026}").handler(crate::profile::rename_profile),
     Command::new::<DeleteProfile>("Delete Profile\u{2026}")
@@ -658,6 +683,7 @@ mod tests {
                 "Close Tab",
                 "Reopen Closed Tab",
                 "Save Page As\u{2026}",
+                "Print\u{2026}",
                 "Settings",
                 "Quit"
             ]

@@ -56,6 +56,8 @@ pub const TAB_EVENTS: &[TabListener] = &[
     crate::site_info::tab_event,
     crate::omnibox::tab_event,
     crate::devtools::tab_event,
+    crate::reader::tab_event,
+    crate::save_page::tab_event,
     crate::blocking::tab_event,
 ];
 

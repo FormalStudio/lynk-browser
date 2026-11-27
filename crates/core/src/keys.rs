@@ -49,6 +49,7 @@ const KEYS: &[Key] = &[
     k("forward", "Forward", "primary+]", "primary+]"),
     k("toggle-sidebar", "Hide sidebar", "primary+shift+b", "primary+shift+b"),
     k("save-page", "Save page", "primary+s", "primary+s"),
+    k("print", "Print", "primary+p", "primary+p"),
     k("layout", "Switch layout", "primary+alt+s", "primary+alt+s"),
     k("zoom-in", "Zoom in", "primary+plus", "primary+plus"),
     k("zoom-out", "Zoom out", "primary+minus", "primary+minus"),

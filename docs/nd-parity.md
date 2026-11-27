@@ -157,12 +157,12 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Zoom: Cmd+plus, Cmd+minus, Cmd+0 and ctrl-wheel, Chromium's steps (25% to 500%), remembered per host
 - [x] Zoom glyph while not 100%, its popover (Zoom Out, value, Zoom In, Reset), shown for 1.5 s after a chord or menu step (old `zoom-shots`); drive `real_zoom_steps_and_glyph`, shot `shell-zoom-popover.png` (macOS)
 - [ ] Developer tools: Alt+Cmd+I (Ctrl+Shift+I), and F12 anywhere in the window
-- [ ] View source: Alt+Cmd+U (Ctrl+U) opens `view-source:` in a tab to the right, http, https and file only
-- [ ] Print: Cmd+P opens the system print panel for the page (lane `webview-print`)
-- [ ] Save Page As (Cmd+S): the page downloaded again with its cookies, through a save panel, named after its title, HTML only
-- [ ] Floating video: Alt+Cmd+P lifts the playing (else the largest) video, same-origin frames included, into Chromium's picture-in-picture window, and the same chord brings it back (lane `cef-user-gesture-js`; old drives `mac-pip-drive`, `linux-pip-drive`)
-- [ ] A page's own picture-in-picture, document picture-in-picture (Meet) included; "Back to tab" brings its tab forward
-- [ ] Reading mode: Shift+Cmd+R runs Readability over a copy of the page in a shadow-root overlay, follows light and dark, Space and Page Down scroll it, Esc and a same-document navigation leave it; the menu label flips (old drives `mac-reader-drive`, `linux-reader-drive`; unit: port of `reader.test.ts`)
+- [x] View source: Alt+Cmd+U (Ctrl+U) opens `view-source:` in a tab to the right, http, https and file only; drive `real_view_source_opens_to_the_right` (macOS, Linux)
+- [x] Print: Cmd+P opens the system print panel for the page (lane `webview-print`); drive `real_print_asks_for_the_dialog` (macOS, Linux)
+- [x] Save Page As (Cmd+S): the page downloaded again with its cookies, through a save panel, named after its title, HTML only (`real_save_page_writes_the_page_with_its_cookies`, macOS, Linux)
+- [x] Floating video: Alt+Cmd+P lifts the playing (else the largest) video, same-origin frames included, into Chromium's picture-in-picture window, and the same chord brings it back (lane `cef-user-gesture-js`; old drives `mac-pip-drive`, `linux-pip-drive`); drive `real_float_video_lifts_the_playing_one_and_brings_it_back` (macOS, Linux)
+- [ ] A page's own picture-in-picture, document picture-in-picture (Meet) included; "Back to tab" brings its tab forward. Open: "Back to tab" calls `WebContents::Activate`, and CEF in Chrome style leaves `ActivateContents` to Chromium's own delegate, so no `CefClient` callback reaches nd; the fix is a CEF patch adding that override
+- [x] Reading mode: Shift+Cmd+R runs Readability over a copy of the page in a shadow-root overlay, follows light and dark, Space and Page Down scroll it, Esc and a same-document navigation leave it; the menu label flips (old drives `mac-reader-drive`, `linux-reader-drive`; unit: port of `reader.test.ts`); drive `real_reading_mode_enters_scrolls_and_leaves` (macOS, Linux)
 - [ ] Chromium's own context menu, with "Search with <engine>" added for selections and no duplicated items
 
 ## Permissions and site info
@@ -211,8 +211,8 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Dark Reader installs from the store and darkens a page; its popup toggles it; the setting survives a restart
 
 ## Ad blocking
-- [ ] adblock-rust with uBlock Origin's default lists, scriptlets and redirects, on by default (lane `cef-request-filter`; old drives `adblock-drive`, `adblock-shots`)
-- [ ] Network requests blocked or redirected per rule, cross-site frames included
+- [x] adblock-rust with uBlock Origin's default lists, scriptlets and redirects, on by default (lane `cef-request-filter`; old drives `adblock-drive`, `adblock-shots`); drive `real_blocking_blocks_and_redirects_requests` (macOS, Linux)
+- [x] Network requests blocked or redirected per rule, cross-site frames included; drive `real_blocking_blocks_and_redirects_requests` (macOS, Linux)
 - [x] Cosmetic filters and scriptlets applied at document start; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux), scriptlets by `blocker` tests
 - [x] Generic cosmetic rules in cross-site frames; drive `real_blocking_hides_in_a_cross_site_frame` (macOS, Linux)
 - [x] Cosmetic filters and scriptlets under a page policy that refuses inline style and script; drive `real_blocking_reaches_a_page_under_a_strict_policy` (macOS, Linux)
@@ -222,7 +222,7 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] The compiled engine cached on disk and restored off the main thread; the window never waits on it
 - [x] Per-site switch: "Allow Ads on This Site" and "Block Ads on …" (command, View menu, padlock switch), kept in `offSites`; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux)
 - [x] Blocked count per page, reset on navigation, shown in the padlock popover; drive `real_blocking_counts_hides_and_switches_off` (macOS, Linux)
-- [ ] Hide Element (Shift+Cmd+H): a picker in an isolated world, labels the element under the pointer, a click hides it on that site for good as a `site##selector` rule; Esc or the chord again puts it away
+- [x] Hide Element (Shift+Cmd+H): a picker in an isolated world, labels the element under the pointer, a click hides it on that site for good as a `site##selector` rule; Esc or the chord again puts it away; drive `real_hide_element_picks_keeps_and_restores` (macOS, Linux)
 - [ ] Show Hidden Elements restores one or all; Update Filter Lists refreshes now
 - [ ] `blocking.json` and `adblock/` carried over from the 0.5.11 profile
 

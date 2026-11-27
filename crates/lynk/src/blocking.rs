@@ -273,10 +273,35 @@ fn install(store: &Store<BlockingState>, dir: &Path, release: &Path, lists: &[ub
         }
         engine
     });
-    let mut user = adblock::user_engine(&store.get());
-    user.use_resources(resources());
-    let blocker = Blocker::new(engine, user);
+    let blocker = Blocker::new(engine, &store.get(), resources());
     *SHARED.blocker.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(blocker));
+}
+
+/// Puts the user's rules as they stand now in the blocker, keeping its compiled lists.
+fn user_rules_changed(store: &Store<BlockingState>) {
+    let mut blocker = SHARED.blocker.write().unwrap_or_else(PoisonError::into_inner);
+    if let Some(b) = blocker.as_ref() {
+        *blocker = Some(Arc::new(b.with_user(&store.get())));
+    }
+}
+
+/// Hides `selector` on `site` from the next document there on.
+pub fn hide(site: &str, selector: &str, label: &str, note: &str, cx: &mut App) {
+    let Some(state) = cx.try_global::<State>() else { return };
+    let store = state.store.clone();
+    let mut changed = false;
+    store.update(|s| changed = s.hide(site, selector, label, note, lynk_core::now_ms()));
+    if changed {
+        user_rules_changed(&store);
+    }
+}
+
+/// Shows every element hidden on `site` again, from the next document there on.
+pub fn restore_hidden(site: &str, cx: &mut App) {
+    let Some(state) = cx.try_global::<State>() else { return };
+    let store = state.store.clone();
+    store.update(|s| s.restore_hidden(site, None));
+    user_rules_changed(&store);
 }
 
 /// Opens the hidden page for `release`'s scriptlets in the front browser window.

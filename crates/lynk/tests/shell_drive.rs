@@ -4486,8 +4486,20 @@ fn real_pins_and_profiles_captures() {
             // Pins 2 and 3 wake and show the page's favicon; 4 and 5 sleep on their letter.
             // One press at a time: a second chord sent while the first pin still wakes can be lost.
             for left in [3, 2] {
+                let before = shown_title(&app);
                 press(&app, "cmd-shift-]");
-                until(&app, &format!("{left} tiles on their letter"), 20, |a| letters(a) == left);
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while letters(&app) != left {
+                    assert!(
+                        Instant::now() < deadline,
+                        "{left} tiles never on their letter: showing {:?} (was {before:?}), windows {:?}\n{}\n{}",
+                        shown_title(&app),
+                        app.windows(),
+                        os::focus_report(&app),
+                        app.stderr_tail(20).join("\n")
+                    );
+                    std::thread::sleep(Duration::from_millis(150));
+                }
             }
             real_click(&app, tile_at(&app, 0).0, tile_at(&app, 0).1);
             let deadline = Instant::now() + Duration::from_secs(20);

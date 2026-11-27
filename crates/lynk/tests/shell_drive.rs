@@ -20,7 +20,7 @@ mod linux_cases;
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use nd_test::{AppHandle, LaunchOptions, expect};
@@ -380,11 +380,43 @@ fn launch_with(urls: &[String]) -> App {
 }
 
 /// A profile of the test's own, which outlives one launch so the next can restore it.
-fn profile(name: &str) -> PathBuf {
+fn profile(name: &str) -> Profile {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    Profile(dir)
+}
+
+/// A test's profile directory, gone with the test once it passes: each holds tens of megabytes
+/// of Chromium state, and every drive run makes dozens on the build disk. A failed test keeps
+/// its profile for a look.
+struct Profile(PathBuf);
+
+impl std::ops::Deref for Profile {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Profile {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for Profile {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.0.as_os_str()
+    }
+}
+
+impl Drop for Profile {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 }
 
 fn profile_options(profile: &std::path::Path, urls: &[String]) -> LaunchOptions {
@@ -1223,7 +1255,7 @@ fn real_dev_tools_leave_their_tab_as_it_was() {
 /// A profile whose blocker runs on uBO 1.75.0's bundled lists with nothing due from the network,
 /// and with `.promo` hidden on 127.0.0.1 by the user. The release zip comes from `LYNK_UBO_ZIP`,
 /// else the test's tmp dir, which a first run fills from GitHub.
-fn blocking_profile(name: &str) -> PathBuf {
+fn blocking_profile(name: &str) -> Profile {
     use lynk_core::ublock::{PINNED_SHA256, PINNED_VERSION, download_zip, sha256_hex};
     let dir = profile(name);
     let zip = std::env::var_os("LYNK_UBO_ZIP").map(PathBuf::from).unwrap_or_else(|| {
@@ -1865,7 +1897,7 @@ fn real_identity_holds_together() {
         }
     });
     // Launched as a user launches it: no automation socket, a throwaway profile.
-    let data = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("identity-{}", std::process::id()));
+    let data = profile("identity");
     let display = os::Display::start();
     let mut app = display
         .command(env!("CARGO_BIN_EXE_lynk"))
@@ -1885,7 +1917,6 @@ fn real_identity_holds_together() {
     }
     let _ = app.kill();
     let _ = app.wait();
-    let _ = std::fs::remove_dir_all(&data);
     let (report, document) = reported.expect("the page never reported");
 
     let ua = report["userAgent"].as_str().unwrap_or_default();

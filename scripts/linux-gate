@@ -26,8 +26,8 @@ branch=$(git -C "$root" rev-parse --abbrev-ref HEAD)
 slug=${branch//\//-}
 dir="Developer/lynk-$slug"
 nd_dir="Developer/nativedesktop-$(git -C "$nd" rev-parse --abbrev-ref HEAD)"
-buildroot=${ND_LINUX_BUILD_ROOT:-/mnt/steamlib/nd-build}
-export ND_LINUX_TARGET=${ND_LINUX_TARGET:-"$buildroot/targets/lynk-$slug"}
+export ND_LINUX_BUILD_ROOT=${ND_LINUX_BUILD_ROOT:-$(ssh "$host" 'echo $HOME' 2>/dev/null)/build/nd-build}
+export ND_LINUX_TARGET=${ND_LINUX_TARGET:-"$ND_LINUX_BUILD_ROOT/targets/lynk-$slug"}
 # A cold lynk build at two jobs compiles CEF's wrapper, GPUI and Chromium's glue.
 export ND_LINUX_GATE_TIMEOUT_MIN=${ND_LINUX_GATE_TIMEOUT_MIN:-150}
 

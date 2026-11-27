@@ -64,6 +64,7 @@ actions!(
         ToggleMute,
         SleepTab,
         CloseOtherTabs,
+        CloseTabsBelow,
         DuplicateTab,
         MoveTabLeft,
         MoveTabRight,
@@ -416,6 +417,7 @@ pub const COMMANDS: &[Command] = &[
         .enabled(|w, id, _| w.can_sleep(id))
         .handler(|w, id, _, cx| w.sleep(id, cx)),
     Command::new::<CloseOtherTabs>("Close Other Tabs").handler(|w, id, _, cx| w.close_others(id, cx)),
+    Command::new::<CloseTabsBelow>("Close Tabs Below").handler(|w, id, _, cx| w.close_below(id, cx)),
     Command::new::<DuplicateTab>("Duplicate Tab").enabled(has_address).handler(|w, id, _, cx| w.duplicate(id, cx)),
     Command::new::<MoveTabLeft>("Move Tab Left")
         .enabled(|w, id, _| w.order().first().is_some_and(|t| *t != id))

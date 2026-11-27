@@ -135,8 +135,9 @@ macOS. A ticked box names its proof. The 0.5.11 build stays the default until ev
 - [ ] Back, forward, reload (Cmd+[, Cmd+], Cmd+R); Go menu items enabled from the page's history; compact has buttons for them
 - [ ] Entering the address already shown reloads
 - [x] Cmd+W closes through `beforeunload`; Shift+Cmd+T reopens from the closed-tab stack; drive `real_beforeunload_holds_the_close` (macOS)
-- [ ] Close Other Tabs closes the unpinned others only
-- [ ] Duplicate Tab opens the address in the same window
+- [x] Close Other Tabs closes the unpinned others only; drive `real_tab_actions_over_every_page_state` (macOS)
+- [x] Duplicate Tab opens the address in the same window; drive `real_tab_actions_over_every_page_state` (macOS)
+- [x] A tab that is not shown closes from its hovered close button, its row menu and the close shortcut, asleep, loading or never loaded, the last row and the row that slides under the pointer included; Close Tabs Below; the shown tab stays, no page outlives its tab and a restart brings back the same window; drive `real_tab_actions_over_every_page_state` (macOS)
 - [ ] Cmd+1 to Cmd+8 by place, Cmd+9 the last tab once there are nine; the Tabs menu lists every tab with its chord
 - [ ] Next and previous tab: Shift+Cmd+] and Shift+Cmd+[ on macOS, Ctrl+Tab and Ctrl+Shift+Tab on Linux
 - [ ] A page-opened tab lands as Chrome places it: foreground right after the opener, background after the opener's other background children, never in the pinned block; no opener means the end; an empty or `about:blank` target is dropped (unit: port of `session.test.ts`)

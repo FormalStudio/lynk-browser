@@ -615,6 +615,15 @@ impl BrowserWindow {
         }
     }
 
+    /// The tabs under `id` in the list. Pins sit above the list, so a pin's are the whole list.
+    pub fn close_below(&mut self, id: TabId, cx: &mut Context<Self>) {
+        let order = self.order();
+        let below = order.iter().position(|t| *t == id).map_or(order.len(), |at| at + 1);
+        for other in order[below..].iter().filter(|t| !self.is_pinned(**t)).copied().collect::<Vec<_>>() {
+            self.close_tab(other, cx);
+        }
+    }
+
     pub fn duplicate(&mut self, id: TabId, cx: &mut Context<Self>) {
         let Some(url) = self.tab(id).map(|t| t.url.clone()) else { return };
         // A pin's copy is an ordinary tab, at the head of the list.
@@ -1141,6 +1150,16 @@ mod tests {
         with(&mut cx, a, |w, cx| w.close_others(2, cx));
         approve_all(&mut cx, a);
         assert_eq!(tabs(&cx, a), [2]);
+    }
+
+    #[test]
+    fn close_below_closes_only_the_tabs_under_it() {
+        let mut cx = TestApp::new();
+        app::install(&mut cx);
+        let a = three_live(&mut cx);
+        with(&mut cx, a, |w, cx| w.close_below(2, cx));
+        approve_all(&mut cx, a);
+        assert_eq!(tabs(&cx, a), [1, 2]);
     }
 
     #[test]

@@ -567,6 +567,7 @@ fn row_menu(menu: ContextMenu, win: WindowId, id: TabId, cx: &App) -> ContextMen
         .separator()
         .entry(item(command_for::<CloseTab>()))
         .entry(item(command_for::<CloseOtherTabs>()))
+        .entry(item(command_for::<CloseTabsBelow>()))
 }
 
 /// The list's rows in drawing order, each with the index of the tree row it belongs to: a tab

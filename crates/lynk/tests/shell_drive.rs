@@ -1792,28 +1792,6 @@ fn real_tab_row_menu() {
 }
 
 #[test]
-fn real_close_others_over_every_page_state() {
-    if !real_allowed() {
-        return;
-    }
-    let base = serve();
-    // Shown and live, asleep, loading and never finishing, never loaded.
-    let app =
-        launch_with(&[format!("{base}/alpha"), format!("{base}/long"), format!("{base}/slow"), format!("{base}/beta")]);
-    until(&app, "the first page", 30, |a| titles(a).first().is_some_and(|t| t == "Alpha"));
-    press(&app, "cmd-2");
-    until(&app, "the second page", 15, |a| titles(a).get(1).is_some_and(|t| t.starts_with("Long")));
-    press(&app, "cmd-3");
-    until(&app, "the never-ending load", 10, |a| has(a, "load-bar"));
-    press(&app, "cmd-1");
-    pick_menu(&app, row_at(&app, 1), "Put Tab");
-    until(&app, "the second tab asleep", 15, |a| asleep(a, 1) && live_pages(a) == Some(2));
-    pick_menu(&app, row_at(&app, 0), "Close Other");
-    until(&app, "only the shown tab", 15, |a| titles(a) == ["Alpha"]);
-    assert_eq!(live_pages(&app), Some(1));
-}
-
-#[test]
 fn real_fifty_tabs_opened_and_closed_at_speed() {
     if !real_allowed() {
         return;
@@ -4523,4 +4501,254 @@ fn real_tidy_tabs_groups_by_site_and_undoes() {
     hid(&app, key::ESCAPE, &[]);
     bar_closed(&app);
     quit(&app);
+}
+
+/// The centre of `test_id` in window points.
+fn centre_of(app: &AppHandle, test_id: &str) -> Option<(f32, f32)> {
+    let b = app.get_by_test_id(test_id).bounding_box().ok()??;
+    Some((b.x + b.width / 2., b.y + b.height / 2.))
+}
+
+/// A restored window: one pin, then `Alpha` shown and three rows never loaded, `R2` (beta),
+/// `R3` (a load that never ends) and `R4` (press).
+fn write_restored(profile: &std::path::Path, base: &str) {
+    let tab = |id: &str, url: String, title: &str| serde_json::json!({ "id": id, "url": url, "title": title });
+    let mut pin = tab("t1", format!("{base}/alpha?p1"), "P1");
+    pin["pinnedUrl"] = pin["url"].clone();
+    let tabs = [
+        pin,
+        tab("t2", format!("{base}/alpha"), "Alpha"),
+        tab("t3", format!("{base}/beta"), "R2"),
+        tab("t4", format!("{base}/slow"), "R3"),
+        tab("t5", format!("{base}/press"), "R4"),
+    ];
+    let items: Vec<_> =
+        ["t2", "t3", "t4", "t5"].iter().map(|id| serde_json::json!({ "type": "tab", "id": id })).collect();
+    let doc = serde_json::json!({ "version": 3, "data": {
+        "spaces": [{ "id": "s1", "name": "Space" }],
+        "windows": [{ "id": "w1", "tabs": tabs, "activeId": "t2", "width": 1100, "height": 800,
+            "spaces": { "shown": "s1", "sidebars": { "s1": { "pins": ["t1"], "items": items } } } }],
+    } });
+    std::fs::write(profile.join("session.json"), doc.to_string()).unwrap();
+}
+
+/// Hovers the `index`th row with the real pointer and clicks the close button it shows. Returns
+/// where the pointer was left.
+fn close_by_x(app: &App, index: usize) -> (f32, f32) {
+    let (wx, wy, _, _) = front_window(app).bounds;
+    let (row, at) = rows(app)[index].clone();
+    let close = row.replace("tab-row-", "tab-close-");
+    os::move_to(app, (wx + f64::from(at.0), wy + f64::from(at.1)));
+    until(app, "the hovered row's close button", 10, |a| has(a, &close));
+    let at = centre_of(app, &close).expect("the close button is laid out");
+    real_click(app, at.0, at.1);
+    at
+}
+
+/// Shows the `index`th row with a real click and waits for its page.
+fn show_row(app: &App, index: usize, title: &str) {
+    let at = row_at(app, index);
+    real_click(app, at.0, at.1);
+    until(app, "the clicked tab shown", 15, |a| shown_title(a).starts_with(title));
+}
+
+/// Whether every page in the window belongs to a tab still drawn, as a row or a pin.
+fn no_page_left_behind(app: &AppHandle) -> bool {
+    let Ok(tree) = app.tree(None) else { return false };
+    let tabs: Vec<&str> = tree.windows[0]
+        .root
+        .iter()
+        .filter_map(|n| {
+            let id = n.test_id.as_deref()?;
+            id.strip_prefix("tab-row-").or_else(|| id.strip_prefix("pin-"))
+        })
+        .collect();
+    tree.windows[0].root.iter().filter_map(page_of).all(|tab| tabs.contains(&tab))
+}
+
+/// One basic tab action from one entry point: what it does to [`write_restored`]'s window, the
+/// rows' titles and the pins it leaves, and the shown tab's title where the action decides it.
+struct TabCase {
+    name: &'static str,
+    act: fn(&App, &str),
+    rows: &'static [&'static str],
+    pins: usize,
+    shown: Option<&'static str>,
+}
+
+const TAB_CASES: &[TabCase] = &[
+    TabCase {
+        name: "x on a never-loaded row",
+        act: |a, _| _ = close_by_x(a, 1),
+        rows: &["Alpha", "R3", "R4"],
+        pins: 1,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "x on the last row",
+        act: |a, _| _ = close_by_x(a, 3),
+        rows: &["Alpha", "R2", "R3"],
+        pins: 1,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "x, then the row that slides under the pointer",
+        act: |a, _| {
+            let at = close_by_x(a, 1);
+            until(a, "the first close", 10, |a| titles(a).len() == 3);
+            let next = rows(a)[1].0.replace("tab-row-", "tab-close-");
+            until(a, "the next row's close button under the pointer", 10, |a| has(a, &next));
+            real_click(a, at.0, at.1);
+        },
+        rows: &["Alpha", "R4"],
+        pins: 1,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "x on a loading row",
+        act: |a, _| {
+            let at = row_at(a, 2);
+            real_click(a, at.0, at.1);
+            until(a, "the never-ending load", 10, |a| has(a, "load-bar"));
+            show_row(a, 0, "Alpha");
+            close_by_x(a, 2);
+        },
+        rows: &["Alpha", "R2", "R4"],
+        pins: 1,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "row menu Close Tab",
+        act: |a, _| pick_menu(a, row_at(a, 1), "Close Tab"),
+        rows: &["Alpha", "R3", "R4"],
+        pins: 1,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "close shortcut after picking the row by key",
+        act: |a, _| {
+            a.get_by_test_id("tabs").press("down").unwrap();
+            until(a, "the next tab, picked by key", 15, |a| shown_title(a) == "Beta");
+            press(a, "cmd-w");
+        },
+        rows: &["Alpha", "R3", "R4"],
+        pins: 1,
+        shown: None,
+    },
+    TabCase {
+        name: "pin menu Close Tab",
+        act: |a, _| pick_menu(a, tile_at(a, 0), "Close Tab"),
+        rows: &["Alpha", "R2", "R3", "R4"],
+        pins: 0,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "Close Other Tabs over asleep, loading and never-loaded rows spares the pin",
+        act: |a, _| {
+            show_row(a, 1, "Beta");
+            show_row(a, 2, "");
+            until(a, "the never-ending load", 10, |a| has(a, "load-bar"));
+            show_row(a, 0, "Alpha");
+            pick_menu(a, row_at(a, 1), "Put Tab");
+            until(a, "the second tab asleep", 15, |a| asleep(a, 1));
+            pick_menu(a, row_at(a, 0), "Close Other");
+        },
+        rows: &["Alpha"],
+        pins: 1,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "Close Tabs Below",
+        act: |a, _| pick_menu(a, row_at(a, 1), "Close Tabs Below"),
+        rows: &["Alpha", "R2"],
+        pins: 1,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        // Reopened at the end of the list, where Open::End puts it.
+        name: "reopen a closed background tab",
+        act: |a, _| {
+            close_by_x(a, 1);
+            until(a, "the close", 10, |a| titles(a).len() == 3);
+            press(a, "cmd-shift-t");
+        },
+        rows: &["Alpha", "R3", "R4", "Beta"],
+        pins: 1,
+        shown: None,
+    },
+    TabCase {
+        name: "row menu Duplicate",
+        act: |a, _| pick_menu(a, row_at(a, 1), "Duplicate"),
+        rows: &["Alpha", "R2", "Beta", "R3", "R4"],
+        pins: 1,
+        shown: Some("Beta"),
+    },
+    TabCase {
+        name: "row menu Pin Tab",
+        act: |a, _| pick_menu(a, row_at(a, 1), "Pin Tab"),
+        rows: &["Alpha", "R3", "R4"],
+        pins: 2,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "pin menu Unpin",
+        act: |a, _| pick_menu(a, tile_at(a, 0), "Unpin"),
+        rows: &["P1", "Alpha", "R2", "R3", "R4"],
+        pins: 0,
+        shown: Some("Alpha"),
+    },
+    TabCase {
+        name: "new tab button",
+        act: |a, base| {
+            let at = centre_of(a, os::NEW_TAB).expect("the new tab button");
+            real_click(a, at.0, at.1);
+            until(a, "the bar", 10, |a| bar_field(a).is_some());
+            type_real(a, &format!("{base}/beta?new"));
+            hid(a, key::ENTER, &[]);
+        },
+        rows: &["Alpha", "R2", "R3", "R4", "Beta"],
+        pins: 1,
+        shown: Some("Beta"),
+    },
+    TabCase {
+        name: "switch by clicking a row",
+        act: |a, _| show_row(a, 1, "Beta"),
+        rows: &["Alpha", "Beta", "R3", "R4"],
+        pins: 1,
+        shown: Some("Beta"),
+    },
+];
+
+/// Every basic tab action from each of its entry points, with the real pointer, on a restored
+/// window of a pin, a shown tab and rows never loaded. Each leaves exactly the tabs it should,
+/// keeps the shown tab where it is not the one acted on, leaves no page behind for a closed tab,
+/// and a restart brings back the same window.
+#[test]
+fn real_tab_actions_over_every_page_state() {
+    if !real_allowed() {
+        return;
+    }
+    let base = serve();
+    for case in TAB_CASES {
+        let profile = profile("tab-actions");
+        write_restored(&profile, &base);
+        let app = launch_on(&profile, &[]);
+        until(&app, "the restored window", 30, |a| {
+            titles(a) == ["Alpha", "R2", "R3", "R4"] && tiles(a).len() == 1 && shown_title(a) == "Alpha"
+        });
+        (case.act)(&app, &base);
+        let left = |a: &App| titles(a) == case.rows && tiles(a).len() == case.pins;
+        until(&app, case.name, 15, left);
+        if let Some(shown) = case.shown {
+            until(&app, &format!("{}: the shown tab", case.name), 15, |a| shown_title(a) == shown);
+        }
+        until(&app, &format!("{}: no page for a closed tab", case.name), 10, |a| no_page_left_behind(a));
+        quit(&app);
+        drop(app);
+        let app = launch_on(&profile, &[]);
+        until(&app, &format!("{}: the same window after a restart", case.name), 30, |a| {
+            left(a) && case.shown.is_none_or(|s| shown_title(a) == s)
+        });
+        quit(&app);
+    }
 }

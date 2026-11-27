@@ -46,6 +46,7 @@ pub fn start(cx: &mut App, launch: &Launch) -> bool {
     let primary = match runtime().block_on(nd_ipc::instance::acquire(&endpoint, launch)) {
         Ok(Instance::Primary(primary)) => Some(primary),
         Ok(Instance::Forwarded) => {
+            eprintln!("lynk: another instance runs on this profile; the launch went to it");
             cx.quit();
             return false;
         }
@@ -121,7 +122,10 @@ fn next(mut rx: UnboundedReceiver<Event>) {
 
 fn handle(event: Event, cx: &mut App) {
     match event {
-        Event::Terminate => cx.quit(),
+        Event::Terminate => {
+            eprintln!("lynk: terminate requested");
+            cx.quit();
+        }
         Event::Launch(launch) => open_launch(cx, launch.urls),
     }
 }

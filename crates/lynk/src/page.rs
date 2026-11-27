@@ -307,6 +307,7 @@ pub(crate) fn chrome_command(w: &mut BrowserWindow, command: BrowserCommand, cx:
             return;
         }
         BrowserCommand::Quit => {
+            eprintln!("lynk: quit from a page's shortcut");
             cx.quit();
             return;
         }

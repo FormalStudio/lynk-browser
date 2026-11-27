@@ -4628,7 +4628,19 @@ const TAB_CASES: &[TabCase] = &[
     TabCase {
         name: "close shortcut after picking the row by key",
         act: |a, _| {
-            a.get_by_test_id("tabs").press("down").unwrap();
+            // The page takes the keyboard back for a moment after the app comes forward, and a
+            // Down that lands then scrolls the page; a lost key never arrives later, so it is
+            // pressed again while Alpha is still the one shown.
+            for _ in 0..3 {
+                a.get_by_test_id("tabs").press("down").unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while shown_title(a) == "Alpha" && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+                if shown_title(a) != "Alpha" {
+                    break;
+                }
+            }
             until(a, "the next tab, picked by key", 15, |a| shown_title(a) == "Beta");
             // A key sent while another app holds the front goes to that app.
             os::in_front(a);
@@ -4734,6 +4746,7 @@ fn real_tab_actions_over_every_page_state() {
     }
     let base = serve();
     for case in TAB_CASES {
+        println!("case: {}", case.name);
         let profile = profile("tab-actions");
         write_restored(&profile, &base);
         let app = launch_on(&profile, &[]);

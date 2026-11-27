@@ -112,7 +112,8 @@ pub fn launch(options: LaunchOptions) -> App {
 /// until the app has registered with the window server, and succeeds while another app (Finder,
 /// after the last test's app quit) keeps the front, so it retries until the front app is this one.
 pub fn activate(app: &App) {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    // A loaded machine takes a while to register a Chromium app with the window server.
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !(ndshell::input::activate(app.pid()) && front_pid() == Some(app.pid())) {
         assert!(Instant::now() < deadline, "the app would not come forward; in front: {}", front_app());
         std::thread::sleep(Duration::from_millis(200));

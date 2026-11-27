@@ -4630,6 +4630,8 @@ const TAB_CASES: &[TabCase] = &[
         act: |a, _| {
             a.get_by_test_id("tabs").press("down").unwrap();
             until(a, "the next tab, picked by key", 15, |a| shown_title(a) == "Beta");
+            // A key sent while another app holds the front goes to that app.
+            os::in_front(a);
             press(a, "cmd-w");
         },
         rows: &["Alpha", "R3", "R4"],
@@ -4671,6 +4673,7 @@ const TAB_CASES: &[TabCase] = &[
         act: |a, _| {
             close_by_x(a, 1);
             until(a, "the close", 10, |a| titles(a).len() == 3);
+            os::in_front(a);
             press(a, "cmd-shift-t");
         },
         rows: &["Alpha", "R3", "R4", "Beta"],
@@ -4737,6 +4740,9 @@ fn real_tab_actions_over_every_page_state() {
         until(&app, "the restored window", 30, |a| {
             titles(a) == ["Alpha", "R2", "R3", "R4"] && tiles(a).len() == 1 && shown_title(a) == "Alpha"
         });
+        // Every case starts with the app in front; a shared screen hands the front to whatever
+        // runs beside the drive, and the case's keys and clicks would go there.
+        os::in_front(&app);
         (case.act)(&app, &base);
         let left = |a: &App| titles(a) == case.rows && tiles(a).len() == case.pins;
         until(&app, case.name, 15, left);

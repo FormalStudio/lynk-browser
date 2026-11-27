@@ -31,10 +31,12 @@ is [docs/nd-parity.md](docs/nd-parity.md).
 
 ## Integration
 
-- Head D `306122f`: held. Its macOS runs were at load 219 to 987.
-- Head E `integrate-e` `3ffc7df` (D, nd `d2012a11` repin, `e14eb61`): macOS run 1 passed 91 of 93 at
-  load 105. Failures: `real_blocking_reaches_a_page_under_a_strict_policy` and
-  `real_pinned_tile_menu`.
+- Head D `306122f`: held. Its macOS runs were at load 219 to 987. Its repeat failures passed when
+  run alone below load 300 (`real_command_bar_suggests` 3 of 3, keys handback 3 of 3, hide element
+  2 of 2, the tab table unfinished), so they were load.
+- Head E `integrate-e` `3ffc7df` (D, nd `d2012a11` repin, `e14eb61`): passes on macOS, 91, 91 and
+  92 of 93 with no case failing twice (strict-policy blocking and `real_pinned_tile_menu`, then
+  the light and dark flip and the colour scheme canvas, then named separators).
   Linux on e1504g: 110 of 111, 110 of 111, then 88 of 111. Run 3 began with
   `real_menu_over_a_live_page` and `real_thirty_quits_in_a_row` ("the app is still running with 0
   windows"), and the rest cascaded from Lynk processes left running. The kill-and-check teardown
@@ -42,7 +44,11 @@ is [docs/nd-parity.md](docs/nd-parity.md).
   look. Logs `e-linux-run{1,2,3}.log` are in the integration thread's scratchpad.
 - Head F `integrate-f` (`lynk-wt/integrate`): E plus `chore(deps): nd 05eb60e6`, the pins pair
   (held-tile case and its settle wait, `c146a08` on `pins-held-tile-e`), `093caa0`, `ced0077`,
-  `7f4b0a3`. No run yet.
+  `7f4b0a3`, at `4a614c6`. Static gates pass, no drive run yet.
+- Lane shas integration holds that are in no head: `35d4470` (needs nd `ed895aa3`), `e48c8e6` and
+  `56b98b1` (need the nd extensions round), `a34e27c` and `81c3148` (need nd `fa70a0eb`),
+  `42d0644` (held), `f838a49`, `51aac06`, and the page card set.
+- Next: rerun E's Linux run 3 with `ced0077` on a clean host, then F's six runs.
 - Rule for a push: no test fails in two runs on one platform, across three macOS and three Linux
   runs. A macOS run starts only below load 300. A run with the 1Password prompt in front is void.
   The orchestrator pushes with `git push origin <sha>:refs/heads/main`, then orders the g815
